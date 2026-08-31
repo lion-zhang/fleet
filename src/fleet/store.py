@@ -64,6 +64,24 @@ def record(conn: sqlite3.Connection, device_id: str, res: ProbeResult) -> None:
     conn.commit()
 
 
+def rename_device(conn: sqlite3.Connection, old_id: str, new_id: str) -> None:
+    """Carry a device's cached rows to a new identity.
+
+    Needed when a never-probed device is re-addressed: `net:<host>:<port>` was its id,
+    so a new address means a new id, and history keyed by the old one would be orphaned.
+    If the new identity already has rows they are the truthful ones and win -- the
+    device_state primary key would reject the update anyway.
+    """
+    if old_id == new_id:
+        return
+    conn.execute("DELETE FROM device_state WHERE device_id=? AND EXISTS "
+                 "(SELECT 1 FROM device_state WHERE device_id=?)", (old_id, new_id))
+    for table in ("device_state", "snapshot", "event"):
+        conn.execute(f"UPDATE OR REPLACE {table} SET device_id=? WHERE device_id=?",
+                     (new_id, old_id))
+    conn.commit()
+
+
 def latest(conn: sqlite3.Connection, device_id: str) -> tuple[dict | None, dict | None]:
     """Return (state_row, snapshot_dict) -- either may be None."""
     st = conn.execute("SELECT * FROM device_state WHERE device_id=?", (device_id,)).fetchone()

@@ -37,6 +37,36 @@ def _gpu_view(g: dict) -> dict:
     }
 
 
+DISK_ALERT_PCT = 90
+
+
+def _disk_view(d: dict) -> dict:
+    """One mount, in the units a human and an agent both read.
+
+    Usage is computed against used+avail, not total: filesystems reserve blocks the
+    caller can never write, and dividing by total quietly understates how full a disk
+    is. macOS is the extreme case, where the two differ by tens of percent.
+    """
+    used, avail = d.get("used_kb", 0), d.get("avail_kb", 0)
+    writable = used + avail
+    return {
+        "mount": d.get("mount", ""),
+        "total_gb": round(d.get("total_kb", 0) / 1048576, 1),
+        "free_gb": round(avail / 1048576, 1),
+        "use_pct": round(100 * used / writable) if writable else 0,
+    }
+
+
+def _roomiest(snap: dict | None) -> dict | None:
+    """The mount with the most room, which is the one a job should be pointed at.
+
+    Reporting `/` would be actively misleading on a rental, where root is a small
+    container overlay and the real storage is mounted somewhere else entirely.
+    """
+    disks = [_disk_view(d) for d in (snap or {}).get("disks", [])]
+    return max(disks, key=lambda d: d["free_gb"]) if disks else None
+
+
 def _alerts(dev: Device, snap: dict | None, state: dict | None) -> list[str]:
     out: list[str] = []
     if dev.auth_state == "needs_credentials":
@@ -48,6 +78,11 @@ def _alerts(dev: Device, snap: dict | None, state: dict | None) -> list[str]:
             if _gpu_view(g)["unattributed_mib"] >= 256:
                 out.append(f"gpu{g['idx']}: {_gpu_view(g)['unattributed_mib']} MiB held by "
                            "processes not visible to us -- do not treat as free")
+        for disk in snap.get("disks", []):
+            dv = _disk_view(disk)
+            if dv["use_pct"] >= DISK_ALERT_PCT:
+                out.append(f"disk {dv['mount']}: {dv['use_pct']}% full, "
+                           f"{dv['free_gb']}G left -- a long job will die on this")
         if snap.get("gpu_present") == "err":
             out.append(f"nvidia-smi present but failing: {snap.get('gpu_error', '')[:80]}")
     if dev.kind is Kind.SHARED:
@@ -65,6 +100,7 @@ def device_view(dev: Device, state: dict | None, snap: dict | None,
     gpus = [_gpu_view(g) for g in (snap or {}).get("gpus", [])]
     mem_total = (snap or {}).get("mem_total_kb")
     mem_avail = (snap or {}).get("mem_avail_kb")
+    roomiest = _roomiest(snap)
 
     out: dict[str, Any] = {
         "name": dev.name,
@@ -82,6 +118,9 @@ def device_view(dev: Device, state: dict | None, snap: dict | None,
         "cpu_cores": (snap or {}).get("cpu_cores"),
         "ram_total_gb": round(mem_total / 1048576, 1) if mem_total else None,
         "ram_free_gb": round(mem_avail / 1048576, 1) if mem_avail else None,
+        # one number for list views; the per-mount breakdown is a full-view detail
+        "disk_free_gb": roomiest["free_gb"] if roomiest else None,
+        "disk_mount": roomiest["mount"] if roomiest else None,
         "usd_per_hour": (dev.cost or {}).get("usd_per_hour"),
         "services": [{"name": s.get("name"), "kind": s.get("kind"), "port": s.get("port"),
                       "healthy": s.get("healthy")}
@@ -116,7 +155,7 @@ def device_view(dev: Device, state: dict | None, snap: dict | None,
             "load": (snap or {}).get("load"),
             "is_container": (snap or {}).get("is_container"),
             "gpu_driver": (snap or {}).get("gpu_driver"),
-            "disks": (snap or {}).get("disks", []),
+            "disks": [_disk_view(d) for d in (snap or {}).get("disks", [])],
             # top compute processes only; display apps collapse to one number because a
             # single Chromium cmdline is ~1 KB and would flood an agent's context.
             "processes": sorted(compute, key=lambda p: -p.get("vram_mib", 0))[:8],

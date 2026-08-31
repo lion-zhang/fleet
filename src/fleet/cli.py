@@ -14,9 +14,10 @@ from rich.table import Table
 from . import inventory as inv
 from . import store
 from .config import DB_PATH, INVENTORY_PATH, load_config
+from .edit import apply_edits
 from .models import Kind, Status
 from .onboard import onboard
-from .probe.runner import probe_many, run_probe
+from .probe.runner import probe_env, probe_many, run_probe
 from .setup import detect_targets, fleet_command, install, uninstall
 from .sshcmd import resolve_command
 from .view import Detail, device_view, fleet_view
@@ -53,12 +54,16 @@ def _rows(names: list[str] | None = None, *, refresh: bool = False,
         if eligible and (refresh or not store.is_fresh(st, int(cfg.telemetry_ttl_s))):
             stale.append(d)
     if stale:
-        jobs = {d.id: inv.endpoints_of(d) for d in stale}
-        modes = {d.id: d.probe_mode for d in stale}
-        # probe_many takes one mode; group by mode so a shared host gets the polite probe
-        for mode in set(modes.values()):
-            subset = {k: v for k, v in jobs.items() if modes[k] == mode}
-            results = probe_many(subset, mode=mode, timeout=float(cfg.probe_timeout_s),
+        # probe_many applies one set of options to a whole batch, so devices are grouped
+        # by everything that varies per device: mode (a shared host gets the polite
+        # probe) and disk paths (one device's paths must not leak into another's probe).
+        groups: dict[tuple[str, tuple[str, ...]], dict[str, list]] = {}
+        for d in stale:
+            key = (d.probe_mode, tuple(d.disk_paths))
+            groups.setdefault(key, {})[d.id] = inv.endpoints_of(d)
+        for (mode, paths), subset in groups.items():
+            results = probe_many(subset, mode=mode, disk_paths=list(paths),
+                                 timeout=float(cfg.probe_timeout_s),
                                  connect_timeout=int(cfg.connect_timeout_s),
                                  max_workers=int(cfg.max_workers))
             for dev_id, res in results.items():
@@ -94,6 +99,7 @@ def cmd_ls(json_out: bool = typer.Option(False, "--json"),
                     ("VRAM FREE", {"justify": "right", "no_wrap": True}),
                     ("CPU", {"justify": "right", "no_wrap": True}),
                     ("RAM FREE", {"justify": "right", "no_wrap": True}),
+                    ("DISK FREE", {"justify": "right", "no_wrap": True}),
                     ("$/HR", {"justify": "right", "no_wrap": True}),
                     ("AGE", {"justify": "right", "no_wrap": True}),
                     ("NOTE", {"no_wrap": True, "overflow": "ellipsis", "max_width": 42})):
@@ -108,10 +114,16 @@ def cmd_ls(json_out: bool = typer.Option(False, "--json"),
         note = r.get("error", {}).get("detail", "") if r["status"] != "ok" else (
             r["alerts"][0] if r["alerts"] else "")
         age = f"{r['telemetry_age_s']}s" if r["telemetry_age_s"] is not None else "-"
+        # name the mount unless it is root: "1648G" alone is misleading on a rental
+        # whose / is a small overlay and whose real storage lives elsewhere.
+        disk = "-" if r["disk_free_gb"] is None else (
+            f"{r['disk_free_gb']:.0f}G" + ("" if r["disk_mount"] == "/"
+                                           else f" [dim]{r['disk_mount']}[/dim]"))
         t.add_row(_DOT.get(r["status"], "?"), f"[bold]{r['name']}[/bold]",
                   r["kind"], gpu, vram,
                   str(r["cpu_cores"] or "-"),
                   f"{r['ram_free_gb']:.0f}G" if r["ram_free_gb"] else "-",
+                  disk,
                   f"${r['usd_per_hour']:.2f}" if r["usd_per_hour"] else "-",
                   age, note)
     console.print(t)
@@ -207,6 +219,53 @@ def cmd_add(ssh_command: str = typer.Argument(..., help='e.g. "ssh -p 58418 root
         console.print("  [dim]Recorded anyway and flagged needs_review.[/dim]")
 
 
+@app.command("edit")
+def cmd_edit(name: str,
+             ssh_command: str = typer.Option(None, "--ssh", metavar="CMD",
+                                             help='new address, e.g. "ssh -p 2222 root@5.6.7.8"'),
+             disk_path: list[str] = typer.Option(None, "--disk-path", metavar="PATH",
+                                                 help="watch this mount or directory for free "
+                                                      "space; repeatable"),
+             clear_disk_paths: bool = typer.Option(False, "--clear-disk-paths",
+                                                   help="go back to autodetecting mounts"),
+             json_out: bool = typer.Option(False, "--json")):
+    """Change a device's address or settings after it was added.
+
+    Rentals recycle IPs and ports, so `--ssh` re-points a device without losing its
+    name, tags, cost or history.
+    """
+    devices = inv.load()
+    dev = inv.find(devices, name)
+    if dev is None:
+        err.print(f"[red]No device named {name!r}[/red]")
+        raise typer.Exit(1)
+
+    endpoint = resolve_command(ssh_command) if ssh_command else None
+    paths = [] if clear_disk_paths else (list(disk_path) if disk_path else None)
+    result = apply_edits(dev, endpoint=endpoint, disk_paths=paths)
+
+    if not result.changes:
+        if _emit({"name": dev.name, "changes": []}, json_out):
+            return
+        console.print(f"[dim]· nothing to change on {dev.name}.[/dim]")
+        return
+
+    inv.save(devices)
+    if result.previous_id:
+        # the cache is keyed by id; without this the device looks brand new
+        conn = store.connect()
+        store.rename_device(conn, result.previous_id, dev.id)
+        conn.close()
+
+    if _emit({"name": dev.name, "id": dev.id, "changes": result.changes}, json_out):
+        return
+    console.print(f"[green]✓[/green] {dev.name}")
+    for line in result.changes:
+        console.print(f"  {line}")
+    if endpoint is not None:
+        console.print(f"  [dim]run `fleet refresh {dev.name}` to confirm it answers.[/dim]")
+
+
 @app.command("rm")
 def cmd_rm(name: str, yes: bool = typer.Option(False, "--yes", "-y")):
     """Remove a device from the inventory."""
@@ -245,11 +304,12 @@ def cmd_probe(name: str, raw: bool = typer.Option(False, "--raw", help="print pa
         from .probe.runner import PAYLOAD
         from .sshcmd import build_argv
         argv = build_argv(sorted(eps, key=lambda e: e.preference)[0],
-                          remote="sh -s", env={"FLEET_MODE": dev.probe_mode})
+                          remote="sh -s", env=probe_env(dev.probe_mode, dev.disk_paths))
         p = subprocess.run(argv, input=PAYLOAD.read_text(), capture_output=True, text=True)
         sys.stdout.write(p.stdout)
         raise typer.Exit(0 if p.returncode == 0 else 1)
-    res = run_probe(sorted(eps, key=lambda e: e.preference)[0], mode=dev.probe_mode)
+    res = run_probe(sorted(eps, key=lambda e: e.preference)[0], mode=dev.probe_mode,
+                    disk_paths=dev.disk_paths)
     console.print_json(jsonlib.dumps(
         {"status": res.status.value, "latency_ms": res.latency_ms,
          "error": res.error_detail, "snapshot": res.snapshot.to_dict() if res.snapshot else None},

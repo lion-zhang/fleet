@@ -148,3 +148,63 @@ def test_fleet_summary_counts_and_burn_rate():
     ]
     s = fleet_view(rows)["summary"]
     assert (s["total"], s["online"], s["gpus_free"], s["hourly_burn"]) == (3, 2, 2, 1.2)
+
+
+# ------------------------------------------------------------------ disk
+def test_compact_view_carries_free_space_as_a_scalar():
+    """`fleet ls` needs one number per device. The list of mounts is a full-view detail."""
+    v = device_view(make(), STATE_OK, snap_of("gpu-box"), Detail.COMPACT)
+    assert v["disk_free_gb"] == 1647.5
+    assert "disks" not in v
+
+
+def test_the_compact_number_names_the_mount_it_came_from():
+    """A bare 'disk free' would be a lie on a rental where / is a small overlay and
+    /workspace holds the real storage. Say which mount the number describes."""
+    v = device_view(make(), STATE_OK, snap_of("gpu-box"), Detail.COMPACT)
+    assert v["disk_mount"] == "/workspace"
+
+
+def test_the_compact_number_is_the_roomiest_mount_not_the_root():
+    root_free = next(d for d in snap_of("gpu-box")["disks"] if d["mount"] == "/")["avail_kb"]
+    v = device_view(make(), STATE_OK, snap_of("gpu-box"), Detail.COMPACT)
+    assert v["disk_free_gb"] > round(root_free / 1048576, 1)
+
+
+def test_a_device_with_one_mount_reports_that_one():
+    v = device_view(make(), STATE_OK, snap_of("vm-a"), Detail.COMPACT)
+    assert v["disk_mount"] == "/"
+    assert v["disk_free_gb"] == 40.6
+
+
+def test_a_device_with_no_telemetry_reports_no_disk_rather_than_zero():
+    """Zero free would read as 'full'. Unknown must stay unknown."""
+    v = device_view(make(), STATE_OK, None, Detail.COMPACT)
+    assert v["disk_free_gb"] is None and v["disk_mount"] is None
+
+
+def test_full_view_reports_disks_in_gb_with_a_usage_percentage():
+    v = device_view(make(), STATE_OK, snap_of("gpu-box"), Detail.FULL)
+    ws = next(d for d in v["disks"] if d["mount"] == "/workspace")
+    assert ws["free_gb"] == 1647.5
+    assert 0 < ws["use_pct"] < 10
+    assert "total_kb" not in ws, "raw kb is a probe detail, not a view field"
+
+
+def _full_disk_snapshot(pct_used: int) -> dict:
+    total = 1000 * 1048576
+    used = total * pct_used // 100
+    return {"disks": [{"mount": "/workspace", "total_kb": total,
+                       "used_kb": used, "avail_kb": total - used}]}
+
+
+def test_a_nearly_full_disk_raises_an_alert():
+    """A box that is 96% full looks perfectly healthy in `fleet ls` today, and the
+    training run that fills it dies hours later."""
+    v = device_view(make(), STATE_OK, _full_disk_snapshot(96), Detail.COMPACT)
+    assert any("/workspace" in a and "disk" in a.lower() for a in v["alerts"])
+
+
+def test_a_roomy_disk_raises_no_alert():
+    v = device_view(make(), STATE_OK, _full_disk_snapshot(40), Detail.COMPACT)
+    assert not any("disk" in a.lower() for a in v["alerts"])

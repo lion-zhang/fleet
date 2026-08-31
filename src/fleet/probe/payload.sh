@@ -131,11 +131,23 @@ emit gpu.error "$gpu_err"
 # ---------------------------------------------------------------- disk
 echo "#DISK mount|total_kb|used_kb|avail_kb"
 if have df; then
-  df -Pk 2>/dev/null | awk 'NR>1 && $2+0>0 {
-    m=$6
-    if (m=="/" || m ~ /^\/(workspace|data|mnt|home|srv|opt|Volumes|scratch)/)
-      printf "%s|%s|%s|%s\n", m, $2, $3, $4
-  }' | sort -u | head -20
+  if [ -n "${FLEET_DISK_PATHS:-}" ]; then
+    # Configured paths win outright. df is asked about each path directly, so a plain
+    # directory works as well as a mount point, and the row is labelled with the path
+    # the user asked about rather than whatever filesystem happens to hold it.
+    for p in $FLEET_DISK_PATHS; do
+      [ -e "$p" ] || continue
+      df -Pk "$p" 2>/dev/null | awk -v p="$p" 'NR>1 && $2+0>0 {
+        printf "%s|%s|%s|%s\n", p, $2, $3, $4
+      }'
+    done | head -20
+  else
+    df -Pk 2>/dev/null | awk 'NR>1 && $2+0>0 {
+      m=$6
+      if (m=="/" || m ~ /^\/(workspace|data|mnt|home|srv|opt|Volumes|scratch)/)
+        printf "%s|%s|%s|%s\n", m, $2, $3, $4
+    }' | sort -u | head -20
+  fi
 fi
 
 if [ "$gpu_present" = "1" ]; then

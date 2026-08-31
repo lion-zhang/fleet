@@ -84,12 +84,25 @@ def _kill(proc: subprocess.Popen) -> None:
         proc.kill()
 
 
+def probe_env(mode: str, disk_paths: list[str] | None = None) -> dict[str, str]:
+    """Environment handed to the remote payload.
+
+    FLEET_DISK_PATHS is omitted rather than emptied when unset: absent means "use the
+    built-in mount guess", which is not the same as an empty list of paths.
+    """
+    env = {"FLEET_MODE": mode}
+    if disk_paths:
+        env["FLEET_DISK_PATHS"] = " ".join(disk_paths)
+    return env
+
+
 def run_probe(ep: Endpoint, *, mode: str = "full", timeout: float = 20.0,
-              connect_timeout: int = 8, multiplex: bool = True) -> ProbeResult:
+              connect_timeout: int = 8, multiplex: bool = True,
+              disk_paths: list[str] | None = None) -> ProbeResult:
     """Probe one endpoint. Never raises for a remote-side problem."""
     payload = PAYLOAD.read_text()
     argv = build_argv(ep, connect_timeout=connect_timeout, multiplex=multiplex,
-                      remote="sh -s", env={"FLEET_MODE": mode})
+                      remote="sh -s", env=probe_env(mode, disk_paths))
     started = time.monotonic()
     popen_kw: dict = {"stdin": subprocess.PIPE, "stdout": subprocess.PIPE,
                       "stderr": subprocess.PIPE, "text": True}
