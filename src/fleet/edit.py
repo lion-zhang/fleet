@@ -77,8 +77,11 @@ def _migrate_identity(dev: Device, ep: Endpoint, out: Edits) -> None:
 
 
 def apply_edits(dev: Device, *, endpoint: Endpoint | None = None,
-                disk_paths: list[str] | None = None) -> Edits:
+                disk_paths: list[str] | None = None, role: str | None = None) -> Edits:
     out = Edits()
+    if role is not None and role != dev.role:
+        out.changes.append(f"role {dev.role} -> {role}")
+        dev.role = role
     if endpoint is not None:
         _replace_primary(dev, endpoint, out)
         _migrate_identity(dev, endpoint, out)

@@ -56,7 +56,9 @@ Per device, keyed by `id` -- which is why `id` prefers machine-id over an addres
 why `fleet edit` migrates a `net:` id rather than orphaning it.
 
 1. Present on one side only -> keep it.
-2. Present on both -> field-wise, newer `updated_at` wins.
+2. Present on both -> the record with the newer `updated_at` wins whole. Not
+   field-wise: merging fields independently can assemble a device that never
+   existed on either machine, and there is no timestamp per field to justify it.
 3. Endpoints -> union, deduped on `(target, user, port)`. A box reachable on the tailnet
    from one machine and the LAN from another is one box with two routes, which is the
    dedupe `inventory.upsert` already performs at onboarding.
@@ -125,12 +127,31 @@ A failed install does not record the role. `fleet ls` claiming a backup that doe
 exist is worse than showing none, because that is the claim you would rely on at exactly
 the moment the center is down.
 
+## Sync happens on its own
+
+Nobody should have to remember to run `fleet sync`.
+
+**On machines you use**, any command fires a sync in the background when the last one has
+gone stale (`sync_ttl_s`, default 300s). This mirrors telemetry, where a read already
+refreshes what is stale rather than making you ask. It is spawned detached and never
+waited on: sync is a convenience, and `fleet ls` must keep working with a dead center, an
+unreadable config, or no network. Every failure in that path is swallowed for that
+reason, and the timestamp is stamped *before* spawning so a hanging sync cannot make
+every subsequent command spawn another.
+
+**On brokers**, that is not enough -- a backup node may go weeks without anyone running a
+command, and a replica that quietly stopped replicating is worse than no replica, because
+you would still be counting on it. So `fleet install` also writes a cron entry. cron
+rather than a systemd user unit: it is on far more servers, and needs no lingering
+enabled to run without a login session. The entry is marked with a comment so
+re-installing replaces our line and leaves every other entry alone.
+
 ## Phases
 
 1. `updated_at` + the merge function. Pure, testable without any transport.
 2. `fleet sync` / `--serve` over SSH, with locking on the center.
-3. `fleet identity` + recipients in inventory.
-4. `fleet secret set/rm` and password use at connect time.
+3. `fleet identity` + recipients in inventory.  **not built**
+4. `fleet secret set/rm` and password use at connect time.  **not built**
 
 Phases 1-2 are useful with no secrets at all. Phases 3-4 are useless without 1-2. The
 order is forced.

@@ -130,3 +130,249 @@ def test_updated_at_survives_the_inventory_file(tmp_path):
     path = tmp_path / "inventory.yaml"
     inv.save([_dev("box", updated_at=12345)], path)
     assert inv.load(path)[0].updated_at == 12345
+
+
+# --------------------------------------------------------------- serialisation
+
+def test_an_inventory_survives_a_round_trip_through_text():
+    """Sync ships inventories over a pipe, so the on-the-wire form must be the same
+    thing the file holds -- one format, not two that can drift."""
+    from fleet.inventory import dumps, loads
+
+    devices = [_dev("a", updated_at=7), _dev("b", notes="hello")]
+    back = loads(dumps(devices))
+    assert _names(back) == ["a", "b"]
+    assert back[0].updated_at == 7
+    assert back[1].notes == "hello"
+
+
+def test_the_wire_format_is_the_file_format(tmp_path):
+    from fleet import inventory as inv
+
+    path = tmp_path / "inventory.yaml"
+    inv.save([_dev("a")], path)
+    assert inv.dumps(inv.load(path)).strip() == path.read_text().strip()
+
+
+# --------------------------------------------------------------- the server side
+
+def _serve_env(tmp_path, monkeypatch, devices):
+    from typer.testing import CliRunner
+
+    from fleet import inventory as inv, store
+
+    path = tmp_path / "inventory.yaml"
+    inv.save(devices, path)
+    monkeypatch.setattr(inv, "INVENTORY_PATH", path)
+    monkeypatch.setattr(store, "DB_PATH", tmp_path / "cache.db")
+    return CliRunner(), path
+
+
+def test_serve_merges_what_it_is_given_with_what_it_holds(tmp_path, monkeypatch):
+    from fleet import inventory as inv
+    from fleet.cli import app
+
+    runner, path = _serve_env(tmp_path, monkeypatch, [_dev("center-only")])
+    incoming = inv.dumps([_dev("laptop-only")])
+    result = runner.invoke(app, ["sync", "--serve"], input=incoming)
+    assert result.exit_code == 0, result.output
+    assert _names(inv.loads(result.stdout)) == ["center-only", "laptop-only"]
+
+
+def test_serve_persists_the_merge_so_the_center_stays_canonical(tmp_path, monkeypatch):
+    from fleet import inventory as inv
+    from fleet.cli import app
+
+    runner, path = _serve_env(tmp_path, monkeypatch, [_dev("center-only")])
+    runner.invoke(app, ["sync", "--serve"], input=inv.dumps([_dev("laptop-only")]))
+    assert _names(inv.load(path)) == ["center-only", "laptop-only"]
+
+
+def test_serve_rejects_junk_rather_than_destroying_the_inventory(tmp_path, monkeypatch):
+    """A truncated pipe must not be read as 'the other side has no devices'."""
+    from fleet import inventory as inv
+    from fleet.cli import app
+
+    runner, path = _serve_env(tmp_path, monkeypatch, [_dev("precious")])
+    result = runner.invoke(app, ["sync", "--serve"], input="{{{ not yaml")
+    assert result.exit_code != 0
+    assert _names(inv.load(path)) == ["precious"]
+
+
+# --------------------------------------------------------------- the client side
+
+def test_sync_says_so_when_no_center_is_designated(tmp_path, monkeypatch):
+    from fleet.cli import app
+
+    runner, _ = _serve_env(tmp_path, monkeypatch, [_dev("a")])
+    result = runner.invoke(app, ["sync"])
+    assert result.exit_code != 0
+    assert "center" in result.output.lower()
+
+
+def test_sync_on_the_center_itself_is_a_no_op_not_an_error(tmp_path, monkeypatch):
+    """Running the same command everywhere should be safe; the center has nobody to
+    ask."""
+    from fleet.cli import app
+
+    runner, _ = _serve_env(tmp_path, monkeypatch, [_dev("me", role="center")])
+    monkeypatch.setattr("fleet.cli.local_device_id", lambda: "linux:machine-id:me")
+    result = runner.invoke(app, ["sync"])
+    assert result.exit_code == 0
+
+
+def test_sync_applies_what_the_center_returns(tmp_path, monkeypatch):
+    from fleet import cli, inventory as inv
+    from fleet.cli import app
+
+    runner, path = _serve_env(tmp_path, monkeypatch,
+                              [_dev("laptop"), _dev("hub", role="center")])
+    returned = inv.dumps([_dev("laptop"), _dev("hub", role="center"), _dev("from-center")])
+    monkeypatch.setattr(cli, "run_sync", lambda *a, **k: (0, returned))
+    result = runner.invoke(app, ["sync"])
+    assert result.exit_code == 0, result.output
+    assert "from-center" in _names(inv.load(path))
+
+
+def test_a_failed_sync_leaves_local_state_untouched(tmp_path, monkeypatch):
+    """Sync is not on the critical path. A dead center must not cost you your inventory."""
+    from fleet import cli, inventory as inv
+    from fleet.cli import app
+
+    runner, path = _serve_env(tmp_path, monkeypatch,
+                              [_dev("laptop"), _dev("hub", role="center")])
+    monkeypatch.setattr(cli, "run_sync", lambda *a, **k: (255, "connection refused"))
+    result = runner.invoke(app, ["sync"])
+    assert result.exit_code != 0
+    assert _names(inv.load(path)) == ["hub", "laptop"]
+
+
+# --------------------------------------------------------------- one center only
+
+def test_promoting_a_center_demotes_the_previous_one():
+    from fleet.inventory import promote_center
+
+    devices = [_dev("old", role="center"), _dev("new")]
+    promote_center(devices, devices[1])
+    assert [d.role for d in devices] == ["backup", "center"]
+
+
+def test_the_demoted_center_becomes_a_backup_not_a_bystander():
+    """It still has fleet installed and still holds a full copy. Dropping it to 'none'
+    would silently throw away a replica."""
+    from fleet.inventory import promote_center
+
+    devices = [_dev("old", role="center"), _dev("new")]
+    promote_center(devices, devices[1])
+    assert devices[0].role == "backup"
+
+
+def test_demotion_is_stamped_so_it_survives_the_next_merge():
+    """An unstamped demotion loses to the other machine's stale 'center' record, and
+    you are back to two centers."""
+    from fleet.inventory import promote_center
+
+    old = _dev("old", role="center", updated_at=1)
+    devices = [old, _dev("new")]
+    promote_center(devices, devices[1])
+    assert old.updated_at > 1
+
+
+def test_devices_that_are_not_brokers_are_left_alone():
+    from fleet.inventory import promote_center
+
+    devices = [_dev("plain"), _dev("backup-node", role="backup"), _dev("new")]
+    promote_center(devices, devices[2])
+    assert devices[0].role == "none"
+    assert devices[1].role == "backup"
+
+
+def test_promoting_the_current_center_again_changes_nothing():
+    from fleet.inventory import promote_center
+
+    devices = [_dev("hub", role="center")]
+    assert promote_center(devices, devices[0]) == []
+
+
+def test_a_merge_that_produces_two_centers_keeps_only_the_newer(tmp_path):
+    """Two machines can each promote a different device before syncing. The merge has
+    to resolve that, or `fleet sync` picks a center arbitrarily from then on."""
+    local = [_dev("a", role="center", updated_at=100), _dev("b", updated_at=100)]
+    remote = [_dev("a", updated_at=100), _dev("b", role="center", updated_at=300)]
+    merged, _ = merge(local, remote)
+    assert [d.role for d in merged] == ["backup", "center"]
+    assert sum(1 for d in merged if d.role == "center") == 1
+
+
+# --------------------------------------------------------------- automatic sync
+
+def _auto_env(tmp_path, monkeypatch, devices, **cfg):
+    from fleet import cli, inventory as inv, store
+
+    path = tmp_path / "inventory.yaml"
+    inv.save(devices, path)
+    monkeypatch.setattr(inv, "INVENTORY_PATH", path)
+    monkeypatch.setattr(store, "DB_PATH", tmp_path / "cache.db")
+    monkeypatch.setattr(cli, "local_device_id", lambda: "linux:machine-id:me")
+    settings = {"auto_sync": True, "sync_ttl_s": 300, **cfg}
+    monkeypatch.setattr(cli, "load_config", lambda: type("C", (), {
+        "get": staticmethod(lambda k: settings.get(k))})())
+    spawned = []
+    monkeypatch.setattr(cli.subprocess, "Popen", lambda *a, **k: spawned.append(a))
+    return spawned
+
+
+def test_a_stale_fleet_syncs_itself_without_being_asked(tmp_path, monkeypatch):
+    from fleet import cli
+
+    spawned = _auto_env(tmp_path, monkeypatch, [_dev("hub", role="center")])
+    cli.maybe_autosync()
+    assert spawned, "a stale inventory should sync on its own"
+
+
+def test_a_recently_synced_fleet_does_not_sync_again(tmp_path, monkeypatch):
+    """Otherwise every command pays for an SSH round trip."""
+    from fleet import cli
+
+    spawned = _auto_env(tmp_path, monkeypatch, [_dev("hub", role="center")])
+    cli.maybe_autosync()
+    spawned.clear()
+    cli.maybe_autosync()
+    assert not spawned
+
+
+def test_the_center_does_not_sync_to_itself(tmp_path, monkeypatch):
+    from fleet import cli
+
+    spawned = _auto_env(tmp_path, monkeypatch,
+                        [_dev("me", id="linux:machine-id:me", role="center")])
+    cli.maybe_autosync()
+    assert not spawned
+
+
+def test_a_fleet_with_no_center_does_not_try(tmp_path, monkeypatch):
+    from fleet import cli
+
+    spawned = _auto_env(tmp_path, monkeypatch, [_dev("plain")])
+    cli.maybe_autosync()
+    assert not spawned
+
+
+def test_auto_sync_can_be_switched_off(tmp_path, monkeypatch):
+    from fleet import cli
+
+    spawned = _auto_env(tmp_path, monkeypatch, [_dev("hub", role="center")],
+                        auto_sync=False)
+    cli.maybe_autosync()
+    assert not spawned
+
+
+def test_a_broken_auto_sync_never_breaks_the_command_you_ran(tmp_path, monkeypatch):
+    """It is a background convenience. `fleet ls` must still work with a dead center,
+    an unreadable config, or no network at all."""
+    from fleet import cli
+
+    _auto_env(tmp_path, monkeypatch, [_dev("hub", role="center")])
+    monkeypatch.setattr(cli.subprocess, "Popen",
+                        lambda *a, **k: (_ for _ in ()).throw(OSError("no")))
+    cli.maybe_autosync()          # must not raise

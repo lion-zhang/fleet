@@ -184,3 +184,55 @@ def test_a_failed_install_does_not_claim_the_device_is_a_backup(tmp_path, monkey
     result = runner.invoke(app, ["install", "oracle"])
     assert result.exit_code != 0
     assert inv.load(path)[0].role == "none"
+
+
+# --------------------------------------------------------------- the broker's own timer
+
+def _fake_crontab(tmp_path):
+    """A crontab(1) that reads and writes a file, like the real one."""
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir(exist_ok=True)
+    spool = tmp_path / "crontab.txt"
+    spool.write_text("")
+    ct = bin_dir / "crontab"
+    ct.write_text(f'''#!/bin/sh
+if [ "$1" = "-l" ]; then cat {spool}; exit 0; fi
+cat > {spool}
+''')
+    ct.chmod(0o755)
+    return spool
+
+
+def test_an_idle_broker_gets_a_timer_so_it_syncs_without_anyone_logging_in(tmp_path):
+    """Opportunistic sync only fires when a command runs. A backup node may go weeks
+    without one, and a replica that stopped replicating is worse than none."""
+    spool = _fake_crontab(tmp_path)
+    _run(install_script(str(_origin(tmp_path)), timer_minutes=10), tmp_path)
+    assert "fleet sync" in spool.read_text()
+
+
+def test_reinstalling_does_not_stack_up_timers(tmp_path):
+    spool = _fake_crontab(tmp_path)
+    origin = _origin(tmp_path)
+    _run(install_script(str(origin), timer_minutes=10), tmp_path)
+    _run(install_script(str(origin), timer_minutes=10), tmp_path)
+    assert spool.read_text().count("fleet sync") == 1
+
+
+def test_the_timer_leaves_the_users_own_cron_entries_alone(tmp_path):
+    spool = _fake_crontab(tmp_path)
+    spool.write_text("0 3 * * * /usr/local/bin/backup.sh\n")
+    _run(install_script(str(_origin(tmp_path)), timer_minutes=10), tmp_path)
+    assert "backup.sh" in spool.read_text()
+
+
+def test_no_timer_is_installed_when_it_is_not_wanted(tmp_path):
+    spool = _fake_crontab(tmp_path)
+    _run(install_script(str(_origin(tmp_path)), timer_minutes=0), tmp_path)
+    assert "fleet sync" not in spool.read_text()
+
+
+def test_a_device_without_cron_still_installs_successfully(tmp_path):
+    """A missing crontab is a missing convenience, not a failed install."""
+    result = _run(install_script(str(_origin(tmp_path)), timer_minutes=10), tmp_path)
+    assert result.returncode == 0, result.stderr

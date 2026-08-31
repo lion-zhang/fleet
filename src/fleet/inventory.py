@@ -52,6 +52,10 @@ def load(path: Path | None = None) -> list[Device]:
     except yaml.YAMLError as exc:
         # Report the line and keep going -- a stray tab must not blank your fleet.
         raise InventoryError(f"{path} is not valid YAML: {exc}") from exc
+    return _devices_from(raw)
+
+
+def _devices_from(raw: dict) -> list[Device]:
     devices = []
     for d in raw.get("devices") or []:
         d = dict(d)
@@ -61,18 +65,36 @@ def load(path: Path | None = None) -> list[Device]:
     return devices
 
 
+def loads(text: str) -> list[Device]:
+    """Parse the same format the file holds. Sync ships inventories over a pipe, and
+    two formats that can drift would be one format too many."""
+    raw = yaml.safe_load(text)
+    if not isinstance(raw, dict):
+        raise InventoryError("not an inventory document")
+    return _devices_from(raw)
+
+
+def dumps(devices: list[Device]) -> str:
+    return yaml.safe_dump(_payload(devices), sort_keys=False, allow_unicode=True, width=100)
+
+
+def _payload(devices: list[Device]) -> dict:
+    return {
+        "version": SCHEMA_VERSION,
+        "devices": [
+            {k: (v.value if isinstance(v, Kind) else v)
+             for k, v in _as_dict(d).items()
+             if v not in ("", [], {}, None, False) or k in ("name", "id")}
+            for d in sorted(devices, key=lambda x: x.name)
+        ],
+    }
+
+
 def save(devices: list[Device], path: Path | None = None) -> None:
     """Atomic, locked write. Two agents adding devices concurrently must not interleave."""
     path = path or INVENTORY_PATH
     ensure_dirs()
-    payload = {
-        "version": SCHEMA_VERSION,
-        "devices": [
-            {k: (v.value if isinstance(v, Kind) else v)
-             for k, v in _as_dict(d).items() if v not in ("", [], {}, None, False) or k in ("name", "id")}
-            for d in sorted(devices, key=lambda x: x.name)
-        ],
-    }
+    payload = _payload(devices)
     try:
         with _lock(path):
             fd, tmp = tempfile.mkstemp(dir=str(path.parent), prefix=".inventory-", suffix=".yaml")
@@ -122,6 +144,40 @@ def _union_endpoints(primary: list[dict], other: list[dict]) -> list[dict]:
     return out
 
 
+def promote_center(devices: list[Device], new_center: Device) -> list[str]:
+    """Make one device the center, demoting whoever held it.
+
+    A demoted center becomes a *backup*, never "none": it still has fleet installed and
+    still holds a full copy of your state, and dropping it to none would silently
+    discard a replica. The demotion is stamped, or it would lose the next merge to the
+    other machine's stale "center" record and you would be back to two centers.
+    """
+    changes: list[str] = []
+    for d in devices:
+        if d.role == "center" and d.id != new_center.id:
+            d.role = "backup"
+            touch(d)
+            changes.append(f"{d.name}: center -> backup")
+    if new_center.role != "center":
+        new_center.role = "center"
+        touch(new_center)
+        changes.append(f"{new_center.name}: -> center")
+    return changes
+
+
+def _one_center(devices: list[Device]) -> None:
+    """Two machines can each promote a different device before syncing. Left alone,
+    `fleet sync` would then pick a center arbitrarily, so the newest promotion wins and
+    the rest fall back to backup."""
+    centers = [d for d in devices if d.role == "center"]
+    if len(centers) < 2:
+        return
+    keep = max(centers, key=lambda d: d.updated_at)
+    for d in centers:
+        if d is not keep:
+            d.role = "backup"
+
+
 def merge(local: list[Device], remote: list[Device]) -> tuple[list[Device], list[str]]:
     """Combine two inventories. Returns (merged, human-readable changes).
 
@@ -154,7 +210,9 @@ def merge(local: list[Device], remote: list[Device]) -> tuple[list[Device], list
         if gained:
             changes.append(f"{by_id[incoming.id].name}: +{gained} endpoint(s)")
 
-    return sorted(by_id.values(), key=lambda d: d.name), changes
+    merged = sorted(by_id.values(), key=lambda d: d.name)
+    _one_center(merged)
+    return merged, changes
 
 
 def upsert(devices: list[Device], new: Device) -> tuple[list[Device], str]:

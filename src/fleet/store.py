@@ -20,6 +20,7 @@ CREATE TABLE IF NOT EXISTS snapshot (
   id INTEGER PRIMARY KEY AUTOINCREMENT, device_id TEXT NOT NULL, ts INTEGER NOT NULL,
   payload TEXT NOT NULL);
 CREATE INDEX IF NOT EXISTS snapshot_dev_ts ON snapshot(device_id, ts DESC);
+CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT);
 CREATE TABLE IF NOT EXISTS event (
   id INTEGER PRIMARY KEY AUTOINCREMENT, ts INTEGER, device_id TEXT, kind TEXT, detail TEXT);
 """
@@ -61,6 +62,17 @@ def record(conn: sqlite3.Connection, device_id: str, res: ProbeResult) -> None:
             """DELETE FROM snapshot WHERE device_id=? AND id NOT IN
                  (SELECT id FROM snapshot WHERE device_id=? ORDER BY ts DESC LIMIT ?)""",
             (device_id, device_id, keep))
+    conn.commit()
+
+
+def get_meta(conn: sqlite3.Connection, key: str) -> str | None:
+    row = conn.execute("SELECT value FROM meta WHERE key=?", (key,)).fetchone()
+    return row["value"] if row else None
+
+
+def set_meta(conn: sqlite3.Connection, key: str, value: str) -> None:
+    conn.execute("INSERT INTO meta (key,value) VALUES (?,?) "
+                 "ON CONFLICT(key) DO UPDATE SET value=excluded.value", (key, value))
     conn.commit()
 
 

@@ -5,8 +5,10 @@ from __future__ import annotations
 
 import getpass
 import json as jsonlib
+import re
 import subprocess
 import sys
+import time
 from pathlib import Path
 
 import typer
@@ -23,7 +25,7 @@ from .models import Kind, Status
 from .onboard import onboard
 from .probe.runner import probe_env, probe_many, run_probe
 from .setup import detect_targets, fleet_command, install, uninstall
-from .sshcmd import resolve_command
+from .sshcmd import build_argv, resolve_command
 from .view import Detail, device_view, fleet_view
 
 app = typer.Typer(add_completion=False, no_args_is_help=True,
@@ -301,6 +303,7 @@ def cmd_edit(name: str,
                                                       "space; repeatable"),
              clear_disk_paths: bool = typer.Option(False, "--clear-disk-paths",
                                                    help="go back to autodetecting mounts"),
+             role: str = typer.Option(None, "--role", help="none | center | backup"),
              json_out: bool = typer.Option(False, "--json")):
     """Change a device's address or settings after it was added.
 
@@ -315,7 +318,11 @@ def cmd_edit(name: str,
 
     endpoint = resolve_command(ssh_command) if ssh_command else None
     paths = [] if clear_disk_paths else (list(disk_path) if disk_path else None)
-    result = apply_edits(dev, endpoint=endpoint, disk_paths=paths)
+    result = apply_edits(dev, endpoint=endpoint, disk_paths=paths,
+                         role=None if role == "center" else role)
+    if role == "center":
+        # fleet-wide invariant, so it cannot live in apply_edits, which sees one device
+        result.changes += inv.promote_center(devices, dev)
 
     if not result.changes:
         if _emit({"name": dev.name, "changes": []}, json_out):
@@ -369,6 +376,9 @@ def cmd_install(name: str,
                                          help="git URL to clone; defaults to config or this checkout"),
                 ref: str = typer.Option("main", "--ref", help="branch or tag to install"),
                 role: str = typer.Option("backup", "--role", help="none | center | backup"),
+                timer_minutes: int = typer.Option(10, "--timer-minutes",
+                                                  help="how often the device syncs itself; "
+                                                       "0 to install no timer"),
                 forward_agent: bool = typer.Option(True, "--forward-agent/--no-forward-agent",
                                                    help="authenticate the clone as you, "
                                                         "leaving no credential on the device")):
@@ -396,7 +406,8 @@ def cmd_install(name: str,
 
     console.print(f"[dim]installing fleet on {dev.name} from {url} ({ref})[/dim]")
     code, output = run_installer(sorted(eps, key=lambda e: e.preference)[0],
-                                 install_script(url, ref=ref), forward_agent=forward_agent)
+                                 install_script(url, ref=ref, timer_minutes=timer_minutes),
+                                 forward_agent=forward_agent)
     if code != 0:
         err.print(f"[red]Install failed[/red] (exit {code})\n{output.strip()[-600:]}")
         if code == 90:
@@ -411,6 +422,140 @@ def cmd_install(name: str,
     inv.save(devices)
     console.print(f"[green]✓[/green] {dev.name} is now [bold]{role}[/bold] — "
                   f"{output.strip().splitlines()[-1] if output.strip() else 'installed'}")
+
+
+def local_device_id() -> str:
+    """This machine's identity, in the same shape onboard.py stamps on a probed device.
+
+    Used only to notice that we ARE the center, so `fleet sync` can be safe to run
+    everywhere rather than being a command you must remember not to run in one place.
+    """
+    for candidate in ("/etc/machine-id", "/var/lib/dbus/machine-id"):
+        try:
+            value = Path(candidate).read_text().strip()
+        except OSError:
+            continue
+        if value:
+            return f"linux:machine-id:{value}"
+    try:
+        out = subprocess.run(["ioreg", "-rd1", "-c", "IOPlatformExpertDevice"],
+                             capture_output=True, text=True, timeout=5)
+        found = re.search(r'"IOPlatformUUID"\s*=\s*"([^"]+)"', out.stdout)
+        if found:
+            return f"darwin:hwuuid:{found.group(1)}"
+    except (OSError, subprocess.SubprocessError):
+        pass
+    return ""
+
+
+def run_sync(ep, payload: str) -> tuple[int, str]:
+    """Hand our inventory to the center and take back the merged result."""
+    # a non-interactive shell may not have ~/.local/bin on PATH, which is exactly where
+    # `fleet install` puts fleet.
+    remote = 'sh -lc \'PATH="$HOME/.local/bin:$PATH" fleet sync --serve\''
+    argv = build_argv(ep, remote=remote)
+    p = subprocess.run(argv, input=payload, capture_output=True, text=True, timeout=180)
+    return p.returncode, (p.stdout if p.returncode == 0 else p.stdout + p.stderr)
+
+
+def maybe_autosync() -> None:
+    """Sync in the background when the last one has gone stale.
+
+    Mirrors how telemetry already works: a read refreshes what is stale rather than
+    making you remember to. It is spawned detached and its result is never waited on,
+    because sync is a convenience -- `fleet ls` must still work with a dead center, an
+    unreadable config, or no network at all. Every failure here is swallowed for that
+    reason.
+    """
+    try:
+        cfg = load_config()
+        if not cfg.get("auto_sync"):
+            return
+        devices = inv.load()
+        center = next((d for d in devices if d.role == "center"), None)
+        if center is None or (center.id and center.id == local_device_id()):
+            return
+        conn = store.connect()
+        try:
+            last = int(store.get_meta(conn, "last_sync_at") or 0)
+            if time.time() - last < int(cfg.get("sync_ttl_s")):
+                return
+            # stamped before spawning, so a slow or failing sync cannot make every
+            # subsequent command spawn another one
+            store.set_meta(conn, "last_sync_at", str(int(time.time())))
+        finally:
+            conn.close()
+        subprocess.Popen([fleet_command(), "sync"],
+                         stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                         start_new_session=True)
+    except Exception:
+        return
+
+
+@app.callback()
+def _before_any_command(ctx: typer.Context):
+    # not for sync itself (it would recurse), nor for commands that must not reach the
+    # network as a side effect of being run
+    if ctx.invoked_subcommand not in ("sync", "setup", "paths", "install"):
+        maybe_autosync()
+
+
+@app.command("sync")
+def cmd_sync(serve: bool = typer.Option(False, "--serve",
+                                        help="run on the center: merge stdin, print the result"),
+             json_out: bool = typer.Option(False, "--json")):
+    """Merge this machine's inventory with the center's.
+
+    Safe to run anywhere and repeatedly: the merge is a union, the newer record wins,
+    and a device known to only one side is never dropped.
+    """
+    if serve:
+        try:
+            incoming = inv.loads(sys.stdin.read())
+        except Exception as exc:
+            # A truncated pipe must never be read as "the other side has no devices".
+            err.print(f"[red]unreadable inventory on stdin:[/red] {exc}")
+            raise typer.Exit(2)
+        merged, changes = inv.merge(inv.load(), incoming)
+        inv.save(merged)
+        sys.stdout.write(inv.dumps(merged))
+        return
+
+    devices = inv.load()
+    center = next((d for d in devices if d.role == "center"), None)
+    if center is None:
+        err.print("[red]No center designated.[/red]  Pick one:  "
+                  "[bold]fleet edit NAME --role center[/bold]")
+        raise typer.Exit(2)
+    if center.id and center.id == local_device_id():
+        console.print("[dim]· this machine is the center; nothing to sync to.[/dim]")
+        return
+    eps = inv.endpoints_of(center)
+    if not eps:
+        err.print(f"[red]{center.name} is the center but has no endpoint recorded[/red]")
+        raise typer.Exit(2)
+
+    code, output = run_sync(sorted(eps, key=lambda e: e.preference)[0], inv.dumps(devices))
+    if code != 0:
+        # sync is not on the critical path: every command still works from local state.
+        err.print(f"[red]sync failed[/red] (exit {code})\n{output.strip()[-400:]}")
+        raise typer.Exit(2)
+    try:
+        returned = inv.loads(output)
+    except Exception as exc:
+        err.print(f"[red]the center returned something unreadable:[/red] {exc}")
+        raise typer.Exit(2)
+
+    merged, changes = inv.merge(devices, returned)
+    inv.save(merged)
+    if _emit({"center": center.name, "devices": len(merged), "changes": changes}, json_out):
+        return
+    console.print(f"[green]✓[/green] synced with [bold]{center.name}[/bold] "
+                  f"({len(merged)} devices)")
+    for line in changes:
+        console.print(f"  {line}")
+    if not changes:
+        console.print("  [dim]already up to date.[/dim]")
 
 
 @app.command("rm")
