@@ -175,13 +175,26 @@ if [ "$FLEET_MODE" != "shared" ]; then
   fi
 
   echo "#CPUPROC pid|user|pcpu|rss_kb|etimes|comm"
+  # A process alive for under a second is also dropped (Linux only -- Darwin's etime
+  # cannot express sub-second). pcpu is cputime/elapsed, so at elapsed near zero it is
+  # meaningless and inflated, which is how a tailscaled fork servicing our own inbound
+  # connection kept outranking processes actually using the machine.
+  # ppid is asked for so we can drop our own processes, then dropped again before
+  # output -- the probe runs ps, so ps and this shell see themselves, and a
+  # just-started process reports a huge pcpu that lands it straight at the top.
+  # Filtering happens before sort|head, or our own rows would displace real ones.
   if [ "$OS" = "Darwin" ]; then
-    ps -axo pid=,user=,pcpu=,rss=,etime=,comm= 2>/dev/null | sort -k3 -rn | head -10 \
-      | awk '{p=$1;u=$2;c=$3;r=$4;e=$5;$1="";$2="";$3="";$4="";$5="";sub(/^ +/,"");
-              n=split($0,a,"/"); printf "%s|%s|%s|%s|%s|%s\n",p,u,c,r,e,a[n]}'
+    ps -axo pid=,ppid=,user=,pcpu=,rss=,etime=,comm= 2>/dev/null \
+      | awk -v me="$$" '$1 != me && $2 != me {
+              p=$1;u=$3;c=$4;r=$5;e=$6;
+              $1="";$2="";$3="";$4="";$5="";$6="";sub(/^ +/,"");
+              n=split($0,a,"/"); printf "%s|%s|%s|%s|%s|%s\n",p,u,c,r,e,a[n]}' \
+      | sort -t'|' -k3 -rn | head -10
   else
-    ps -eo pid=,user=,pcpu=,rss=,etimes=,comm= 2>/dev/null | sort -k3 -rn | head -10 \
-      | awk '$3+0>1.0 {printf "%s|%s|%s|%s|%s|%s\n",$1,$2,$3,$4,$5,$6}'
+    ps -eo pid=,ppid=,user=,pcpu=,rss=,etimes=,comm= 2>/dev/null \
+      | awk -v me="$$" '$1 != me && $2 != me && $4+0>1.0 && $6+0>=1 {
+              printf "%s|%s|%s|%s|%s|%s\n",$1,$3,$4,$5,$6,$7}' \
+      | sort -t'|' -k3 -rn | head -10
   fi
 fi
 

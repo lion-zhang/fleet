@@ -34,24 +34,9 @@ from .sshcmd import build_argv, resolve_command
 from .top import Schedule, render_device, render_fleet
 from .view import Detail, device_view, fleet_view
 
-def _examples(*pairs: tuple[str, str]) -> str:
-    """Render an Examples block. rich re-wraps a paragraph, so each line is its own
-    paragraph or they all run together on one line."""
-    width = max(len(cmd) for cmd, _ in pairs)
-    return "[bold]Examples[/bold]\n\n" + "\n\n".join(
-        f"[dim]$[/dim] {cmd.ljust(width)}   [dim]{why}[/dim]" for cmd, why in pairs)
-
-
 app = typer.Typer(
     add_completion=False, no_args_is_help=True, rich_markup_mode="rich",
-    help="Personal compute inventory, service registry, and resource broker.",
-    epilog=_examples(
-        ('fleet add "ssh -p 58418 root@1.2.3.4"', "onboard a box; paste the ssh command"),
-        ("fleet ls", "what is free right now"),
-        ("fleet top", "live view, like htop for your fleet"),
-        ("fleet ssh lin-xps -- nvidia-smi", "run one command there"),
-        ("fleet setup", "teach your coding agents to use fleet"),
-    ))
+    help="Personal compute inventory, service registry, and resource broker.",)
 console = Console()
 err = Console(stderr=True)
 
@@ -148,7 +133,10 @@ def _rows(names: list[str] | None = None, *, refresh: bool = False,
 def cmd_ls(json_out: bool = typer.Option(False, "--json"),
            refresh: bool = typer.Option(False, "--refresh", "-r", help="force a live probe"),
            online: bool = typer.Option(False, "--online", help="only reachable devices")):
-    """List every device with live resource availability."""
+    """List every device with live resource availability.
+
+    [dim]Example:[/dim]  fleet ls --json
+    """
     rows = _rows(refresh=refresh)
     if online:
         rows = [r for r in rows if r["status"] == "ok"]
@@ -202,7 +190,10 @@ def cmd_ls(json_out: bool = typer.Option(False, "--json"),
 @app.command("show")
 def cmd_show(name: str, json_out: bool = typer.Option(False, "--json"),
              refresh: bool = typer.Option(True, "--refresh/--no-refresh")):
-    """Full detail for one device."""
+    """Full detail for one device.
+
+    [dim]Example:[/dim]  fleet show lin-xps
+    """
     rows = _rows([name], refresh=refresh, detail=Detail.FULL)
     if not rows:
         err.print(f"[red]No device named {name!r}.[/red]  Try [bold]fleet ls[/bold]")
@@ -250,7 +241,7 @@ def cmd_show(name: str, json_out: bool = typer.Option(False, "--json"),
         console.print(f"  [dim]{r['notes'].strip()}[/dim]")
 
 
-@app.command("add", epilog=_examples(('fleet add "ssh -p 58418 root@1.2.3.4"', 'quote the whole ssh command'), ('fleet add "ssh box" --kind rental', 'rentals are flagged when idle and costing money')))
+@app.command("add")
 def cmd_add(ssh_command: str = typer.Argument(..., help='e.g. "ssh -p 58418 root@1.2.3.4"'),
             name: str = typer.Option(None, "--name"),
             kind: str = typer.Option(None, "--kind", help="permanent|rental|shared|appliance|mobile"),
@@ -258,7 +249,10 @@ def cmd_add(ssh_command: str = typer.Argument(..., help='e.g. "ssh -p 58418 root
             no_key_prompt: bool = typer.Option(False, "--no-key-prompt",
                                                help="never offer to install a key"),
             dry_run: bool = typer.Option(False, "--dry-run")):
-    """Add a device from a pasted ssh command."""
+    """Add a device from a pasted ssh command.
+
+    [dim]Example:[/dim]  fleet add "ssh -p 58418 root@1.2.3.4"
+    """
     devices = inv.load()
     dev, res = onboard(ssh_command, name=name, kind=kind,
                        taken_names={d.name for d in devices})
@@ -343,7 +337,10 @@ def _install_key(dev, *, quiet: bool = False) -> bool:
 
 @key_app.command("install")
 def cmd_key_install(name: str):
-    """Install your public key on a device, using a password typed once."""
+    """Install your public key on a device, using a password typed once.
+
+    [dim]Example:[/dim]  fleet key install ds720
+    """
     devices = inv.load()
     dev = inv.find(devices, name)
     if dev is None:
@@ -355,7 +352,7 @@ def cmd_key_install(name: str):
     console.print(f"  [dim]run `fleet refresh {dev.name}` to confirm.[/dim]")
 
 
-@app.command("edit", epilog=_examples(('fleet edit blackwell --ssh "ssh -p 40001 root@5.6.7.8"', 'the rental moved'), ('fleet edit lin-xps --disk-path /workspace', 'watch the volume that matters'), ('fleet edit oracle --role center', 'make it the sync center')))
+@app.command("edit")
 def cmd_edit(name: str,
              ssh_command: str = typer.Option(None, "--ssh", metavar="CMD",
                                              help='new address, e.g. "ssh -p 2222 root@5.6.7.8"'),
@@ -370,6 +367,8 @@ def cmd_edit(name: str,
 
     Rentals recycle IPs and ports, so `--ssh` re-points a device without losing its
     name, tags, cost or history.
+
+    [dim]Example:[/dim]  fleet edit blackwell --ssh "ssh -p 40001 root@5.6.7.8"
     """
     devices = inv.load()
     dev = inv.find(devices, name)
@@ -431,7 +430,7 @@ def run_installer(ep, script: str, *, forward_agent: bool = True) -> tuple[int, 
     return p.returncode, (p.stdout + p.stderr)
 
 
-@app.command("install", epilog=_examples(('fleet install oracle', 'install fleet there; it becomes a backup'), ('fleet install oracle --timer-minutes 0', 'no self-sync cron entry')))
+@app.command("install")
 def cmd_install(name: str,
                 repo: str = typer.Option(None, "--repo", metavar="URL",
                                          help="git URL to clone; defaults to config or this checkout"),
@@ -447,6 +446,8 @@ def cmd_install(name: str,
 
     Every other device needs nothing installed. This is the exception: a backup node has
     to run fleet, so fleet has to be there. Re-running updates an existing install.
+
+    [dim]Example:[/dim]  fleet install oracle
     """
     devices = inv.load()
     dev = inv.find(devices, name)
@@ -561,7 +562,7 @@ def _before_any_command(ctx: typer.Context):
         maybe_autosync()
 
 
-@app.command("sync", epilog=_examples(('fleet sync', 'merge with the center now; normally automatic')))
+@app.command("sync")
 def cmd_sync(serve: bool = typer.Option(False, "--serve",
                                         help="run on the center: merge stdin, print the result"),
              json_out: bool = typer.Option(False, "--json")):
@@ -569,6 +570,8 @@ def cmd_sync(serve: bool = typer.Option(False, "--serve",
 
     Safe to run anywhere and repeatedly: the merge is a union, the newer record wins,
     and a device known to only one side is never dropped.
+
+    [dim]Example:[/dim]  fleet sync
     """
     if serve:
         try:
@@ -626,6 +629,8 @@ def cmd_identity():
     Creates an age keypair if there is none and publishes only the public half onto this
     machine's own device record, where it syncs like everything else. The private half
     never leaves this machine and is never printed.
+
+    [dim]Example:[/dim]  fleet identity
     """
     try:
         recipient = sec.ensure_identity()
@@ -652,12 +657,7 @@ def cmd_identity():
 
 secret_app = typer.Typer(
     no_args_is_help=True, rich_markup_mode="rich",
-    help="Stored passwords, encrypted per machine.",
-    epilog=_examples(
-        ("fleet identity", "enrol this machine first"),
-        ("fleet secret set blackwell", "prompts; never pass it as an argument"),
-        ("fleet secret ls", "which devices have one; never shows values"),
-    ))
+    help="Stored passwords, encrypted per machine.",)
 app.add_typer(secret_app, name="secret")
 
 
@@ -668,7 +668,10 @@ def _secrets_now() -> tuple[dict, list[Device]]:
 
 @secret_app.command("set")
 def cmd_secret_set(name: str):
-    """Store a password for a device. Prompted for, never passed as an argument."""
+    """Store a password for a device. Prompted for, never passed as an argument.
+
+    [dim]Example:[/dim]  fleet secret set blackwell
+    """
     if not sys.stdin.isatty():
         err.print("[yellow]Refusing to read a password without a terminal.[/yellow]  "
                   f"Run [bold]fleet secret set {name}[/bold] yourself.")
@@ -689,7 +692,10 @@ def cmd_secret_set(name: str):
 
 @secret_app.command("ls")
 def cmd_secret_ls(json_out: bool = typer.Option(False, "--json")):
-    """List which devices have a stored password. Never prints a value."""
+    """List which devices have a stored password. Never prints a value.
+
+    [dim]Example:[/dim]  fleet secret ls
+    """
     try:
         data, _ = _secrets_now()
     except sec.SecretsError as exc:
@@ -706,7 +712,10 @@ def cmd_secret_ls(json_out: bool = typer.Option(False, "--json")):
 
 @secret_app.command("rm")
 def cmd_secret_rm(name: str):
-    """Forget a stored password."""
+    """Forget a stored password.
+
+    [dim]Example:[/dim]  fleet secret rm blackwell
+    """
     try:
         data, devices = _secrets_now()
         if name not in data:
@@ -755,7 +764,7 @@ def _live_tick(conn, devices, schedule: Schedule, cfg, detail: Detail) -> list[d
     return rows
 
 
-@app.command("top", epilog=_examples(('fleet top', 'the whole fleet, live'), ('fleet top lin-xps -i 1', 'one device, refreshed every second')))
+@app.command("top")
 def cmd_top(name: str = typer.Argument(None, help="one device, instead of the whole fleet"),
             interval: float = typer.Option(2.0, "--interval", "-i",
                                            help="seconds between refreshes")):
@@ -764,6 +773,8 @@ def cmd_top(name: str = typer.Argument(None, help="one device, instead of the wh
     Shared hosts keep their own slow cadence (shared_min_interval_s) and are shown as
     ageing rather than live, and anything unreachable backs off instead of being
     redialled every couple of seconds.
+
+    [dim]Example:[/dim]  fleet top lin-xps -i 1
     """
     cfg = load_config()
     devices = inv.live(inv.load())
@@ -847,7 +858,10 @@ def _key_pressed(timeout: float) -> str | None:
 
 @app.command("rm")
 def cmd_rm(name: str, yes: bool = typer.Option(False, "--yes", "-y")):
-    """Remove a device from the inventory."""
+    """Remove a device from the inventory.
+
+    [dim]Example:[/dim]  fleet rm blackwell
+    """
     devices = inv.load()
     dev = inv.find(devices, name)
     if dev is None:
@@ -862,7 +876,10 @@ def cmd_rm(name: str, yes: bool = typer.Option(False, "--yes", "-y")):
 
 @app.command("refresh")
 def cmd_refresh(names: list[str] = typer.Argument(None), json_out: bool = typer.Option(False, "--json")):
-    """Force a live probe of some or all devices."""
+    """Force a live probe of some or all devices.
+
+    [dim]Example:[/dim]  fleet refresh lin-xps
+    """
     rows = _rows(list(names) if names else None, refresh=True)
     if _emit(fleet_view(rows), json_out):
         return
@@ -873,7 +890,10 @@ def cmd_refresh(names: list[str] = typer.Argument(None), json_out: bool = typer.
 
 @app.command("probe")
 def cmd_probe(name: str, raw: bool = typer.Option(False, "--raw", help="print payload stdout")):
-    """Probe one device directly. --raw captures a new parser test fixture."""
+    """Probe one device directly. --raw captures a new parser test fixture.
+
+    [dim]Example:[/dim]  fleet probe lin-xps --raw
+    """
     dev = inv.find(inv.load(), name)
     if dev is None:
         err.print(f"[red]No device named {name!r}[/red]")
@@ -896,12 +916,14 @@ def cmd_probe(name: str, raw: bool = typer.Option(False, "--raw", help="print pa
         default=str))
 
 
-@app.command("ssh", epilog=_examples(('fleet ssh lin-xps', 'open a shell'), ('fleet ssh lin-xps -- nvidia-smi', '-- separates the remote command')), context_settings={"allow_extra_args": True, "ignore_unknown_options": True})
+@app.command("ssh", context_settings={"allow_extra_args": True, "ignore_unknown_options": True})
 def cmd_ssh(ctx: typer.Context, name: str):
     """Open a shell on a device, or run a command: `fleet ssh lin-xps -- nvidia-smi`.
 
     This exists so credentials never have to reach an agent: the wrapper resolves the
     endpoint and connects, rather than handing out a connection string plus a password.
+
+    [dim]Example:[/dim]  fleet ssh lin-xps -- nvidia-smi
     """
     import os
     dev = inv.find(inv.load(), name)
@@ -958,6 +980,8 @@ def cmd_setup(
 
     Claude Code gets a skill, which costs nothing until a task actually needs a machine.
     Codex gets a marked region in AGENTS.md; anything else in that file is left alone.
+
+    [dim]Example:[/dim]  fleet setup --dry-run
     """
     root = Path.cwd() if project else Path.home()
     if target == "auto":
@@ -995,7 +1019,10 @@ def cmd_setup(
 
 @app.command("paths")
 def cmd_paths():
-    """Show where fleet keeps its state."""
+    """Show where fleet keeps its state.
+
+    [dim]Example:[/dim]  fleet paths
+    """
     console.print(f"inventory  {INVENTORY_PATH}")
     console.print(f"cache      {DB_PATH}   [dim](disposable — delete and re-probe)[/dim]")
 

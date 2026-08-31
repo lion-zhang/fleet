@@ -115,3 +115,73 @@ def test_devices_with_different_disk_paths_are_probed_in_separate_groups(tmp_pat
 
     assert (frozenset({"a"}), ("/a",)) in calls
     assert (frozenset({"b"}), ()) in calls
+
+
+# --------------------------------------------------------------- self-observation
+
+def _cpuproc_rows(stdout: str) -> list[list[str]]:
+    rows, inside = [], False
+    for line in stdout.splitlines():
+        if line.startswith("#CPUPROC"):
+            inside = True
+            continue
+        if inside:
+            if line.startswith("#"):
+                break
+            if line.strip():
+                rows.append(line.split("|"))
+    return rows
+
+
+def _fake_ps(tmp_path):
+    """A ps that reports itself the way the real one does, plus one genuine process.
+
+    Using the real ps makes this test depend on whether the probe happens to land in
+    the top ten by CPU, which is a coin flip -- a flaky test here is worse than none.
+    """
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir(exist_ok=True)
+    ps = bin_dir / "ps"
+    # $$ and $PPID inside the fake are exactly what the real ps would report for itself
+    ps.write_text(
+        '#!/bin/sh\n'
+        'printf "%s %s root 99.9 1000 0 ps\\n" "$$" "$PPID"\n'
+        'printf "%s %s root 98.0 1000 0 sh\\n" "$PPID" "1"\n'
+        'printf "4242 1 root 50.0 2000 9999 realwork\\n"\n')
+    ps.chmod(0o755)
+    return bin_dir
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="payload is POSIX sh")
+def test_the_probe_does_not_report_its_own_processes(tmp_path):
+    """The probe runs ps, so ps sees itself -- and a freshly started process reports a
+    huge pcpu, which put the probe's own shell at the top of `fleet top`. Measuring the
+    measurement is the classic version of this bug."""
+    bin_dir = _fake_ps(tmp_path)
+    out = subprocess.run(
+        ["sh", str(PAYLOAD)], capture_output=True, text=True, timeout=60,
+        env={"PATH": f"{bin_dir}:/usr/bin:/bin:/usr/sbin:/sbin", "FLEET_MODE": "full"},
+    ).stdout
+    comms = [r[5].strip() for r in _cpuproc_rows(out) if len(r) > 5]
+    assert "ps" not in comms, f"the probe reports its own ps: {comms}"
+    assert "sh" not in comms, f"the probe reports its own shell: {comms}"
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="payload is POSIX sh")
+def test_filtering_ourselves_out_keeps_everyone_else(tmp_path):
+    """An over-broad filter that dropped everything would satisfy the test above while
+    making the CPU list useless."""
+    bin_dir = _fake_ps(tmp_path)
+    out = subprocess.run(
+        ["sh", str(PAYLOAD)], capture_output=True, text=True, timeout=60,
+        env={"PATH": f"{bin_dir}:/usr/bin:/bin:/usr/sbin:/sbin", "FLEET_MODE": "full"},
+    ).stdout
+    assert "realwork" in [r[5].strip() for r in _cpuproc_rows(out) if len(r) > 5]
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="payload is POSIX sh")
+def test_the_cpuproc_wire_format_is_unchanged():
+    """ppid is used to filter and then dropped: the parser and every captured fixture
+    still expect exactly six fields."""
+    for row in _cpuproc_rows(_run_payload()):
+        assert len(row) == 6, row
