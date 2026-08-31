@@ -1,0 +1,45 @@
+#FLEET v1
+probe.mode=full
+host.hostname=gpu-box
+host.uname_s=Linux
+host.arch=x86_64
+host.kernel=7.0.0-30-generic
+host.machine_id=11111111111111111111111111111111
+host.os=Ubuntu 26.04 LTS
+host.uptime_s=703261
+host.users=0
+host.is_container=0
+host.vast_label=
+host.runpod_id=
+host.autodl=0
+host.slurm=0
+cpu.cores=32
+cpu.model=13th Gen Intel(R) Core(TM) i9-13900
+cpu.load=0.39 0.11 0.08
+mem.total_kb=29906208
+mem.avail_kb=25770544
+gpu.present=1
+gpu.driver=595.84
+gpu.error=
+#DISK mount|total_kb|used_kb|avail_kb
+/|191135628|11742920|169610692
+/home|767865600|38428960|690357728
+/workspace|1921723584|96456524|1727575056
+#GPU idx|uuid|name|total_mib|used_mib|free_mib|util_pct|temp_c|power_w
+0|GPU-00000000-1111-2222-3333-444444444444|NVIDIA GeForce RTX 4090|24564|853|23197|0|47|28.47
+#GPUPROC gpu_uuid|pid|vram_mib|user|etimes|comm
+GPU-00000000-1111-2222-3333-444444444444|9164|156|user|690348|msedge
+GPU-00000000-1111-2222-3333-444444444444|11575|107|user|690075|ptyxis
+GPU-00000000-1111-2222-3333-444444444444|26817|44|user|687678|nautilus
+GPU-00000000-1111-2222-3333-444444444444|29889|132|user|687442|code
+#CPUPROC pid|user|pcpu|rss_kb|etimes|comm
+1319515|user|3.2|22604|0|tailscaled
+66522|user|2.2|348628|645578|nvtop
+29889|user|1.9|53704|687442|code
+#LISTEN proto|addr|port|pid|comm
+tcp|127.0.0.53%lo|53||
+tcp|127.0.0.1|631||
+tcp|127.0.0.1|35123||
+tcp|[fd7a:115c:a1e0::11]|37130||
+tcp|100.64.0.11|44664||
+#END rc=0

@@ -1,0 +1,63 @@
+#FLEET v1
+probe.mode=full
+host.hostname=laptop.local
+host.uname_s=Darwin
+host.arch=arm64
+host.kernel=25.5.0
+host.machine_id=AAAAAAAA-BBBB-CCCC-DDDD-EEEEEEEEEEEE
+host.os=macOS 26.5.2
+host.uptime_s=4188446
+host.users=1
+host.is_container=0
+host.vast_label=
+host.runpod_id=
+host.autodl=0
+host.slurm=0
+cpu.cores=16
+cpu.model=Apple M3 Max
+cpu.load=3.48 3.44 3.60
+mem.total_kb=67108864
+mem.avail_kb=14737184
+gpu.present=0
+gpu.driver=
+gpu.error=
+#DISK mount|total_kb|used_kb|avail_kb
+/|1948455240|16679084|897112068
+#CPUPROC pid|user|pcpu|rss_kb|etimes|comm
+1429|user|11.3|31248|48-11:24:48|wallpaperd
+626|_coreaudiod|9.2|46064|48-11:25:46|coreaudiod
+15282|user|7.5|650880|42:23|claude
+1403|user|6.2|184128|48-11:24:49|RemoteApp
+78531|user|5.1|694992|07-19:55:38|claude
+1454|user|4.1|71616|48-11:24:47|VTDecoderXPCService
+614|_windowserver|4.1|180800|48-11:25:46|WindowServer
+6523|user|3.8|887504|12-05:46:13|MailApp
+1751|user|3.2|768|48-11:24:33|SyncHelper
+1401|user|2.6|72928|48-11:24:49|Terminal
+#LISTEN proto|addr|port|pid|comm
+tcp|*|5000|1178|ctrlcenter
+tcp|*|7000|1178|ctrlcenter
+tcp|127.0.0.1|8010|46753|python3.1
+tcp|127.0.0.1|8502|46150|python3.1
+tcp|127.0.0.1|10000|1751|SyncHelper
+tcp|127.0.0.1|14013|81947|ChatApp
+tcp|127.0.0.1|14016|81947|ChatApp
+tcp|127.0.0.1|14019|81947|ChatApp
+tcp|127.0.0.1|14022|81947|ChatApp
+tcp|127.0.0.1|14023|81947|ChatApp
+tcp|127.0.0.1|15292|1985|MediaApp
+tcp|127.0.0.1|15393|1985|MediaApp
+tcp|127.0.0.1|16494|1985|MediaApp
+tcp|127.0.0.1|24224|78812|python3.1
+tcp|127.0.0.1|24282|78729|python3.1
+tcp|127.0.0.1|24283|15570|python3.1
+tcp|127.0.0.1|24284|15612|python3.1
+tcp|127.0.0.1|25957|77912|Editor
+tcp|*|34642|42367|SyncApp
+tcp|*|40317|74534|vpnhelper
+tcp|127.0.0.1|55556|78359|Editor
+tcp|127.0.0.1|60813|74534|vpnhelper
+tcp|127.0.0.1|61473|77912|Editor
+tcp|*|61517|1052|remoted
+tcp|*|61518|74534|vpnhelper
+#END rc=0

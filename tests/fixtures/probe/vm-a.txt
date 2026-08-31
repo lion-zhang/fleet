@@ -1,0 +1,34 @@
+#FLEET v1
+probe.mode=full
+host.hostname=lion
+host.uname_s=Linux
+host.arch=aarch64
+host.kernel=6.17.0-1018-oracle
+host.machine_id=22222222222222222222222222222222
+host.os=Ubuntu 24.04.4 LTS
+host.uptime_s=946066
+host.users=0
+host.is_container=0
+host.vast_label=
+host.runpod_id=
+host.autodl=0
+host.slurm=0
+cpu.cores=2
+cpu.model=
+cpu.load=0.00 0.00 0.00
+mem.total_kb=12213612
+mem.avail_kb=11625200
+gpu.present=0
+gpu.driver=
+gpu.error=
+#DISK mount|total_kb|used_kb|avail_kb
+/|46212176|3638800|42556992
+#CPUPROC pid|user|pcpu|rss_kb|etimes|comm
+140531|root|55.5|10736|0|systemd
+#LISTEN proto|addr|port|pid|comm
+tcp|0.0.0.0|22||
+tcp|127.0.0.53%lo|53||
+tcp|0.0.0.0|111||
+tcp|[fd7a:115c:a1e0::12]|44240||
+tcp|100.64.0.12|65127||
+#END rc=0

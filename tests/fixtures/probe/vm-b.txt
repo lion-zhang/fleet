@@ -1,0 +1,33 @@
+#FLEET v1
+probe.mode=full
+host.hostname=vm-b
+host.uname_s=Linux
+host.arch=x86_64
+host.kernel=6.8.0-124-generic
+host.machine_id=33333333333333333333333333333333
+host.os=Ubuntu 24.04.4 LTS
+host.uptime_s=6301368
+host.users=0
+host.is_container=0
+host.vast_label=
+host.runpod_id=
+host.autodl=0
+host.slurm=0
+cpu.cores=2
+cpu.model=Intel(R) Xeon(R) Platinum 8255C CPU @ 2.50GHz
+cpu.load=0.00 0.00 0.00
+mem.total_kb=3813264
+mem.avail_kb=3172488
+gpu.present=0
+gpu.driver=
+gpu.error=
+#DISK mount|total_kb|used_kb|avail_kb
+/|61806672|9185700|49983440
+#CPUPROC pid|user|pcpu|rss_kb|etimes|comm
+28810|root|30.7|11492|0|systemd
+#LISTEN proto|addr|port|pid|comm
+tcp|0.0.0.0|22||
+tcp|127.0.0.54|53||
+tcp|[fd7a:115c:a1e0::13]|33280||
+tcp|100.64.0.13|63436||
+#END rc=0
