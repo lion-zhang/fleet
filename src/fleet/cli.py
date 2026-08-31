@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import json as jsonlib
 import sys
+from pathlib import Path
 
 import typer
 from rich.console import Console
@@ -16,6 +17,7 @@ from .config import DB_PATH, INVENTORY_PATH, load_config
 from .models import Kind, Status
 from .onboard import onboard
 from .probe.runner import probe_many, run_probe
+from .setup import detect_targets, fleet_command, install, uninstall
 from .sshcmd import resolve_command
 from .view import Detail, device_view, fleet_view
 
@@ -288,6 +290,54 @@ def cmd_ssh(ctx: typer.Context, name: str):
     extra = [a for a in ctx.args if a != "--"]
     argv += extra
     os.execvp("ssh", argv)      # replace this process; ssh owns the tty from here
+
+
+@app.command("setup")
+def cmd_setup(
+    target: str = typer.Option("auto", "--target",
+                               help="claude | codex | all | auto (whatever is installed)"),
+    project: bool = typer.Option(False, "--project",
+                                 help="write into the current directory, not your home"),
+    dry_run: bool = typer.Option(False, "--dry-run", help="show what would change; write nothing"),
+    remove: bool = typer.Option(False, "--uninstall", help="remove what setup installed"),
+):
+    """Teach your coding agents to use fleet.
+
+    Claude Code gets a skill, which costs nothing until a task actually needs a machine.
+    Codex gets a marked region in AGENTS.md; anything else in that file is left alone.
+    """
+    root = Path.cwd() if project else Path.home()
+    if target == "auto":
+        # cwd tells us nothing about which agents you use, so a project install
+        # assumes the one whose layout is identical in both scopes.
+        targets = ["claude"] if project else detect_targets(root)
+    elif target == "all":
+        targets = ["claude", "codex"]
+    else:
+        targets = [target]
+
+    if unknown := [t for t in targets if t not in ("claude", "codex")]:
+        err.print(f"[red]Unknown target {unknown[0]!r}[/red]  (claude | codex | all | auto)")
+        raise typer.Exit(2)
+    if not targets:
+        err.print("[yellow]No coding agent found.[/yellow]  Looked for ~/.claude and "
+                  "~/.codex.  Force one with [bold]--target claude[/bold].")
+        raise typer.Exit(1)
+
+    cmd = fleet_command()
+    changes = (uninstall(root, targets, dry_run=dry_run, project=project) if remove
+               else install(root, targets, cmd, dry_run=dry_run, project=project))
+
+    for c in changes:
+        colour = {"created": "green", "updated": "green",
+                  "removed": "yellow"}.get(c.action, "dim")
+        console.print(f"  [{colour}]{c.action:<9}[/{colour}] {c.path}")
+    if dry_run:
+        console.print("\n[dim]--dry-run: nothing was written.[/dim]")
+    elif not remove and cmd != "fleet":
+        err.print(f"\n[yellow]fleet is not on your PATH[/yellow], so the skill points at "
+                  f"{cmd}.\n  Install it properly and re-run setup: "
+                  "[bold]uv tool install --editable .[/bold]")
 
 
 @app.command("paths")
