@@ -67,10 +67,14 @@ This requires a new `updated_at` field on `Device`, stamped by every mutating co
 `added_at` cannot serve: it records when the device was first seen, not when its record
 last changed.
 
-**Deletion is not synced in v1.** Distinguishing "deleted on the laptop" from "not yet
-seen by the laptop" needs tombstones, and getting that wrong silently resurrects or
-silently destroys devices. `fleet rm` therefore removes locally, and removing everywhere
-means running it on the center. This is a known, documented gap rather than an accident.
+**Deletion is a tombstone, not an absence.** A record that merely vanishes is
+indistinguishable from one the other machine has not seen yet, so the next sync would
+resurrect it. `fleet rm` therefore sets `deleted_at` and keeps the record; every
+user-facing read goes through `inventory.live()`, and the existing newer-wins rule
+carries the deletion without needing any special case -- re-adding a device later simply
+produces a newer record, so it comes back rather than being permanently poisoned.
+Tombstones older than 30 days are pruned on save, by which point every machine has
+certainly seen them.
 
 ## Secrets: per-machine age identities
 
@@ -153,7 +157,15 @@ re-installing replaces our line and leaves every other entry alone.
 1. `updated_at` + the merge function. Pure, testable without any transport.
 2. `fleet sync` / `--serve` over SSH, with locking on the center.
 3. `fleet identity` + recipients on each machine's own device record.
-4. `fleet secret set/ls/rm`.
+4. `fleet secret set/ls/rm`, and spending a stored password:
+   - the **probe** retries an auth_failed host with its stored password, as a serial
+     fallback after the sweep rather than inside the fan-out. Its stdin is the pty
+     carrying the prompt, so the payload rides in argv base64-encoded, and output is
+     sliced from the first section marker because a pty merges stderr in;
+   - **`fleet ssh`** uses SSH_ASKPASS, which is the only way to answer the prompt
+     without standing between the user and their shell. The helper reads the password
+     from the environment; writing it into a file would outlive the connection and
+     defeat encrypting it at rest.
 
 Phases 1-2 are useful with no secrets at all. Phases 3-4 are useless without 1-2. The
 order is forced.

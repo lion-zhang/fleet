@@ -35,8 +35,7 @@ def _pyrage():
         import pyrage
     except ImportError as exc:                # pragma: no cover - depends on install extras
         raise SecretsError(
-            "encrypted secrets need the 'secrets' extra: uv tool install "
-            "'fleet-broker[secrets]'") from exc
+            "pyrage is missing -- reinstall fleet: uv tool install --force .") from exc
     return pyrage
 
 
@@ -72,7 +71,9 @@ def load_identity(path: Path | None = None):
 
 def recipients_of(devices: list[Device]) -> list[str]:
     """Every machine enrolled to read secrets, in inventory order."""
-    return [d.recipient for d in devices if d.recipient]
+    # a removed machine must stop being able to read new secrets: that is what makes
+    # `fleet rm` an actual revocation rather than a note to self.
+    return [d.recipient for d in devices if d.recipient and not d.deleted_at]
 
 
 def write_secrets(path: Path, data: dict[str, str], recipients: list[str]) -> None:

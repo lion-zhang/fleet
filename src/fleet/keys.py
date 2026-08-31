@@ -129,6 +129,21 @@ def _scrub(raw: bytes, password: str) -> str:
     return text.replace(password, "***") if password else text
 
 
+def askpass_script(directory: Path) -> Path:
+    """A helper ssh can call for the password, so the user keeps a real terminal.
+
+    SSH_ASKPASS is the only way to answer ssh's prompt without sitting between the user
+    and their shell. The password is read from the environment rather than written into
+    this file: a file would outlive the connection and defeat the point of encrypting
+    the secret at rest.
+    """
+    path = directory / "fleet-askpass"
+    fd = os.open(str(path), os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o700)
+    with os.fdopen(fd, "w") as fh:
+        fh.write('#!/bin/sh\nprintf \'%s\\n\' "$FLEET_ASKPASS"\n')
+    return path
+
+
 def install_key(ep: Endpoint, password: str, pubkey: str, *,
                 timeout: float = 20.0) -> tuple[bool, str]:
     """Append pubkey to the host's authorized_keys. Returns (ok, output-safe-to-print)."""

@@ -175,6 +175,10 @@ class Device:
     # this machine's age public key, when it is one of yours and enrolled to read
     # secrets. Lives on the device so it syncs and merges like everything else.
     recipient: str = ""
+    # A tombstone. Deletion has to be a recorded fact rather than an absence: a record
+    # that merely vanishes is indistinguishable from one the other machine has not seen
+    # yet, and the next sync would resurrect it.
+    deleted_at: int = 0
     auth_state: str = "ok"                 # ok | needs_credentials
     needs_review: bool = False
     added_at: int = field(default_factory=lambda: int(time.time()))

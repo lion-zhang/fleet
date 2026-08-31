@@ -376,3 +376,74 @@ def test_a_broken_auto_sync_never_breaks_the_command_you_ran(tmp_path, monkeypat
     monkeypatch.setattr(cli.subprocess, "Popen",
                         lambda *a, **k: (_ for _ in ()).throw(OSError("no")))
     cli.maybe_autosync()          # must not raise
+
+
+# --------------------------------------------------------------- deletion
+
+def test_removing_a_device_leaves_a_tombstone_rather_than_a_hole(tmp_path):
+    """A record that merely vanishes is indistinguishable from one the other machine
+    has not seen yet, so the next sync would resurrect it."""
+    from fleet import inventory as inv
+
+    path = tmp_path / "inventory.yaml"
+    inv.save([_dev("gone"), _dev("kept")], path)
+    devices = inv.load(path)
+    inv.remove(devices, inv.find(devices, "gone"))
+    inv.save(devices, path)
+
+    assert [d.name for d in inv.load(path)] == ["gone", "kept"], "record is still there"
+    assert [d.name for d in inv.live(inv.load(path))] == ["kept"], "but not live"
+
+
+def test_a_tombstoned_device_is_not_found_by_name():
+    from fleet import inventory as inv
+
+    devices = [_dev("gone"), _dev("kept")]
+    inv.remove(devices, devices[0])
+    assert inv.find(devices, "gone") is None
+    assert inv.find(devices, "kept") is not None
+
+
+def test_a_deletion_propagates_through_a_merge():
+    """Deleted on the laptop, so it must go away on the center too."""
+    from fleet import inventory as inv
+
+    remote = [_dev("doomed", updated_at=100)]
+    local = [_dev("doomed", updated_at=100)]
+    inv.remove(local, local[0])
+    merged, _ = merge(remote, local)
+    assert inv.live(merged) == []
+
+
+def test_an_older_deletion_does_not_undo_a_newer_re_add():
+    """Delete it on the laptop, then add it again on the desktop. The re-add is newer,
+    so the device comes back rather than being permanently poisoned."""
+    from fleet import inventory as inv
+
+    local = [_dev("box", updated_at=100)]
+    inv.remove(local, local[0])                        # tombstone, stamped now
+    readded = _dev("box", updated_at=int(__import__("time").time()) + 60)
+    merged, _ = merge(local, [readded])
+    assert [d.name for d in inv.live(merged)] == ["box"]
+
+
+def test_a_tombstone_survives_the_inventory_file(tmp_path):
+    """It has to outlive a restart, or the deletion is forgotten before it propagates."""
+    from fleet import inventory as inv
+
+    path = tmp_path / "inventory.yaml"
+    devices = [_dev("gone")]
+    inv.remove(devices, devices[0])
+    inv.save(devices, path)
+    assert inv.load(path)[0].deleted_at > 0
+
+
+def test_ancient_tombstones_are_pruned_so_the_file_does_not_grow_forever():
+    from fleet import inventory as inv
+
+    old = _dev("ancient")
+    old.deleted_at = 1                                  # 1970
+    fresh = _dev("recent")
+    inv.remove([fresh], fresh)
+    kept = inv.prune_tombstones([old, fresh])
+    assert [d.name for d in kept] == ["recent"]

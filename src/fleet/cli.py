@@ -20,10 +20,11 @@ from . import store
 from .config import DB_PATH, INVENTORY_PATH, load_config
 from .edit import apply_edits
 from .install import build_install_argv, install_script
-from .keys import install_key, public_key
+from .keys import askpass_script, install_key, public_key
 from .models import Device, Kind, Status
 from .onboard import onboard
-from .probe.runner import probe_env, probe_many, run_probe
+from .probe.runner import (probe_env, probe_many, run_probe,
+                           run_probe_with_password)
 from . import secrets as sec
 from .setup import detect_targets, fleet_command, install, uninstall
 from .sshcmd import build_argv, resolve_command
@@ -46,10 +47,32 @@ def _emit(payload, as_json: bool) -> bool:
     return as_json
 
 
+def stored_password(name: str) -> str | None:
+    """A password for this device, if one is stored and this machine can read it.
+
+    Best-effort on purpose: no identity, no secrets file, or not being an enrolled
+    recipient are all ordinary states, and none of them may stop `fleet ls` working.
+    """
+    try:
+        return sec.read_secrets(sec.SECRETS_PATH, sec.load_identity()).get(name)
+    except Exception:
+        return None
+
+
+def _needs_password(conn, devices) -> set[str]:
+    """Devices whose last probe says the host is up but rejected our key."""
+    out = set()
+    for d in devices:
+        st, _ = store.latest(conn, d.id)
+        if st and st.get("status") == Status.AUTH_FAILED.value:
+            out.add(d.name)
+    return out
+
+
 def _rows(names: list[str] | None = None, *, refresh: bool = False,
           detail: Detail = Detail.COMPACT) -> list[dict]:
     cfg = load_config()
-    devices = inv.load()
+    devices = inv.live(inv.load())
     if names:
         devices = [d for d in devices if d.name in names or d.id in names]
     conn = store.connect()
@@ -75,6 +98,23 @@ def _rows(names: list[str] | None = None, *, refresh: bool = False,
                                  max_workers=int(cfg.max_workers))
             for dev_id, res in results.items():
                 store.record(conn, dev_id, res)
+        # A host that only accepts a password stays auth_failed forever otherwise. This
+        # is a fallback rather than part of the sweep: the fan-out stays untouched, and
+        # only the handful that actually failed pay for a second, serial attempt.
+        rejected = _needs_password(conn, stale)
+        for d in stale:
+            if d.name not in rejected:
+                continue
+            password = stored_password(d.name)
+            if not password:
+                continue
+            eps = inv.endpoints_of(d)
+            if not eps:
+                continue
+            res = run_probe_with_password(sorted(eps, key=lambda e: e.preference)[0],
+                                          password, mode=d.probe_mode,
+                                          disk_paths=d.disk_paths)
+            store.record(conn, d.id, res)
 
     out = []
     for d in devices:
@@ -472,8 +512,7 @@ def maybe_autosync() -> None:
         cfg = load_config()
         if not cfg.get("auto_sync"):
             return
-        devices = inv.load()
-        center = next((d for d in devices if d.role == "center"), None)
+        center = next((d for d in inv.live(inv.load()) if d.role == "center"), None)
         if center is None or (center.id and center.id == local_device_id()):
             return
         conn = store.connect()
@@ -524,7 +563,7 @@ def cmd_sync(serve: bool = typer.Option(False, "--serve",
         return
 
     devices = inv.load()
-    center = next((d for d in devices if d.role == "center"), None)
+    center = next((d for d in inv.live(devices) if d.role == "center"), None)
     if center is None:
         err.print("[red]No center designated.[/red]  Pick one:  "
                   "[bold]fleet edit NAME --role center[/bold]")
@@ -574,7 +613,7 @@ def cmd_identity():
         err.print(f"[red]{exc}[/red]")
         raise typer.Exit(2)
     devices = inv.load()
-    me = next((d for d in devices if d.id and d.id == local_device_id()), None)
+    me = next((d for d in inv.live(devices) if d.id and d.id == local_device_id()), None)
     if me is None:
         err.print("[red]This machine is not in the inventory[/red], so there is nowhere "
                   "to publish its recipient.\n  Add it first:  [bold]fleet add "
@@ -664,7 +703,8 @@ def cmd_rm(name: str, yes: bool = typer.Option(False, "--yes", "-y")):
         raise typer.Exit(1)
     if not yes and not typer.confirm(f"Remove {dev.name} ({dev.kind.value})?"):
         raise typer.Exit(1)
-    inv.save([d for d in devices if d.id != dev.id])
+    inv.remove(devices, dev)
+    inv.save(devices)
     console.print(f"[green]✓[/green] removed {dev.name}")
 
 
@@ -737,6 +777,19 @@ def cmd_ssh(ctx: typer.Context, name: str):
     argv.append(f"{ep.user}@{ep.target}" if ep.user else ep.target)
     extra = [a for a in ctx.args if a != "--"]
     argv += extra
+
+    password = stored_password(dev.name) if dev.auth_state == "needs_credentials" else None
+    if password:
+        # SSH_ASKPASS is the only way to answer the prompt without standing between the
+        # user and their shell. subprocess rather than execvp so the helper is cleaned
+        # up afterwards; ssh still inherits this terminal either way.
+        import tempfile
+        with tempfile.TemporaryDirectory() as scratch:
+            helper = askpass_script(Path(scratch))
+            env = {**os.environ, "SSH_ASKPASS": str(helper),
+                   "SSH_ASKPASS_REQUIRE": "force", "FLEET_ASKPASS": password,
+                   "DISPLAY": os.environ.get("DISPLAY", ":0")}
+            raise typer.Exit(subprocess.run(argv, env=env).returncode)
     os.execvp("ssh", argv)      # replace this process; ssh owns the tty from here
 
 

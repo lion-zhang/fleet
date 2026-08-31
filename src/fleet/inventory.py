@@ -94,7 +94,7 @@ def save(devices: list[Device], path: Path | None = None) -> None:
     """Atomic, locked write. Two agents adding devices concurrently must not interleave."""
     path = path or INVENTORY_PATH
     ensure_dirs()
-    payload = _payload(devices)
+    payload = _payload(prune_tombstones(devices))
     try:
         with _lock(path):
             fd, tmp = tempfile.mkstemp(dir=str(path.parent), prefix=".inventory-", suffix=".yaml")
@@ -114,11 +114,35 @@ def _as_dict(d: Device) -> dict:
 
 
 def find(devices: list[Device], name_or_id: str) -> Device | None:
+    devices = live(devices)
     for d in devices:
         if d.name == name_or_id or d.id == name_or_id:
             return d
     matches = [d for d in devices if d.name.startswith(name_or_id)]
     return matches[0] if len(matches) == 1 else None
+
+
+TOMBSTONE_TTL_S = 60 * 60 * 24 * 30      # long enough for every machine to have synced
+
+
+def live(devices: list[Device]) -> list[Device]:
+    """The devices that still exist. Everything user-facing reads through this."""
+    return [d for d in devices if not d.deleted_at]
+
+
+def remove(devices: list[Device], dev: Device | None) -> None:
+    """Mark a device deleted. The record stays so the deletion can propagate."""
+    if dev is None:
+        return
+    dev.deleted_at = int(time.time())
+    touch(dev)
+
+
+def prune_tombstones(devices: list[Device]) -> list[Device]:
+    """Drop tombstones old enough that every machine has certainly seen them. Without
+    this the inventory only ever grows."""
+    cutoff = int(time.time()) - TOMBSTONE_TTL_S
+    return [d for d in devices if not d.deleted_at or d.deleted_at > cutoff]
 
 
 def touch(dev: Device) -> None:
@@ -153,7 +177,7 @@ def promote_center(devices: list[Device], new_center: Device) -> list[str]:
     other machine's stale "center" record and you would be back to two centers.
     """
     changes: list[str] = []
-    for d in devices:
+    for d in live(devices):
         if d.role == "center" and d.id != new_center.id:
             d.role = "backup"
             touch(d)
@@ -169,7 +193,7 @@ def _one_center(devices: list[Device]) -> None:
     """Two machines can each promote a different device before syncing. Left alone,
     `fleet sync` would then pick a center arbitrarily, so the newest promotion wins and
     the rest fall back to backup."""
-    centers = [d for d in devices if d.role == "center"]
+    centers = [d for d in live(devices) if d.role == "center"]
     if len(centers) < 2:
         return
     keep = max(centers, key=lambda d: d.updated_at)
