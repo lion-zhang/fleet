@@ -3,6 +3,7 @@ universal interface: cron jobs, Makefiles, and non-MCP agents can all use it."""
 
 from __future__ import annotations
 
+import getpass
 import json as jsonlib
 import sys
 from pathlib import Path
@@ -15,6 +16,7 @@ from . import inventory as inv
 from . import store
 from .config import DB_PATH, INVENTORY_PATH, load_config
 from .edit import apply_edits
+from .keys import install_key, public_key
 from .models import Kind, Status
 from .onboard import onboard
 from .probe.runner import probe_env, probe_many, run_probe
@@ -188,6 +190,8 @@ def cmd_add(ssh_command: str = typer.Argument(..., help='e.g. "ssh -p 58418 root
             name: str = typer.Option(None, "--name"),
             kind: str = typer.Option(None, "--kind", help="permanent|rental|shared|appliance|mobile"),
             json_out: bool = typer.Option(False, "--json"),
+            no_key_prompt: bool = typer.Option(False, "--no-key-prompt",
+                                               help="never offer to install a key"),
             dry_run: bool = typer.Option(False, "--dry-run")):
     """Add a device from a pasted ssh command."""
     devices = inv.load()
@@ -217,6 +221,73 @@ def cmd_add(ssh_command: str = typer.Argument(..., help='e.g. "ssh -p 58418 root
     if not res.ok:
         console.print(f"  [yellow]{res.status.value}[/yellow]: {res.error_detail}")
         console.print("  [dim]Recorded anyway and flagged needs_review.[/dim]")
+        # "host is up but rejected our key" is the one failure a password can fix.
+        if res.status is Status.AUTH_FAILED and not no_key_prompt:
+            if not sys.stdin.isatty():
+                console.print(f"  [dim]run [bold]fleet key install {dev.name}[/bold] from a "
+                              "terminal to install your key.[/dim]")
+            elif typer.confirm(f"  Install your public key on {dev.name} now?", default=True):
+                if _install_key(dev):
+                    inv.save(devices)
+
+
+key_app = typer.Typer(no_args_is_help=True,
+                      help="Install your SSH key on a device so password auth is not needed.")
+app.add_typer(key_app, name="key")
+
+
+def _install_key(dev, *, quiet: bool = False) -> bool:
+    """Prompt once for a password and use it only to install a public key.
+
+    The password is never stored, never logged and never passed as an argument. It buys
+    exactly one thing -- key auth -- after which every other path in fleet works as it
+    already does.
+    """
+    eps = inv.endpoints_of(dev)
+    if not eps:
+        err.print(f"[red]{dev.name} has no endpoint recorded[/red]")
+        return False
+    found = public_key()
+    if found is None:
+        err.print("[red]No SSH public key found.[/red]  Create one first:  "
+                  "[bold]ssh-keygen -t ed25519[/bold]")
+        return False
+    if not sys.stdin.isatty():
+        # Hanging on a prompt would be bad; capturing the password into whatever called
+        # us would be worse. Refuse, and say exactly what to run instead.
+        msg = ("  [dim]no terminal here — run [bold]fleet key install "
+               f"{dev.name}[/bold] yourself to install your key.[/dim]")
+        (console if quiet else err).print(msg)
+        return False
+
+    ep = sorted(eps, key=lambda e: e.preference)[0]
+    path, pubkey = found
+    console.print(f"[dim]installing {path} on {ep.user}@{ep.target}[/dim]")
+    password = getpass.getpass(f"Password for {ep.user}@{ep.target}: ")
+    try:
+        ok, output = install_key(ep, password, pubkey)
+    finally:
+        password = ""                      # not security, just hygiene: drop it promptly
+    if ok:
+        dev.auth_state = "ok"
+        console.print(f"[green]✓[/green] key installed on {dev.name}; password discarded.")
+    else:
+        err.print(f"[red]Could not install the key.[/red]\n{output.strip()[-400:]}")
+    return ok
+
+
+@key_app.command("install")
+def cmd_key_install(name: str):
+    """Install your public key on a device, using a password typed once."""
+    devices = inv.load()
+    dev = inv.find(devices, name)
+    if dev is None:
+        err.print(f"[red]No device named {name!r}[/red]")
+        raise typer.Exit(1)
+    if not _install_key(dev):
+        raise typer.Exit(2)
+    inv.save(devices)
+    console.print(f"  [dim]run `fleet refresh {dev.name}` to confirm.[/dim]")
 
 
 @app.command("edit")

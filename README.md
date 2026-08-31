@@ -16,4 +16,11 @@ fleet ls
 Probe targets need **nothing installed** -- the probe is a POSIX `sh` script piped over
 one SSH connection.
 
-See `docs/` for the design. Status: v0.1 (core inventory + probe + CLI).
+```bash
+fleet edit blackwell --ssh "ssh -p 40001 root@1.2.3.4"   # rentals recycle addresses
+fleet edit lin-xps --disk-path /workspace                # watch the volume that matters
+fleet key install ds720                                  # password typed once, then key auth
+fleet setup                                              # teach your coding agents to use it
+```
+
+Status: v0.2 -- inventory, probe, CLI, agent setup, and key bootstrap.
