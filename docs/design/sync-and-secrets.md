@@ -80,13 +80,15 @@ Each machine generates its own age keypair on first use:
 ~/.config/fleet/identity.age     private, mode 0600, never syncs, never printed
 ```
 
-Its public recipient is published into `inventory.yaml` under a top-level `recipients:`
-map, so it syncs like everything else:
+Its public recipient is published onto that machine's own `Device` record, as a
+`recipient:` field. A recipient belongs to a machine, machines are already devices, and
+devices already sync and merge -- so this needs no schema, no separate file, and no
+special case in the merge:
 
 ```yaml
-recipients:
-  lin-xps:  age1ql3z7hjy...
-  macbook:  age1lggyhqrq...
+devices:
+  - name: lin-xps
+    recipient: age1ql3z7hjy...
 ```
 
 `secrets.age` is encrypted to **every** recipient, so any enrolled machine decrypts it
@@ -150,8 +152,8 @@ re-installing replaces our line and leaves every other entry alone.
 
 1. `updated_at` + the merge function. Pure, testable without any transport.
 2. `fleet sync` / `--serve` over SSH, with locking on the center.
-3. `fleet identity` + recipients in inventory.  **not built**
-4. `fleet secret set/rm` and password use at connect time.  **not built**
+3. `fleet identity` + recipients on each machine's own device record.
+4. `fleet secret set/ls/rm`.
 
 Phases 1-2 are useful with no secrets at all. Phases 3-4 are useless without 1-2. The
 order is forced.

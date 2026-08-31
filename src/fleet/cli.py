@@ -21,9 +21,10 @@ from .config import DB_PATH, INVENTORY_PATH, load_config
 from .edit import apply_edits
 from .install import build_install_argv, install_script
 from .keys import install_key, public_key
-from .models import Kind, Status
+from .models import Device, Kind, Status
 from .onboard import onboard
 from .probe.runner import probe_env, probe_many, run_probe
+from . import secrets as sec
 from .setup import detect_targets, fleet_command, install, uninstall
 from .sshcmd import build_argv, resolve_command
 from .view import Detail, device_view, fleet_view
@@ -496,7 +497,8 @@ def maybe_autosync() -> None:
 def _before_any_command(ctx: typer.Context):
     # not for sync itself (it would recurse), nor for commands that must not reach the
     # network as a side effect of being run
-    if ctx.invoked_subcommand not in ("sync", "setup", "paths", "install"):
+    if ctx.invoked_subcommand not in ("sync", "setup", "paths", "install",
+                                      "identity", "secret"):
         maybe_autosync()
 
 
@@ -556,6 +558,100 @@ def cmd_sync(serve: bool = typer.Option(False, "--serve",
         console.print(f"  {line}")
     if not changes:
         console.print("  [dim]already up to date.[/dim]")
+
+
+@app.command("identity")
+def cmd_identity():
+    """Enrol this machine so it can read encrypted secrets.
+
+    Creates an age keypair if there is none and publishes only the public half onto this
+    machine's own device record, where it syncs like everything else. The private half
+    never leaves this machine and is never printed.
+    """
+    try:
+        recipient = sec.ensure_identity()
+    except sec.SecretsError as exc:
+        err.print(f"[red]{exc}[/red]")
+        raise typer.Exit(2)
+    devices = inv.load()
+    me = next((d for d in devices if d.id and d.id == local_device_id()), None)
+    if me is None:
+        err.print("[red]This machine is not in the inventory[/red], so there is nowhere "
+                  "to publish its recipient.\n  Add it first:  [bold]fleet add "
+                  "\"ssh localhost\"[/bold]")
+        raise typer.Exit(2)
+    if me.recipient == recipient:
+        console.print(f"[dim]· {me.name} is already enrolled.[/dim]")
+        return
+    me.recipient = recipient
+    inv.touch(me)
+    inv.save(devices)
+    console.print(f"[green]✓[/green] {me.name} enrolled as [bold]{recipient}[/bold]")
+    console.print("  [dim]re-run `fleet secret set` for existing secrets to include "
+                  "this machine.[/dim]")
+
+
+secret_app = typer.Typer(no_args_is_help=True, help="Stored passwords, encrypted per machine.")
+app.add_typer(secret_app, name="secret")
+
+
+def _secrets_now() -> tuple[dict, list[Device]]:
+    devices = inv.load()
+    return sec.read_secrets(sec.SECRETS_PATH, sec.load_identity()), devices
+
+
+@secret_app.command("set")
+def cmd_secret_set(name: str):
+    """Store a password for a device. Prompted for, never passed as an argument."""
+    if not sys.stdin.isatty():
+        err.print("[yellow]Refusing to read a password without a terminal.[/yellow]  "
+                  f"Run [bold]fleet secret set {name}[/bold] yourself.")
+        raise typer.Exit(2)
+    try:
+        data, devices = _secrets_now()
+        value = getpass.getpass(f"Password for {name}: ")
+        data[name] = value
+        sec.write_secrets(sec.SECRETS_PATH, data, sec.recipients_of(devices))
+    except sec.SecretsError as exc:
+        err.print(f"[red]{exc}[/red]")
+        raise typer.Exit(2)
+    finally:
+        value = ""
+    console.print(f"[green]✓[/green] stored a password for [bold]{name}[/bold], readable "
+                  f"by {len(sec.recipients_of(devices))} enrolled machine(s).")
+
+
+@secret_app.command("ls")
+def cmd_secret_ls(json_out: bool = typer.Option(False, "--json")):
+    """List which devices have a stored password. Never prints a value."""
+    try:
+        data, _ = _secrets_now()
+    except sec.SecretsError as exc:
+        err.print(f"[red]{exc}[/red]")
+        raise typer.Exit(2)
+    if _emit({"secrets": sorted(data)}, json_out):
+        return
+    if not data:
+        console.print("[dim]No stored passwords.[/dim]")
+        return
+    for name in sorted(data):
+        console.print(f"  {name}")
+
+
+@secret_app.command("rm")
+def cmd_secret_rm(name: str):
+    """Forget a stored password."""
+    try:
+        data, devices = _secrets_now()
+        if name not in data:
+            err.print(f"[yellow]No stored password for {name!r}[/yellow]")
+            raise typer.Exit(1)
+        del data[name]
+        sec.write_secrets(sec.SECRETS_PATH, data, sec.recipients_of(devices))
+    except sec.SecretsError as exc:
+        err.print(f"[red]{exc}[/red]")
+        raise typer.Exit(2)
+    console.print(f"[green]✓[/green] forgot the password for [bold]{name}[/bold]")
 
 
 @app.command("rm")

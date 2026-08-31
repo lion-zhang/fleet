@@ -23,4 +23,5 @@ fleet key install ds720                                  # password typed once, 
 fleet setup                                              # teach your coding agents to use it
 ```
 
-Status: v0.2 -- inventory, probe, CLI, agent setup, and key bootstrap.
+Status: v0.3 -- inventory, probe, CLI, agent setup, key bootstrap, sync, and
+encrypted secrets.  See `docs/design/` for the design.

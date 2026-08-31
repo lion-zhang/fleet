@@ -172,6 +172,9 @@ class Device:
     provider_instance_id: str = ""
     cost: dict = field(default_factory=dict)
     disk_paths: list[str] = field(default_factory=list)   # empty = autodetect mounts
+    # this machine's age public key, when it is one of yours and enrolled to read
+    # secrets. Lives on the device so it syncs and merges like everything else.
+    recipient: str = ""
     auth_state: str = "ok"                 # ok | needs_credentials
     needs_review: bool = False
     added_at: int = field(default_factory=lambda: int(time.time()))
