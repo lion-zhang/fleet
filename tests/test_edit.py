@@ -246,3 +246,19 @@ def test_cli_edit_fails_clearly_on_an_unknown_device(tmp_path, monkeypatch):
     runner, _ = _cli_env(tmp_path, monkeypatch, _dev())
     result = runner.invoke(app, ["edit", "nosuchbox", "--disk-path", "/data"])
     assert result.exit_code != 0
+
+
+def test_an_edit_stamps_updated_at_so_sync_can_break_the_tie():
+    """Without this the merge cannot tell an edited record from a stale one."""
+    dev = _dev()
+    dev.updated_at = 1
+    apply_edits(dev, disk_paths=["/data"])
+    assert dev.updated_at > 1
+
+
+def test_an_edit_that_changed_nothing_does_not_stamp():
+    """A no-op edit must not make this machine's copy spuriously win a merge."""
+    dev = _dev()
+    dev.updated_at = 1
+    apply_edits(dev)
+    assert dev.updated_at == 1

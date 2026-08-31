@@ -175,6 +175,9 @@ class Device:
     auth_state: str = "ok"                 # ok | needs_credentials
     needs_review: bool = False
     added_at: int = field(default_factory=lambda: int(time.time()))
+    # when this record last changed. added_at cannot serve: it says when the device was
+    # first seen, not when its record was last edited, which is what a merge needs.
+    updated_at: int = field(default_factory=lambda: int(time.time()))
 
     @property
     def claimable(self) -> bool:

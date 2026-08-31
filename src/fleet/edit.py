@@ -11,6 +11,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 
+from .inventory import touch
 from .models import Device
 from .sshcmd import Endpoint
 
@@ -85,4 +86,8 @@ def apply_edits(dev: Device, *, endpoint: Endpoint | None = None,
         before = list(dev.disk_paths) or ["auto"]
         dev.disk_paths = list(disk_paths)
         out.changes.append(f"disk paths {before} -> {dev.disk_paths or ['auto']}")
+    if out.changes:
+        # only a real change stamps: a no-op edit must not make this machine's copy
+        # spuriously win the next merge.
+        touch(dev)
     return out

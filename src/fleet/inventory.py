@@ -9,6 +9,7 @@ re-probe" is always safe advice.
 from __future__ import annotations
 
 import os
+import time
 import tempfile
 from pathlib import Path
 
@@ -96,6 +97,64 @@ def find(devices: list[Device], name_or_id: str) -> Device | None:
             return d
     matches = [d for d in devices if d.name.startswith(name_or_id)]
     return matches[0] if len(matches) == 1 else None
+
+
+def touch(dev: Device) -> None:
+    """Stamp a mutation. Every command that edits a device must call this, or the merge
+    has nothing to break a tie with."""
+    dev.updated_at = int(time.time())
+
+
+def _endpoint_key(e: dict) -> tuple:
+    return (e.get("target", ""), e.get("user", ""), int(e.get("port", 22) or 22))
+
+
+def _union_endpoints(primary: list[dict], other: list[dict]) -> list[dict]:
+    """Both sides' routes, deduped. A box reachable on the tailnet from one machine and
+    on the LAN from another is one box with two routes -- the same dedupe upsert()
+    performs at onboarding."""
+    out = list(primary)
+    seen = {_endpoint_key(e) for e in out}
+    for e in other:
+        if _endpoint_key(e) not in seen:
+            seen.add(_endpoint_key(e))
+            out.append(e)
+    return out
+
+
+def merge(local: list[Device], remote: list[Device]) -> tuple[list[Device], list[str]]:
+    """Combine two inventories. Returns (merged, human-readable changes).
+
+    Devices are matched on id, which is why id prefers machine-id over an address: two
+    machines may have named the same box differently, and the address may since have
+    changed. Newer updated_at wins the record; endpoints are unioned regardless, because
+    a route one machine knows about is still a real route.
+
+    Deletion is deliberately not synced. Telling "deleted here" apart from "not seen
+    here yet" needs tombstones, and guessing wrong either resurrects a device or
+    destroys one. `fleet rm` is local; remove on the center to remove for good.
+    """
+    by_id: dict[str, Device] = {d.id: d for d in local}
+    changes: list[str] = []
+
+    for incoming in remote:
+        mine = by_id.get(incoming.id)
+        if mine is None:
+            by_id[incoming.id] = incoming
+            changes.append(f"added {incoming.name}")
+            continue
+        endpoints = _union_endpoints(mine.endpoints, incoming.endpoints)
+        gained = len(endpoints) - len(mine.endpoints)
+        if incoming.updated_at > mine.updated_at:
+            incoming.endpoints = _union_endpoints(incoming.endpoints, mine.endpoints)
+            by_id[incoming.id] = incoming
+            changes.append(f"updated {incoming.name}")
+        elif gained:
+            mine.endpoints = endpoints
+        if gained:
+            changes.append(f"{by_id[incoming.id].name}: +{gained} endpoint(s)")
+
+    return sorted(by_id.values(), key=lambda d: d.name), changes
 
 
 def upsert(devices: list[Device], new: Device) -> tuple[list[Device], str]:
