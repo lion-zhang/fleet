@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import getpass
 import json as jsonlib
+import subprocess
 import sys
 from pathlib import Path
 
@@ -16,6 +17,7 @@ from . import inventory as inv
 from . import store
 from .config import DB_PATH, INVENTORY_PATH, load_config
 from .edit import apply_edits
+from .install import build_install_argv, install_script
 from .keys import install_key, public_key
 from .models import Kind, Status
 from .onboard import onboard
@@ -335,6 +337,80 @@ def cmd_edit(name: str,
         console.print(f"  {line}")
     if endpoint is not None:
         console.print(f"  [dim]run `fleet refresh {dev.name}` to confirm it answers.[/dim]")
+
+
+def configured_repo() -> str:
+    """Where a device should clone fleet from.
+
+    Falls back to this checkout's own origin, so the common case -- installing from the
+    repo you are standing in -- needs no configuration at all.
+    """
+    configured = load_config().get("repo")
+    if configured:
+        return str(configured)
+    try:
+        root = Path(__file__).resolve().parent.parent.parent
+        out = subprocess.run(["git", "-C", str(root), "remote", "get-url", "origin"],
+                             capture_output=True, text=True, timeout=5)
+        return out.stdout.strip() if out.returncode == 0 else ""
+    except (OSError, subprocess.SubprocessError):
+        return ""
+
+
+def run_installer(ep, script: str, *, forward_agent: bool = True) -> tuple[int, str]:
+    argv = build_install_argv(ep, forward_agent=forward_agent)
+    p = subprocess.run(argv, input=script, capture_output=True, text=True, timeout=900)
+    return p.returncode, (p.stdout + p.stderr)
+
+
+@app.command("install")
+def cmd_install(name: str,
+                repo: str = typer.Option(None, "--repo", metavar="URL",
+                                         help="git URL to clone; defaults to config or this checkout"),
+                ref: str = typer.Option("main", "--ref", help="branch or tag to install"),
+                role: str = typer.Option("backup", "--role", help="none | center | backup"),
+                forward_agent: bool = typer.Option(True, "--forward-agent/--no-forward-agent",
+                                                   help="authenticate the clone as you, "
+                                                        "leaving no credential on the device")):
+    """Install fleet on a device so it can hold a copy of your state.
+
+    Every other device needs nothing installed. This is the exception: a backup node has
+    to run fleet, so fleet has to be there. Re-running updates an existing install.
+    """
+    devices = inv.load()
+    dev = inv.find(devices, name)
+    if dev is None:
+        err.print(f"[red]No device named {name!r}[/red]")
+        raise typer.Exit(1)
+    eps = inv.endpoints_of(dev)
+    if not eps:
+        err.print(f"[red]{dev.name} has no endpoint recorded[/red]")
+        raise typer.Exit(1)
+
+    url = repo or configured_repo()
+    if not url:
+        err.print("[red]No repo to install from.[/red]  Pass [bold]--repo "
+                  "git@github.com:you/fleet.git[/bold], or set [bold]repo:[/bold] in "
+                  f"{INVENTORY_PATH.parent / 'config.yaml'}")
+        raise typer.Exit(2)
+
+    console.print(f"[dim]installing fleet on {dev.name} from {url} ({ref})[/dim]")
+    code, output = run_installer(sorted(eps, key=lambda e: e.preference)[0],
+                                 install_script(url, ref=ref), forward_agent=forward_agent)
+    if code != 0:
+        err.print(f"[red]Install failed[/red] (exit {code})\n{output.strip()[-600:]}")
+        if code == 90:
+            err.print("  [dim]the device could not fetch uv -- it may have no outbound "
+                      "internet.[/dim]")
+        # deliberately NOT recording the role: `fleet ls` claiming a backup that does not
+        # exist is worse than no backup, because you would rely on it when the centre dies.
+        raise typer.Exit(2)
+
+    dev.role = role
+    inv.touch(dev)
+    inv.save(devices)
+    console.print(f"[green]✓[/green] {dev.name} is now [bold]{role}[/bold] — "
+                  f"{output.strip().splitlines()[-1] if output.strip() else 'installed'}")
 
 
 @app.command("rm")

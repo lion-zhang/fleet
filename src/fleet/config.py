@@ -26,6 +26,7 @@ DEFAULTS: dict = {
     "max_workers": 8,
     "shared_min_interval_s": 300,   # never hammer a multi-user cluster
     "snapshot_retention": 120,      # ring buffer per device; enough for idle detection
+    "repo": "",                     # where `fleet install` clones fleet from
 }
 
 

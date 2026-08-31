@@ -47,8 +47,8 @@ rather than interleave.
 
 **Cost of this choice:** the center being down blocks syncing. That is acceptable because
 sync is not on the critical path -- every command works from local state, and a failed
-sync is a warning, not an error. `role: "backup"` is reserved for a promotable second
-node and is out of scope here.
+sync is a warning, not an error. `role: "backup"` is set by `fleet install`, which is the
+one place fleet leaves code on a machine -- see below.
 
 ## Merge
 
@@ -104,6 +104,26 @@ revocation rather than a hope.
 Storing a password changes where the secret lives, not who may see it: a decrypted
 password is passed to `ssh` through a pty, exactly as `keys.py` already does, and never
 enters a view, a log, an argv, or an agent transcript.
+
+## Installing on a device
+
+`fleet install NAME` promotes a device from probe target to infrastructure. It is the
+single exception to the README's "targets need nothing installed": a backup node has to
+run fleet, so fleet has to be there.
+
+The device clones the repo and `uv tool install`s it. uv is fetched when missing, which
+also solves the interpreter problem -- fleet needs Python 3.12 and most servers ship
+older, and uv fetches its own rather than requiring one. Re-running updates in place, so
+`fleet install` doubles as `fleet update`.
+
+Authentication uses a forwarded SSH agent by default, so the device authenticates to
+GitHub as you and **no credential is left on it**. Forwarding does let root on that box
+use your agent while you are connected, so `--no-forward-agent` exists for hosts not
+trusted with that; those need a deploy key instead.
+
+A failed install does not record the role. `fleet ls` claiming a backup that does not
+exist is worse than showing none, because that is the claim you would rely on at exactly
+the moment the center is down.
 
 ## Phases
 
