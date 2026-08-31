@@ -12,8 +12,11 @@ import time
 from pathlib import Path
 
 import typer
-from rich.console import Console
+from contextlib import contextmanager
+
+from rich.console import Console, Group
 from rich.table import Table
+from rich.text import Text
 
 from . import inventory as inv
 from . import store
@@ -28,10 +31,27 @@ from .probe.runner import (probe_env, probe_many, run_probe,
 from . import secrets as sec
 from .setup import detect_targets, fleet_command, install, uninstall
 from .sshcmd import build_argv, resolve_command
+from .top import Schedule, render_device, render_fleet
 from .view import Detail, device_view, fleet_view
 
-app = typer.Typer(add_completion=False, no_args_is_help=True,
-                  help="Personal compute inventory, service registry, and resource broker.")
+def _examples(*pairs: tuple[str, str]) -> str:
+    """Render an Examples block. rich re-wraps a paragraph, so each line is its own
+    paragraph or they all run together on one line."""
+    width = max(len(cmd) for cmd, _ in pairs)
+    return "[bold]Examples[/bold]\n\n" + "\n\n".join(
+        f"[dim]$[/dim] {cmd.ljust(width)}   [dim]{why}[/dim]" for cmd, why in pairs)
+
+
+app = typer.Typer(
+    add_completion=False, no_args_is_help=True, rich_markup_mode="rich",
+    help="Personal compute inventory, service registry, and resource broker.",
+    epilog=_examples(
+        ('fleet add "ssh -p 58418 root@1.2.3.4"', "onboard a box; paste the ssh command"),
+        ("fleet ls", "what is free right now"),
+        ("fleet top", "live view, like htop for your fleet"),
+        ("fleet ssh lin-xps -- nvidia-smi", "run one command there"),
+        ("fleet setup", "teach your coding agents to use fleet"),
+    ))
 console = Console()
 err = Console(stderr=True)
 
@@ -230,7 +250,7 @@ def cmd_show(name: str, json_out: bool = typer.Option(False, "--json"),
         console.print(f"  [dim]{r['notes'].strip()}[/dim]")
 
 
-@app.command("add")
+@app.command("add", epilog=_examples(('fleet add "ssh -p 58418 root@1.2.3.4"', 'quote the whole ssh command'), ('fleet add "ssh box" --kind rental', 'rentals are flagged when idle and costing money')))
 def cmd_add(ssh_command: str = typer.Argument(..., help='e.g. "ssh -p 58418 root@1.2.3.4"'),
             name: str = typer.Option(None, "--name"),
             kind: str = typer.Option(None, "--kind", help="permanent|rental|shared|appliance|mobile"),
@@ -335,7 +355,7 @@ def cmd_key_install(name: str):
     console.print(f"  [dim]run `fleet refresh {dev.name}` to confirm.[/dim]")
 
 
-@app.command("edit")
+@app.command("edit", epilog=_examples(('fleet edit blackwell --ssh "ssh -p 40001 root@5.6.7.8"', 'the rental moved'), ('fleet edit lin-xps --disk-path /workspace', 'watch the volume that matters'), ('fleet edit oracle --role center', 'make it the sync center')))
 def cmd_edit(name: str,
              ssh_command: str = typer.Option(None, "--ssh", metavar="CMD",
                                              help='new address, e.g. "ssh -p 2222 root@5.6.7.8"'),
@@ -411,7 +431,7 @@ def run_installer(ep, script: str, *, forward_agent: bool = True) -> tuple[int, 
     return p.returncode, (p.stdout + p.stderr)
 
 
-@app.command("install")
+@app.command("install", epilog=_examples(('fleet install oracle', 'install fleet there; it becomes a backup'), ('fleet install oracle --timer-minutes 0', 'no self-sync cron entry')))
 def cmd_install(name: str,
                 repo: str = typer.Option(None, "--repo", metavar="URL",
                                          help="git URL to clone; defaults to config or this checkout"),
@@ -541,7 +561,7 @@ def _before_any_command(ctx: typer.Context):
         maybe_autosync()
 
 
-@app.command("sync")
+@app.command("sync", epilog=_examples(('fleet sync', 'merge with the center now; normally automatic')))
 def cmd_sync(serve: bool = typer.Option(False, "--serve",
                                         help="run on the center: merge stdin, print the result"),
              json_out: bool = typer.Option(False, "--json")):
@@ -630,7 +650,14 @@ def cmd_identity():
                   "this machine.[/dim]")
 
 
-secret_app = typer.Typer(no_args_is_help=True, help="Stored passwords, encrypted per machine.")
+secret_app = typer.Typer(
+    no_args_is_help=True, rich_markup_mode="rich",
+    help="Stored passwords, encrypted per machine.",
+    epilog=_examples(
+        ("fleet identity", "enrol this machine first"),
+        ("fleet secret set blackwell", "prompts; never pass it as an argument"),
+        ("fleet secret ls", "which devices have one; never shows values"),
+    ))
 app.add_typer(secret_app, name="secret")
 
 
@@ -693,6 +720,131 @@ def cmd_secret_rm(name: str):
     console.print(f"[green]✓[/green] forgot the password for [bold]{name}[/bold]")
 
 
+def _live_tick(conn, devices, schedule: Schedule, cfg, detail: Detail) -> list[dict]:
+    """Probe whatever is due, then render every device from the cache.
+
+    The probe is wrapped because one unreachable host must not end the session:
+    probe_many already isolates failures inside the sweep, and the loop around it has
+    to do the same or a dropped network takes the whole view down.
+    """
+    now = time.monotonic()
+    due = [d for d in schedule.due(devices, now) if d.probeable]
+    if due:
+        groups: dict[tuple[str, tuple[str, ...]], dict[str, list]] = {}
+        for d in due:
+            groups.setdefault((d.probe_mode, tuple(d.disk_paths)), {})[d.id] = \
+                inv.endpoints_of(d)
+        for (mode, paths), subset in groups.items():
+            try:
+                results = probe_many(subset, mode=mode, disk_paths=list(paths),
+                                     timeout=float(cfg.probe_timeout_s),
+                                     connect_timeout=int(cfg.connect_timeout_s),
+                                     max_workers=int(cfg.max_workers))
+            except Exception:
+                for dev_id in subset:
+                    schedule.record(dev_id, ok=False, now=now)
+                continue
+            for dev_id, res in results.items():
+                store.record(conn, dev_id, res)
+                schedule.record(dev_id, ok=res.ok, now=now)
+
+    rows = []
+    for d in devices:
+        st, sn = store.latest(conn, d.id)
+        rows.append(device_view(d, st, sn, detail))
+    return rows
+
+
+@app.command("top", epilog=_examples(('fleet top', 'the whole fleet, live'), ('fleet top lin-xps -i 1', 'one device, refreshed every second')))
+def cmd_top(name: str = typer.Argument(None, help="one device, instead of the whole fleet"),
+            interval: float = typer.Option(2.0, "--interval", "-i",
+                                           help="seconds between refreshes")):
+    """Live view of the fleet, or of one device. Like htop, for your machines.
+
+    Shared hosts keep their own slow cadence (shared_min_interval_s) and are shown as
+    ageing rather than live, and anything unreachable backs off instead of being
+    redialled every couple of seconds.
+    """
+    cfg = load_config()
+    devices = inv.live(inv.load())
+    if name:
+        one = inv.find(devices, name)
+        if one is None:
+            err.print(f"[red]No device named {name!r}[/red]")
+            raise typer.Exit(1)
+        devices = [one]
+
+    schedule = Schedule(interval=interval,
+                        shared_interval=float(cfg.shared_min_interval_s))
+    conn = store.connect()
+    detail = Detail.FULL
+    live_within = max(int(interval * 3), 5)
+
+    def frame():
+        rows = _live_tick(conn, devices, schedule, cfg, detail)
+        if name:
+            return render_device(rows[0], live_within)
+        view = fleet_view(rows)
+        table = render_fleet(rows, view["summary"], live_within)
+        s = view["summary"]
+        return Group(table, Text.from_markup(
+            f"\n[dim]{s['online']}/{s['total']} online · {s['gpus_free']} free GPU(s)"
+            + (f" · ${s['hourly_burn']:.2f}/hr" if s["hourly_burn"] else "")
+            + "  ·  q quit   r refresh[/dim]"))
+
+    # A live loop in a pipe would spin forever, and an agent is exactly what would run
+    # it that way. One frame is also the more useful thing for a script.
+    if not sys.stdout.isatty():
+        console.print(frame())
+        conn.close()
+        return
+
+    from rich.live import Live
+    try:
+        with _raw_stdin(), Live(frame(), console=console, screen=True,
+                                refresh_per_second=8) as live:
+            while True:
+                key = _key_pressed(interval)
+                if key in ("q", "Q", "\x03", "\x04"):
+                    break
+                if key in ("r", "R"):
+                    schedule = Schedule(interval=interval,      # everything due at once
+                                        shared_interval=float(cfg.shared_min_interval_s))
+                live.update(frame())
+    except KeyboardInterrupt:
+        pass
+    finally:
+        conn.close()
+
+
+@contextmanager
+def _raw_stdin():
+    """cbreak mode so single keys arrive without Enter. Restored no matter how we
+    leave, or the user's shell is left unusable."""
+    if not sys.stdin.isatty():
+        yield
+        return
+    import termios
+    import tty
+    fd = sys.stdin.fileno()
+    saved = termios.tcgetattr(fd)
+    try:
+        tty.setcbreak(fd)
+        yield
+    finally:
+        termios.tcsetattr(fd, termios.TCSADRAIN, saved)
+
+
+def _key_pressed(timeout: float) -> str | None:
+    """Doubles as the frame delay: waits for a key, or returns when the interval is up."""
+    import select as _select
+    if not sys.stdin.isatty():
+        return None
+    if _select.select([sys.stdin], [], [], timeout)[0]:
+        return sys.stdin.read(1)
+    return None
+
+
 @app.command("rm")
 def cmd_rm(name: str, yes: bool = typer.Option(False, "--yes", "-y")):
     """Remove a device from the inventory."""
@@ -744,7 +896,7 @@ def cmd_probe(name: str, raw: bool = typer.Option(False, "--raw", help="print pa
         default=str))
 
 
-@app.command("ssh", context_settings={"allow_extra_args": True, "ignore_unknown_options": True})
+@app.command("ssh", epilog=_examples(('fleet ssh lin-xps', 'open a shell'), ('fleet ssh lin-xps -- nvidia-smi', '-- separates the remote command')), context_settings={"allow_extra_args": True, "ignore_unknown_options": True})
 def cmd_ssh(ctx: typer.Context, name: str):
     """Open a shell on a device, or run a command: `fleet ssh lin-xps -- nvidia-smi`.
 
