@@ -90,21 +90,48 @@ def _payload(devices: list[Device]) -> dict:
     }
 
 
+def _write(devices: list[Device], path: Path) -> None:
+    """Atomic replace. The caller must already hold the lock."""
+    payload = _payload(prune_tombstones(devices))
+    fd, tmp = tempfile.mkstemp(dir=str(path.parent), prefix=".inventory-", suffix=".yaml")
+    try:
+        with os.fdopen(fd, "w") as fh:
+            yaml.safe_dump(payload, fh, sort_keys=False, allow_unicode=True, width=100)
+        os.replace(tmp, path)
+    except BaseException:
+        os.unlink(tmp)
+        raise
+
+
 def save(devices: list[Device], path: Path | None = None) -> None:
     """Atomic, locked write. Two agents adding devices concurrently must not interleave."""
     path = path or INVENTORY_PATH
     ensure_dirs()
-    payload = _payload(prune_tombstones(devices))
     try:
         with _lock(path):
-            fd, tmp = tempfile.mkstemp(dir=str(path.parent), prefix=".inventory-", suffix=".yaml")
-            try:
-                with os.fdopen(fd, "w") as fh:
-                    yaml.safe_dump(payload, fh, sort_keys=False, allow_unicode=True, width=100)
-                os.replace(tmp, path)
-            except BaseException:
-                os.unlink(tmp)
-                raise
+            _write(devices, path)
+    except Timeout as exc:
+        raise InventoryError("another fleet process is holding the inventory lock") from exc
+
+
+def update(mutate, path: Path | None = None):
+    """Load, apply `mutate`, and write back while holding the lock the whole time.
+
+    save() prevents two writers interleaving; it does nothing about a writer holding a
+    list it loaded minutes ago, which silently erases everything committed since. Sync
+    is exactly that writer -- it carries a snapshot across an SSH round trip -- and
+    auto-sync is spawned before the command that triggered it has even run, so a
+    `fleet add` lands squarely in the middle.
+
+    `mutate(devices) -> (devices_to_write, result)`; returns (written, result).
+    """
+    path = path or INVENTORY_PATH
+    ensure_dirs()
+    try:
+        with _lock(path):
+            devices, result = mutate(load(path))
+            _write(devices, path)
+            return devices, result
     except Timeout as exc:
         raise InventoryError("another fleet process is holding the inventory lock") from exc
 

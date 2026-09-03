@@ -504,3 +504,66 @@ def test_adding_a_device_that_was_never_removed_is_unaffected():
     devices = [_dev("box", id="net:box:22")]
     _, action = inv.upsert(devices, _dev("box", id="net:box:22"))
     assert action == "unchanged"
+
+
+# --------------------------------------------------------------- lost updates
+
+def test_sync_does_not_erase_a_device_added_while_it_was_running(tmp_path, monkeypatch):
+    """auto-sync is spawned before the command that triggered it even runs, so a
+    `fleet add` lands in the middle of the round trip. Saving the merge computed from
+    sync's own stale snapshot silently erases it -- which is how a device that `fleet
+    add` and `fleet identity` both confirmed vanished before `fleet ls`.
+    """
+    from typer.testing import CliRunner
+
+    from fleet import cli, inventory as inv, store
+    from fleet.cli import app
+
+    path = tmp_path / "inventory.yaml"
+    inv.save([_dev("hub", role="center")], path)
+    monkeypatch.setattr(inv, "INVENTORY_PATH", path)
+    monkeypatch.setattr(store, "DB_PATH", tmp_path / "cache.db")
+    monkeypatch.setattr(cli, "local_device_id", lambda: "linux:machine-id:laptop")
+    monkeypatch.setattr(cli, "maybe_autosync", lambda: None)
+
+    def racing_center(ep, payload):
+        """The center answers -- and `fleet add` commits while we are waiting."""
+        concurrent = inv.load(path)
+        concurrent.append(_dev("just-added"))
+        inv.save(concurrent, path)
+        return 0, payload            # center knows nothing of the new device
+
+    monkeypatch.setattr(cli, "run_sync", racing_center)
+    result = runner_invoke = CliRunner().invoke(app, ["sync"])
+    assert result.exit_code == 0, result.output
+    assert "just-added" in [d.name for d in inv.live(inv.load(path))], \
+        "sync overwrote a device committed during its round trip"
+
+
+def test_the_center_does_not_erase_a_device_added_while_it_was_serving(tmp_path, monkeypatch):
+    """--serve has the same window: it loads, merges what arrived, and writes back."""
+    from typer.testing import CliRunner
+
+    from fleet import cli, inventory as inv, store
+    from fleet.cli import app
+
+    path = tmp_path / "inventory.yaml"
+    inv.save([_dev("center-only")], path)
+    monkeypatch.setattr(inv, "INVENTORY_PATH", path)
+    monkeypatch.setattr(store, "DB_PATH", tmp_path / "cache.db")
+    monkeypatch.setattr(cli, "maybe_autosync", lambda: None)
+
+    real_loads = inv.loads
+
+    def loads_then_race(text):
+        parsed = real_loads(text)
+        concurrent = inv.load(path)
+        concurrent.append(_dev("added-on-the-center"))
+        inv.save(concurrent, path)
+        return parsed
+
+    monkeypatch.setattr(inv, "loads", loads_then_race)
+    result = CliRunner().invoke(app, ["sync", "--serve"], input=inv.dumps([_dev("remote")]))
+    assert result.exit_code == 0, result.output
+    names = [d.name for d in inv.live(inv.load(path))]
+    assert "added-on-the-center" in names, names

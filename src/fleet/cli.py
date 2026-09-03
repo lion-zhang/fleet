@@ -595,8 +595,9 @@ def cmd_sync(serve: bool = typer.Option(False, "--serve",
             # A truncated pipe must never be read as "the other side has no devices".
             err.print(f"[red]unreadable inventory on stdin:[/red] {exc}")
             raise typer.Exit(2)
-        merged, changes = inv.merge(inv.load(), incoming)
-        inv.save(merged)
+        # merged against whatever the file holds *now*, under the lock: another
+        # command on this machine may have committed while we were reading stdin.
+        merged, changes = inv.update(lambda current: inv.merge(current, incoming))
         sys.stdout.write(inv.dumps(merged))
         return
 
@@ -625,8 +626,9 @@ def cmd_sync(serve: bool = typer.Option(False, "--serve",
         err.print(f"[red]the center returned something unreadable:[/red] {exc}")
         raise typer.Exit(2)
 
-    merged, changes = inv.merge(devices, returned)
-    inv.save(merged)
+    # NOT merged against `devices`: that list was loaded before the round trip, and
+    # saving it back would erase anything committed while we were waiting.
+    merged, changes = inv.update(lambda current: inv.merge(current, returned))
     if _emit({"center": center.name, "devices": len(merged), "changes": changes}, json_out):
         return
     console.print(f"[green]✓[/green] synced with [bold]{center.name}[/bold] "
