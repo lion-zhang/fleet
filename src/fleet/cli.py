@@ -218,7 +218,8 @@ def cmd_show(name: str, json_out: bool = typer.Option(False, "--json"),
         if g["unattributed_mib"]:
             console.print(f"        [yellow]{g['unattributed_mib']} MiB unattributed[/yellow]")
     for d in r.get("disks", []):
-        console.print(f"  disk  {d['mount']:<12} {d['avail_kb']/1048576:.0f} GB free")
+        console.print(f"  disk  {d['mount']:<12} {d['free_gb']:.0f} GB free"
+                      f"  [dim]{d['use_pct']}% used[/dim]")
     if r.get("processes"):
         console.print("  [bold]gpu compute[/bold]")
         for p in r["processes"]:
