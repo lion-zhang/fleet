@@ -12,7 +12,7 @@ not to hammer, and would redial a dead host hundreds of times an hour.
 from __future__ import annotations
 
 from fleet.models import Device, Kind
-from fleet.top import Schedule, cpu_pct, meter, staleness
+from fleet.top import Schedule, cpu_pct, gpu_pct, meter, render_fleet, staleness
 
 
 def _dev(name: str, kind: Kind = Kind.PERMANENT) -> Device:
@@ -70,6 +70,56 @@ def test_cpu_percent_is_unknown_rather_than_zero_without_telemetry():
 
 def test_cpu_percent_is_capped_at_a_hundred():
     assert cpu_pct({"load": [32.0, 0, 0], "cpu_cores": 8}) == 100
+
+
+# --------------------------------------------------------------- gpu
+
+def test_gpu_percent_reports_the_busiest_card():
+    """One saturated card makes the box a bad place to send work, however idle its
+    siblings are -- and free_vram_mib already takes the max for the same reason."""
+    row = {"gpus": [{"util_pct": 12}, {"util_pct": 91}, {"util_pct": 0}]}
+    assert gpu_pct(row) == 91
+
+
+def test_gpu_percent_is_none_without_a_gpu():
+    """A CPU box has no utilisation to report, which is not the same as zero."""
+    assert gpu_pct({"gpus": []}) is None
+    assert gpu_pct({}) is None
+
+
+def test_gpu_percent_survives_a_card_that_reports_no_utilisation():
+    """nvidia-smi returns [N/A] for utilisation on some cards; a KeyError here would
+    take down the whole render loop."""
+    assert gpu_pct({"gpus": [{"name": "weird"}]}) == 0
+
+
+def _rendered(rows) -> str:
+    from rich.console import Console
+
+    out = Console(width=200, no_color=True)
+    with out.capture() as cap:
+        out.print(render_fleet(rows, {"online": 1, "total": 1, "gpus_free": 0,
+                                      "hourly_burn": 0}))
+    return cap.get()
+
+
+def _row(**kw):
+    base = {"name": "box", "status": "ok", "telemetry_age_s": 0, "alerts": [],
+            "gpus": [], "load": None, "cpu_cores": None}
+    return {**base, **kw}
+
+
+def test_the_table_has_a_gpu_utilisation_column():
+    out = _rendered([_row(gpus=[{"name": "RTX 4090", "util_pct": 34,
+                                 "vram_total_mib": 24564, "vram_free_mib": 23197}])])
+    assert "GPU%" in out
+    assert "34%" in out
+
+
+def test_a_box_with_no_gpu_shows_a_dash_not_zero_percent():
+    """0% would read as 'a GPU sitting idle', which is a different machine entirely."""
+    out = _rendered([_row()])
+    assert "0%" not in out.split("NOTE")[0]
 
 
 # --------------------------------------------------------------- staleness

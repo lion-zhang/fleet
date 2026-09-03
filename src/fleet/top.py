@@ -51,6 +51,24 @@ def cpu_pct(row: dict[str, Any]) -> int | None:
     return min(100, round(100 * float(load[0]) / float(cores)))
 
 
+def gpu_pct(row: dict[str, Any]) -> int | None:
+    """Utilisation of the busiest card, or None when there is no GPU at all.
+
+    The busiest rather than the average: one saturated card makes the box a bad place
+    to send work however idle its siblings are, which is why free_vram_mib already
+    takes the max too. None rather than 0 because "no GPU" and "an idle GPU" are
+    different machines, and only one of them is worth waiting for.
+
+    This is compute, not memory. A card can sit at 100% with VRAM to spare, or hold
+    VRAM while doing nothing -- reading only the memory meter answers the wrong
+    question.
+    """
+    gpus = row.get("gpus") or []
+    if not gpus:
+        return None
+    return max(int(g.get("util_pct") or 0) for g in gpus)
+
+
 def staleness(row: dict[str, Any], live_within: int) -> str:
     """How out of date this row is, when that is worth saying.
 
@@ -130,6 +148,7 @@ def render_fleet(rows: list[dict[str, Any]], summary: dict[str, Any],
                  live_within: int = 10) -> Table:
     t = Table(box=None, pad_edge=False, header_style="bold", expand=False)
     for col, kw in (("", {}), ("NAME", {"no_wrap": True}), ("GPU", {"no_wrap": True}),
+                    ("GPU%", {"justify": "right", "no_wrap": True}),
                     ("VRAM FREE", {"no_wrap": True}),
                     ("CPU", {"justify": "right", "no_wrap": True}),
                     ("RAM FREE", {"justify": "right", "no_wrap": True}),
@@ -140,13 +159,16 @@ def render_fleet(rows: list[dict[str, Any]], summary: dict[str, Any],
     for row in rows:
         gpu, vram = _gpu_cell(row)
         pct = cpu_pct(row)
+        util = gpu_pct(row)
         stale = staleness(row, live_within)
         note = (row.get("error", {}).get("detail", "") if row["status"] != "ok"
                 else (row["alerts"][0] if row.get("alerts") else ""))
         t.add_row(
             _DOT.get(row["status"], "?"),
             f"[bold]{row['name']}[/bold]",
-            gpu, vram,
+            gpu,
+            "-" if util is None else f"{util}%",
+            vram,
             "?" if pct is None else f"{pct}%",
             f"{row['ram_free_gb']:.0f}G" if row.get("ram_free_gb") else "-",
             f"{row['disk_free_gb']:.0f}G" if row.get("disk_free_gb") else "-",
