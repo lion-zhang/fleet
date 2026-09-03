@@ -448,7 +448,9 @@ def cmd_install(name: str,
                 repo: str = typer.Option(None, "--repo", metavar="URL",
                                          help="git URL to clone; defaults to config or this checkout"),
                 ref: str = typer.Option("main", "--ref", help="branch or tag to install"),
-                role: str = typer.Option("backup", "--role", help="none | center | backup"),
+                role: str = typer.Option(None, "--role",
+                                         help="none | center | backup "
+                                              "(default: keep, or backup if unset)"),
                 timer_minutes: int = typer.Option(10, "--timer-minutes",
                                                   help="how often the device syncs itself; "
                                                        "0 to install no timer"),
@@ -492,8 +494,16 @@ def cmd_install(name: str,
         # exist is worse than no backup, because you would rely on it when the centre dies.
         raise typer.Exit(2)
 
-    dev.role = role
-    inv.touch(dev)
+    # This command doubles as the updater, so it must not change a role nobody asked
+    # it to change: silently demoting the center on every update leaves `fleet sync`
+    # with nowhere to go.
+    if role is None:
+        role = dev.role if dev.role != "none" else "backup"
+    if role == "center":
+        inv.promote_center(devices, dev)    # one center, enforced in one place
+    elif role != dev.role:
+        dev.role = role
+        inv.touch(dev)
     inv.save(devices)
     console.print(f"[green]✓[/green] {dev.name} is now [bold]{role}[/bold] — "
                   f"{output.strip().splitlines()[-1] if output.strip() else 'installed'}")

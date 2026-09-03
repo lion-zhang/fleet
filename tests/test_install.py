@@ -289,3 +289,70 @@ def test_the_installer_fails_loudly_if_it_verifies_with_an_unsupported_flag(tmp_
         capture_output=True, text=True, timeout=60,
         env={"HOME": str(tmp_path), "PATH": f"{bin_dir}:/usr/bin:/bin"})
     assert result.returncode == 0, result.stderr
+
+
+def test_updating_an_existing_center_does_not_demote_it(tmp_path, monkeypatch):
+    """`fleet install` doubles as `fleet update` -- that is its documented purpose --
+    so an unasked-for --role default silently destroys the center designation, and the
+    next `fleet sync` has nowhere to go."""
+    from fleet import cli, inventory as inv
+    from fleet.cli import app
+
+    runner, path = _cli(tmp_path, monkeypatch)
+    devices = inv.load(path)
+    devices[0].role = "center"
+    inv.save(devices, path)
+
+    monkeypatch.setattr(cli, "configured_repo", lambda: "git@github.com:me/fleet.git")
+    monkeypatch.setattr(cli, "run_installer", lambda *a, **k: (0, "fleet 0.1.0"))
+    assert runner.invoke(app, ["install", "oracle"]).exit_code == 0
+    assert inv.load(path)[0].role == "center"
+
+
+def test_a_device_with_no_role_still_becomes_a_backup(tmp_path, monkeypatch):
+    from fleet import cli, inventory as inv
+    from fleet.cli import app
+
+    runner, path = _cli(tmp_path, monkeypatch)
+    monkeypatch.setattr(cli, "configured_repo", lambda: "git@github.com:me/fleet.git")
+    monkeypatch.setattr(cli, "run_installer", lambda *a, **k: (0, "fleet 0.1.0"))
+    runner.invoke(app, ["install", "oracle"])
+    assert inv.load(path)[0].role == "backup"
+
+
+def test_an_explicit_role_is_still_obeyed(tmp_path, monkeypatch):
+    """Not clobbering by default must not make the flag stop working."""
+    from fleet import cli, inventory as inv
+    from fleet.cli import app
+
+    runner, path = _cli(tmp_path, monkeypatch)
+    devices = inv.load(path)
+    devices[0].role = "center"
+    inv.save(devices, path)
+
+    monkeypatch.setattr(cli, "configured_repo", lambda: "git@github.com:me/fleet.git")
+    monkeypatch.setattr(cli, "run_installer", lambda *a, **k: (0, "fleet 0.1.0"))
+    runner.invoke(app, ["install", "oracle", "--role", "backup"])
+    assert inv.load(path)[0].role == "backup"
+
+
+def test_installing_as_center_enforces_the_one_center_rule(tmp_path, monkeypatch):
+    """`--role center` bypassed promote_center, so it could create a second centre and
+    leave `fleet sync` picking one arbitrarily."""
+    from fleet import cli, inventory as inv
+    from fleet.cli import app
+    from fleet.models import Device, Kind
+
+    runner, path = _cli(tmp_path, monkeypatch)
+    devices = inv.load(path)
+    devices.append(Device(id="linux:machine-id:hub", name="hub", kind=Kind.PERMANENT,
+                          role="center",
+                          endpoints=[{"target": "hub", "user": "root", "port": 22}]))
+    inv.save(devices, path)
+
+    monkeypatch.setattr(cli, "configured_repo", lambda: "git@github.com:me/fleet.git")
+    monkeypatch.setattr(cli, "run_installer", lambda *a, **k: (0, "fleet 0.1.0"))
+    runner.invoke(app, ["install", "oracle", "--role", "center"])
+    roles = {d.name: d.role for d in inv.load(path)}
+    assert roles["oracle"] == "center"
+    assert roles["hub"] == "backup", roles
