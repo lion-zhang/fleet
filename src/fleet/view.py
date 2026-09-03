@@ -95,7 +95,7 @@ def _alerts(dev: Device, snap: dict | None, state: dict | None) -> list[str]:
 
 
 def device_view(dev: Device, state: dict | None, snap: dict | None,
-                detail: Detail = Detail.COMPACT) -> dict[str, Any]:
+                detail: Detail = Detail.COMPACT, self_id: str = "") -> dict[str, Any]:
     status = (state or {}).get("status") or "unknown"
     gpus = [_gpu_view(g) for g in (snap or {}).get("gpus", [])]
     mem_total = (snap or {}).get("mem_total_kb")
@@ -109,6 +109,9 @@ def device_view(dev: Device, state: dict | None, snap: dict | None,
         "role": dev.role,
         "status": status,
         "claimable": dev.claimable,
+        # Requires both to be non-empty: a container with no machine-id has no identity,
+        # and claiming to be some device would be worse than admitting we cannot tell.
+        "is_self": bool(self_id and dev.id and dev.id == self_id),
         "telemetry_age_s": age_s(state),
         "gpus": [{"name": g["name"], "vram_total_mib": g["vram_total_mib"],
                   "vram_free_mib": g["vram_free_mib"], "util_pct": g["util_pct"],

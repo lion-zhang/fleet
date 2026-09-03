@@ -165,7 +165,8 @@ def render_fleet(rows: list[dict[str, Any]], summary: dict[str, Any],
                 else (row["alerts"][0] if row.get("alerts") else ""))
         t.add_row(
             _DOT.get(row["status"], "?"),
-            f"[bold]{row['name']}[/bold]",
+            f"[bold]{row['name']}[/bold]"
+            + (" [dim]←[/dim]" if row.get("is_self") else ""),
             gpu,
             "-" if util is None else f"{util}%",
             vram,

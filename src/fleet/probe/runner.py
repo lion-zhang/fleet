@@ -150,6 +150,40 @@ def run_probe_with_password(ep: Endpoint, password: str, *, mode: str = "full",
                        latency_ms=elapsed)
 
 
+def run_probe_local(*, mode: str = "full", disk_paths: list[str] | None = None,
+                    timeout: float = 20.0) -> ProbeResult:
+    """Probe the machine we are running on, without SSH.
+
+    Requiring sshd, a key in authorized_keys and a working network path in order to
+    inspect the machine fleet is already running on is a lot of moving parts for no
+    extra information -- and it is the only reason inbound SSH ever had to be enabled
+    on a laptop. Same payload, same parser, same ProbeResult as every other path.
+    """
+    started = time.monotonic()
+    env = {**os.environ, **probe_env(mode, disk_paths)}
+    try:
+        proc = subprocess.run(["sh", "-s"], input=PAYLOAD.read_text(), env=env,
+                              capture_output=True, text=True, timeout=timeout)
+    except subprocess.TimeoutExpired:
+        return ProbeResult(status=Status.TIMEOUT, error_class="timeout",
+                           error_detail=f"local probe exceeded {timeout:.0f}s",
+                           endpoint_used="local",
+                           latency_ms=int((time.monotonic() - started) * 1000))
+    except OSError as exc:
+        return ProbeResult(status=Status.PROBE_ERROR, error_class="probe_error",
+                           error_detail=str(exc)[:200], endpoint_used="local")
+    elapsed = int((time.monotonic() - started) * 1000)
+    try:
+        snap = parse_payload(proc.stdout)
+    except MissingSentinel as exc:
+        return ProbeResult(status=Status.PROBE_ERROR, error_class="probe_error",
+                           error_detail=str(exc), endpoint_used="local",
+                           latency_ms=elapsed,
+                           stderr_tail=scrub_stderr(proc.stderr)[-400:])
+    return ProbeResult(status=Status.OK, snapshot=snap, endpoint_used="local",
+                       latency_ms=elapsed)
+
+
 def run_probe(ep: Endpoint, *, mode: str = "full", timeout: float = 20.0,
               connect_timeout: int = 8, multiplex: bool = True,
               disk_paths: list[str] | None = None) -> ProbeResult:

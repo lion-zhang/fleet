@@ -13,6 +13,7 @@ from pathlib import Path
 
 import typer
 from contextlib import contextmanager
+from functools import lru_cache
 
 from rich.console import Console, Group
 from rich.table import Table
@@ -26,7 +27,7 @@ from .install import build_install_argv, install_script
 from .keys import askpass_script, install_key, public_key
 from .models import Device, Kind, Status
 from .onboard import onboard
-from .probe.runner import (probe_env, probe_many, run_probe,
+from .probe.runner import (probe_env, probe_many, run_probe, run_probe_local,
                            run_probe_with_password)
 from . import secrets as sec
 from .setup import TARGETS, detect_targets, fleet_command, install, uninstall
@@ -92,8 +93,14 @@ def _rows(names: list[str] | None = None, *, refresh: bool = False,
         # probe_many applies one set of options to a whole batch, so devices are grouped
         # by everything that varies per device: mode (a shared host gets the polite
         # probe) and disk paths (one device's paths must not leak into another's probe).
+        me = local_device_id()
         groups: dict[tuple[str, tuple[str, ...]], dict[str, list]] = {}
         for d in stale:
+            if me and d.id == me:
+                # no ssh, no key, no network to look at the machine we are running on
+                store.record(conn, d.id, run_probe_local(mode=d.probe_mode,
+                                                         disk_paths=d.disk_paths))
+                continue
             key = (d.probe_mode, tuple(d.disk_paths))
             groups.setdefault(key, {})[d.id] = inv.endpoints_of(d)
         for (mode, paths), subset in groups.items():
@@ -122,9 +129,10 @@ def _rows(names: list[str] | None = None, *, refresh: bool = False,
             store.record(conn, d.id, res)
 
     out = []
+    self_id = local_device_id()
     for d in devices:
         st, sn = store.latest(conn, d.id)
-        out.append(device_view(d, st, sn, detail))
+        out.append(device_view(d, st, sn, detail, self_id=self_id))
     conn.close()
     return out
 
@@ -174,7 +182,8 @@ def cmd_ls(json_out: bool = typer.Option(False, "--json"),
         disk = "-" if r["disk_free_gb"] is None else (
             f"{r['disk_free_gb']:.0f}G" + ("" if r["disk_mount"] == "/"
                                            else f" [dim]{r['disk_mount']}[/dim]"))
-        t.add_row(_DOT.get(r["status"], "?"), f"[bold]{r['name']}[/bold]",
+        name = f"[bold]{r['name']}[/bold]" + (" [dim]←[/dim]" if r.get("is_self") else "")
+        t.add_row(_DOT.get(r["status"], "?"), name,
                   r["kind"], gpu, vram,
                   str(r["cpu_cores"] or "-"),
                   f"{r['ram_free_gb']:.0f}G" if r["ram_free_gb"] else "-",
@@ -490,6 +499,7 @@ def cmd_install(name: str,
                   f"{output.strip().splitlines()[-1] if output.strip() else 'installed'}")
 
 
+@lru_cache(maxsize=1)
 def local_device_id() -> str:
     """This machine's identity, in the same shape onboard.py stamps on a probed device.
 
@@ -754,10 +764,16 @@ def _live_tick(conn, devices, schedule: Schedule, cfg, detail: Detail) -> list[d
     to do the same or a dropped network takes the whole view down.
     """
     now = time.monotonic()
+    me = local_device_id()
     due = [d for d in schedule.due(devices, now) if d.probeable]
     if due:
         groups: dict[tuple[str, tuple[str, ...]], dict[str, list]] = {}
         for d in due:
+            if me and d.id == me:
+                res = run_probe_local(mode=d.probe_mode, disk_paths=d.disk_paths)
+                store.record(conn, d.id, res)
+                schedule.record(d.id, ok=res.ok, now=now)
+                continue
             groups.setdefault((d.probe_mode, tuple(d.disk_paths)), {})[d.id] = \
                 inv.endpoints_of(d)
         for (mode, paths), subset in groups.items():
@@ -777,7 +793,7 @@ def _live_tick(conn, devices, schedule: Schedule, cfg, detail: Detail) -> list[d
     rows = []
     for d in devices:
         st, sn = store.latest(conn, d.id)
-        rows.append(device_view(d, st, sn, detail))
+        rows.append(device_view(d, st, sn, detail, self_id=me))
     return rows
 
 
