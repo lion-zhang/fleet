@@ -247,13 +247,24 @@ def upsert(devices: list[Device], new: Device) -> tuple[list[Device], str]:
     """
     for existing in devices:
         if existing.id == new.id:
+            # Re-adding something you removed is an ordinary correction. Because the
+            # match is on id, without clearing the tombstone the add would merge into a
+            # deleted record and the device would stay invisible -- `fleet add` looking
+            # like it silently did nothing. Stamping it also matters: an unstamped
+            # restore loses the next merge to the center's stale tombstone and the
+            # device is deleted straight back.
+            restored = bool(existing.deleted_at)
+            if restored:
+                existing.deleted_at = 0
+                touch(existing)
             known = {(e.get("target"), e.get("user"), int(e.get("port", 22) or 22))
                      for e in existing.endpoints}
             added = [e for e in new.endpoints
                      if (e.get("target"), e.get("user"), int(e.get("port", 22) or 22)) not in known]
-            if not added:
-                return devices, "unchanged"
-            existing.endpoints.extend(added)
-            return devices, "endpoint_added"
+            if added:
+                existing.endpoints.extend(added)
+            if restored:
+                return devices, "restored"
+            return devices, "endpoint_added" if added else "unchanged"
     devices.append(new)
     return devices, "added"

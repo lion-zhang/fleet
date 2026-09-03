@@ -447,3 +447,60 @@ def test_ancient_tombstones_are_pruned_so_the_file_does_not_grow_forever():
     inv.remove([fresh], fresh)
     kept = inv.prune_tombstones([old, fresh])
     assert [d.name for d in kept] == ["recent"]
+
+
+# --------------------------------------------------------------- re-adding
+
+def test_re_adding_a_removed_device_brings_it_back():
+    """`fleet rm` then `fleet add` is an ordinary correction. upsert matches on id, so
+    without clearing the tombstone the add merges into a deleted record and the device
+    stays invisible -- it looks like `fleet add` silently did nothing."""
+    from fleet import inventory as inv
+
+    devices = [_dev("box", id="net:box:22")]
+    inv.remove(devices, devices[0])
+    devices, action = inv.upsert(devices, _dev("box", id="net:box:22"))
+    assert [d.name for d in inv.live(devices)] == ["box"]
+
+
+def test_re_adding_reports_that_it_was_restored():
+    """"unchanged" would be a lie: the device was invisible a moment ago."""
+    from fleet import inventory as inv
+
+    devices = [_dev("box", id="net:box:22")]
+    inv.remove(devices, devices[0])
+    _, action = inv.upsert(devices, _dev("box", id="net:box:22"))
+    assert action == "restored"
+
+
+def test_a_restored_device_keeps_everything_you_had_recorded_about_it():
+    """Keeping the record through a deletion is the whole reason it is a tombstone;
+    coming back as a blank device would waste that."""
+    from fleet import inventory as inv
+
+    devices = [_dev("box", id="net:box:22", notes="the noisy one", tags=["gpu"])]
+    inv.remove(devices, devices[0])
+    devices, _ = inv.upsert(devices, _dev("box", id="net:box:22"))
+    restored = inv.live(devices)[0]
+    assert restored.notes == "the noisy one" and restored.tags == ["gpu"]
+
+
+def test_restoring_stamps_the_record_so_the_center_learns_about_it():
+    """Otherwise the next sync sees the center's stale tombstone as newer and deletes
+    it right back."""
+    from fleet import inventory as inv
+
+    devices = [_dev("box", id="net:box:22")]
+    inv.remove(devices, devices[0])
+    devices[0].updated_at = 1
+    devices, _ = inv.upsert(devices, _dev("box", id="net:box:22"))
+    assert devices[0].updated_at > 1
+
+
+def test_adding_a_device_that_was_never_removed_is_unaffected():
+    """The dedupe behaviour that already existed must not change."""
+    from fleet import inventory as inv
+
+    devices = [_dev("box", id="net:box:22")]
+    _, action = inv.upsert(devices, _dev("box", id="net:box:22"))
+    assert action == "unchanged"

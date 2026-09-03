@@ -269,7 +269,10 @@ def cmd_add(ssh_command: str = typer.Argument(..., help='e.g. "ssh -p 58418 root
     if _emit({"action": action, "name": dev.name, "id": dev.id,
               "kind": dev.kind.value, "status": res.status.value}, json_out):
         return
-    if action == "endpoint_added":
+    if action == "restored":
+        console.print(f"[green]✓[/green] restored [bold]{dev.name}[/bold] — it had been "
+                      "removed, and everything recorded about it is back.")
+    elif action == "endpoint_added":
         console.print(f"[green]✓[/green] {dev.name} was already known — added another endpoint "
                       "(same machine-id, so this is one device, not two).")
     elif action == "unchanged":

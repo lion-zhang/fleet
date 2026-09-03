@@ -37,19 +37,41 @@ def _origin(tmp_path):
     return origin
 
 
-def _fake_uv(tmp_path):
-    """A uv that records being called, so the script runs without a real install."""
+def _sandbox_bin(tmp_path):
+    """A PATH containing stubs for every command the installer shells out to.
+
+    crontab is stubbed unconditionally, not just in the timer tests: install_script
+    defaults to timer_minutes=10, so any test that forgets would run the real crontab
+    and edit the machine's own schedule. A test that escapes its sandbox is a bug in
+    the test, and this one did exactly that.
+    """
     bin_dir = tmp_path / "bin"
     bin_dir.mkdir(exist_ok=True)
     log = tmp_path / "uv.log"
     uv = bin_dir / "uv"
     uv.write_text(f'#!/bin/sh\necho "$@" >> {log}\n')
     uv.chmod(0o755)
-    # `fleet --version` at the end of the script must not fail the run
-    fleet = bin_dir / "fleet"
+    fleet = bin_dir / "fleet"          # the script ends with `fleet --version`
     fleet.write_text('#!/bin/sh\necho "fleet 0.2.0"\n')
     fleet.chmod(0o755)
+    spool = tmp_path / "crontab.txt"
+    if not spool.exists():
+        spool.write_text("")
+    ct = bin_dir / "crontab"
+    ct.write_text(f'#!/bin/sh\n'
+                  f'if [ "$1" = "-l" ]; then cat {spool}; exit 0; fi\n'
+                  f'cat > {spool}\n')
+    ct.chmod(0o755)
     return bin_dir, log
+
+
+def _fake_uv(tmp_path):
+    return _sandbox_bin(tmp_path)
+
+
+def _fake_crontab(tmp_path):
+    _sandbox_bin(tmp_path)
+    return tmp_path / "crontab.txt"
 
 
 def _run(script: str, tmp_path):
