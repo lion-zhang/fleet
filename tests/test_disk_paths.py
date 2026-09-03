@@ -185,3 +185,93 @@ def test_the_cpuproc_wire_format_is_unchanged():
     still expect exactly six fields."""
     for row in _cpuproc_rows(_run_payload()):
         assert len(row) == 6, row
+
+
+# --------------------------------------------------------------- read-only volumes
+
+@pytest.mark.skipif(sys.platform == "win32", reason="payload is POSIX sh")
+def test_the_probe_reports_whether_a_disk_can_be_written_to(tmp_path):
+    """A mounted DMG is 100% full by definition and read-only, so it alerted forever.
+    Knowing it is read-only is what lets the alert skip it while `fleet show` still
+    lists it honestly."""
+    ro = tmp_path / "readonly"
+    ro.mkdir()
+    ro.chmod(0o500)
+    rows = _disk_rows(_run_payload(FLEET_DISK_PATHS=f"{tmp_path} {ro}"))
+    by_mount = {r.split("|")[0]: r.split("|") for r in rows}
+    assert by_mount[str(ro)][4] == "0", "read-only volume should report rw=0"
+    assert by_mount[str(tmp_path)][4] == "1", "writable volume should report rw=1"
+
+
+def test_an_older_snapshot_without_the_field_is_assumed_writable():
+    """Every captured fixture predates this field, and treating them as read-only
+    would silently stop alerting on disks that really can fill up."""
+    from fleet.probe.parse import parse_payload
+
+    text = ("#HOST\nhost.machine_id=11111111111111111111111111111111\n"
+            "#DISK mount|total_kb|used_kb|avail_kb\n"
+            "/|100|50|50\n#END rc=0\n")
+    assert parse_payload(text).disks[0].writable is True
+
+
+def test_a_full_read_only_volume_raises_no_alert():
+    from fleet.models import Device, Kind
+    from fleet.view import Detail, device_view
+
+    snap = {"disks": [{"mount": "/Volumes/App", "total_kb": 100, "used_kb": 100,
+                       "avail_kb": 0, "writable": False}]}
+    v = device_view(Device(id="x", name="box", kind=Kind.PERMANENT),
+                    {"status": "ok", "last_probe_at": 1, "last_ok_at": 1},
+                    snap, Detail.COMPACT)
+    assert not any("disk" in a.lower() for a in v["alerts"]), v["alerts"]
+
+
+def test_a_full_writable_volume_still_raises_one():
+    """The filter must not silence the disks that actually matter."""
+    from fleet.models import Device, Kind
+    from fleet.view import Detail, device_view
+
+    snap = {"disks": [{"mount": "/workspace", "total_kb": 100, "used_kb": 96,
+                       "avail_kb": 4, "writable": True}]}
+    v = device_view(Device(id="x", name="box", kind=Kind.PERMANENT),
+                    {"status": "ok", "last_probe_at": 1, "last_ok_at": 1},
+                    snap, Detail.COMPACT)
+    assert any("/workspace" in a for a in v["alerts"])
+
+
+def test_a_read_only_volume_is_still_listed_in_full_detail():
+    """Skipping the alert is not the same as hiding the disk."""
+    from fleet.models import Device, Kind
+    from fleet.view import Detail, device_view
+
+    snap = {"disks": [{"mount": "/Volumes/App", "total_kb": 100, "used_kb": 100,
+                       "avail_kb": 0, "writable": False}]}
+    v = device_view(Device(id="x", name="box", kind=Kind.PERMANENT),
+                    {"status": "ok", "last_probe_at": 1, "last_ok_at": 1},
+                    snap, Detail.FULL)
+    assert [d["mount"] for d in v["disks"]] == ["/Volumes/App"]
+    assert v["disks"][0]["writable"] is False
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="payload is POSIX sh")
+def test_a_disk_row_from_the_current_payload_actually_parses(tmp_path):
+    """The parser required exactly four fields, so adding the rw column silently
+    dropped every disk. Asserting on raw rows missed it -- this goes through the
+    parser the way the probe does."""
+    from fleet.probe.parse import parse_payload
+
+    snap = parse_payload(_run_payload(FLEET_DISK_PATHS=str(tmp_path)))
+    assert [d.mount for d in snap.disks] == [str(tmp_path)]
+    assert snap.disks[0].writable is True
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="payload is POSIX sh")
+def test_root_is_always_treated_as_writable(tmp_path):
+    """On macOS / is the read-only signed system volume, so `[ -w / ]` is false -- but
+    the free space df reports for it is the shared APFS container that user data fills.
+    Trusting -w there would silence the most important alert on every Mac."""
+    from fleet.probe.parse import parse_payload
+
+    snap = parse_payload(_run_payload(FLEET_DISK_PATHS="/"))
+    assert snap.disks[0].mount == "/"
+    assert snap.disks[0].writable is True

@@ -24,5 +24,5 @@ fleet top                                                # live view, like htop 
 fleet setup                                              # teach your coding agents to use it
 ```
 
-Status: v0.3 -- inventory, probe, CLI, agent setup, key bootstrap, sync, and
-encrypted secrets.  See `docs/design/` for the design.
+Status: v0.3 -- inventory, probe, CLI, live `top`, agent setup (Claude Code,
+Codex, Hermes), key bootstrap, sync to a center node, and encrypted secrets.  See `docs/design/` for the design.

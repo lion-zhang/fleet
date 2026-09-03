@@ -163,8 +163,9 @@ def parse_payload(stdout: str) -> Snapshot:
 
     for ln in rows.get("DISK", []):
         f = ln.split("|")
-        if len(f) == 4 and _int(f[1]):
-            snap.disks.append(Disk(f[0], _int(f[1]) or 0, _int(f[2]) or 0, _int(f[3]) or 0))
+        if len(f) >= 4 and _int(f[1]):   # 5th field (rw) is newer; older probes omit it
+            snap.disks.append(Disk(f[0], _int(f[1]) or 0, _int(f[2]) or 0, _int(f[3]) or 0,
+                                   writable=(f[4].strip() != "0") if len(f) > 4 else True))
 
     by_uuid: dict[str, Gpu] = {}
     for ln in rows.get("GPU", []):

@@ -54,6 +54,7 @@ def _disk_view(d: dict) -> dict:
         "total_gb": round(d.get("total_kb", 0) / 1048576, 1),
         "free_gb": round(avail / 1048576, 1),
         "use_pct": round(100 * used / writable) if writable else 0,
+        "writable": bool(d.get("writable", True)),
     }
 
 
@@ -80,7 +81,8 @@ def _alerts(dev: Device, snap: dict | None, state: dict | None) -> list[str]:
                            "processes not visible to us -- do not treat as free")
         for disk in snap.get("disks", []):
             dv = _disk_view(disk)
-            if dv["use_pct"] >= DISK_ALERT_PCT:
+            # a read-only mount is 100% full by definition; nothing will ever die on it
+            if dv["writable"] and dv["use_pct"] >= DISK_ALERT_PCT:
                 out.append(f"disk {dv['mount']}: {dv['use_pct']}% full, "
                            f"{dv['free_gb']}G left -- a long job will die on this")
         if snap.get("gpu_present") == "err":

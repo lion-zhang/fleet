@@ -99,6 +99,9 @@ class Disk:
     total_kb: int
     used_kb: int
     avail_kb: int
+    # Older snapshots have no such field and are assumed writable: treating them as
+    # read-only would silently stop alerting on disks that really can fill up.
+    writable: bool = True
 
 
 @dataclass(slots=True)

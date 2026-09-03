@@ -128,8 +128,18 @@ emit gpu.present "$gpu_present"
 emit gpu.driver "$gpu_driver"
 emit gpu.error "$gpu_err"
 
+# Can this mount actually fill up? A mounted disk image is read-only and 100% full by
+# definition, and alerting on it forever is noise. "/" is the exception and is always
+# treated as writable: on macOS it is the read-only signed system volume, yet the free
+# space df reports for it belongs to the shared container that user data fills, so
+# trusting -w there would silence the one alert that matters most.
+writable() {
+  [ "$1" = "/" ] && { echo 1; return; }
+  if [ -w "$1" ]; then echo 1; else echo 0; fi
+}
+
 # ---------------------------------------------------------------- disk
-echo "#DISK mount|total_kb|used_kb|avail_kb"
+echo "#DISK mount|total_kb|used_kb|avail_kb|rw"
 if have df; then
   if [ -n "${FLEET_DISK_PATHS:-}" ]; then
     # Configured paths win outright. df is asked about each path directly, so a plain
@@ -137,16 +147,23 @@ if have df; then
     # the user asked about rather than whatever filesystem happens to hold it.
     for p in $FLEET_DISK_PATHS; do
       [ -e "$p" ] || continue
-      df -Pk "$p" 2>/dev/null | awk -v p="$p" 'NR>1 && $2+0>0 {
-        printf "%s|%s|%s|%s\n", p, $2, $3, $4
+      rw=$(writable "$p")
+      df -Pk "$p" 2>/dev/null | awk -v p="$p" -v rw="$rw" 'NR>1 && $2+0>0 {
+        printf "%s|%s|%s|%s|%s\n", p, $2, $3, $4, rw
       }'
     done | head -20
   else
+    # writability is decided in the shell, not awk: a mount you cannot write to cannot
+    # fill up, so "100% full" there is never actionable -- a mounted disk image is the
+    # usual case, and it alerted forever.
     df -Pk 2>/dev/null | awk 'NR>1 && $2+0>0 {
       m=$6
       if (m=="/" || m ~ /^\/(workspace|data|mnt|home|srv|opt|Volumes|scratch)/)
         printf "%s|%s|%s|%s\n", m, $2, $3, $4
-    }' | sort -u | head -20
+    }' | sort -u | head -20 | while IFS='|' read -r m tot used avail; do
+      rw=$(writable "$m")
+      printf '%s|%s|%s|%s|%s\n' "$m" "$tot" "$used" "$avail" "$rw"
+    done
   fi
 fi
 
