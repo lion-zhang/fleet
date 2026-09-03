@@ -15,6 +15,7 @@ from fleet.setup import (
     apply_block,
     detect_targets,
     fleet_command,
+    hermes_skill_text,
     install,
     plan,
     remove_block,
@@ -258,3 +259,115 @@ def test_cli_setup_installs_and_is_reported_as_unchanged_on_a_second_run(tmp_pat
     second = runner.invoke(app, ["setup"])
     assert second.exit_code == 0
     assert "unchanged" in second.output
+
+
+# --------------------------------------------------------------- hermes
+
+def test_hermes_is_detected_when_it_is_installed(tmp_path):
+    (tmp_path / ".hermes").mkdir()
+    assert detect_targets(tmp_path) == ["hermes"]
+
+
+def test_hermes_installs_as_a_skill_not_into_the_system_prompt(tmp_path):
+    """SOUL.md is Hermes's system prompt -- a block there costs tokens in every
+    conversation. Skills load only when a task needs them."""
+    path = plan(tmp_path)["hermes"]
+    assert path == tmp_path / ".hermes" / "skills" / "devops" / "fleet" / "SKILL.md"
+
+
+def test_hermes_project_scope_uses_the_shared_agents_file(tmp_path):
+    assert plan(tmp_path, project=True)["hermes"] == tmp_path / "AGENTS.md"
+
+
+def test_the_hermes_skill_declares_every_field_hermes_requires():
+    """Hermes requires five keys where Claude Code needs two. A skill missing one is
+    not rejected loudly -- it simply never loads, which is the worst failure for a
+    setup command."""
+    import yaml
+
+    text = hermes_skill_text("fleet")
+    _, frontmatter, _ = text.split("---\n", 2)
+    meta = yaml.safe_load(frontmatter)
+    for required in ("name", "description", "version", "author", "license"):
+        assert meta.get(required), f"missing required field {required!r}"
+
+
+def test_the_hermes_skill_only_surfaces_where_a_shell_exists():
+    """Every command it recommends is a shell command."""
+    import yaml
+
+    _, frontmatter, _ = hermes_skill_text("fleet").split("---\n", 2)
+    meta = yaml.safe_load(frontmatter)
+    assert "terminal" in meta["metadata"]["hermes"]["requires_tools"]
+
+
+def test_the_hermes_skill_reports_a_real_version():
+    """Hardcoding one guarantees it drifts from the package that is installed."""
+    import yaml
+
+    from fleet.setup import package_version
+
+    _, frontmatter, _ = hermes_skill_text("fleet").split("---\n", 2)
+    assert yaml.safe_load(frontmatter)["version"] == package_version()
+
+
+def test_the_hermes_skill_embeds_the_resolved_command():
+    assert "/opt/bin/fleet ls --json" in hermes_skill_text("/opt/bin/fleet")
+
+
+def test_installing_for_hermes_writes_the_skill(tmp_path):
+    (tmp_path / ".hermes").mkdir()
+    install(tmp_path, ["hermes"], "fleet")
+    assert (tmp_path / ".hermes" / "skills" / "devops" / "fleet" / "SKILL.md").exists()
+
+
+def test_hermes_never_touches_the_system_prompt(tmp_path):
+    """Belt and braces on the decision above: SOUL.md must come back untouched."""
+    (tmp_path / ".hermes").mkdir()
+    soul = tmp_path / ".hermes" / "SOUL.md"
+    soul.write_text("You are Hermes Agent.\n")
+    install(tmp_path, ["hermes"], "fleet")
+    assert soul.read_text() == "You are Hermes Agent.\n"
+
+
+def test_codex_and_hermes_share_one_file_in_a_project_and_are_reported_once(tmp_path):
+    """Both read ./AGENTS.md. Writing it twice is harmless because the block is
+    idempotent, but reporting two changes for one file is a lie about what happened."""
+    changes = install(tmp_path, ["codex", "hermes"], "fleet", project=True)
+    assert len(changes) == 1
+    assert changes[0].path == tmp_path / "AGENTS.md"
+
+
+def test_uninstalling_a_shared_project_file_also_happens_once(tmp_path):
+    install(tmp_path, ["codex", "hermes"], "fleet", project=True)
+    changes = uninstall(tmp_path, ["codex", "hermes"], project=True)
+    assert len(changes) == 1
+
+
+def test_the_cli_accepts_every_target_the_setup_module_supports(tmp_path, monkeypatch):
+    """cli.py used to hardcode its own list, so adding a target to setup.py left the
+    command rejecting it. The list now comes from one place."""
+    from pathlib import Path
+
+    from typer.testing import CliRunner
+
+    from fleet.cli import app
+    from fleet.setup import TARGETS
+
+    monkeypatch.setattr(Path, "home", classmethod(lambda cls: tmp_path))
+    for target in TARGETS:
+        result = CliRunner().invoke(app, ["setup", "--target", target, "--dry-run"])
+        assert result.exit_code == 0, f"--target {target}: {result.output}"
+
+
+def test_target_all_covers_every_supported_agent(tmp_path, monkeypatch):
+    from pathlib import Path
+
+    from typer.testing import CliRunner
+
+    from fleet.cli import app
+    from fleet.setup import TARGETS
+
+    monkeypatch.setattr(Path, "home", classmethod(lambda cls: tmp_path))
+    out = CliRunner().invoke(app, ["setup", "--target", "all", "--dry-run"]).output
+    assert len(out.strip().splitlines()) >= len(TARGETS)

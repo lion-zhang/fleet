@@ -49,6 +49,23 @@ def fleet_command() -> str:
     return str(Path(sys.executable).resolve().parent / "fleet")
 
 
+# Hermes organises skills into categories; the docs' own example for infrastructure
+# tooling is skills/devops/<name>/. fleet is inventory and remote execution, so devops.
+HERMES_CATEGORY = "devops"
+
+# The one list. cli.py validates against this rather than repeating it.
+TARGETS = ("claude", "codex", "hermes")
+
+
+def package_version() -> str:
+    """The installed version, never a hardcoded one, which would drift immediately."""
+    from importlib.metadata import PackageNotFoundError, version
+    try:
+        return version("fleet-broker")
+    except PackageNotFoundError:            # running from a source tree, not installed
+        return "0.0.0"
+
+
 def _usage(cmd: str) -> str:
     return f"""## Commands
 
@@ -73,6 +90,23 @@ def skill_text(cmd: str) -> str:
     """A Claude Code skill file. fleet owns this file entirely."""
     return (f"---\nname: fleet\ndescription: {_DESCRIPTION}\n---\n\n"
             f"# fleet\n\nYour personal compute inventory.\n\n{_usage(cmd)}")
+
+
+def hermes_skill_text(cmd: str) -> str:
+    """A Hermes skill. Same idea as the Claude Code one, different contract.
+
+    Hermes requires name, description, version, author and license -- where Claude Code
+    needs only the first two -- and a skill missing any of them is not rejected loudly,
+    it simply never loads. license says UNLICENSED because this repo carries no licence
+    file, and claiming MIT here would be a claim about someone else's code.
+    """
+    return (f"---\nname: fleet\ndescription: \"{_DESCRIPTION}\"\n"
+            f"version: {package_version()}\nauthor: fleet\nlicense: UNLICENSED\n"
+            "platforms: [linux, macos, windows]\n"
+            "metadata:\n  hermes:\n"
+            "    tags: [fleet, inventory, gpu, ssh, remote, compute]\n"
+            "    requires_tools: [terminal]\n"
+            f"---\n\n# fleet\n\nYour personal compute inventory.\n\n{_usage(cmd)}")
 
 
 def agents_block(cmd: str) -> str:
@@ -108,25 +142,32 @@ class Change:
 def plan(root: Path, *, project: bool = False) -> dict[str, Path]:
     """Which file each agent reads.
 
-    Claude Code's layout is the same either way. Codex differs: in a repo the convention
-    is a top-level AGENTS.md, not a nested dot-directory.
+    Claude Code's layout is the same either way. Codex and Hermes differ: in a repo the
+    convention for both is a top-level AGENTS.md, not a nested dot-directory -- which is
+    why install() dedupes by path.
     """
+    shared = root / "AGENTS.md"
     return {
         "claude": root / ".claude" / "skills" / "fleet" / "SKILL.md",
-        "codex": (root / "AGENTS.md") if project else (root / ".codex" / "AGENTS.md"),
+        "codex": shared if project else (root / ".codex" / "AGENTS.md"),
+        # Not SOUL.md: that is Hermes's system prompt, so a block there would cost
+        # tokens in every conversation. Skills load only when a task needs them.
+        "hermes": shared if project
+        else root / ".hermes" / "skills" / HERMES_CATEGORY / "fleet" / "SKILL.md",
     }
 
 
 def detect_targets(root: Path) -> list[str]:
     """Only agents that are actually installed. Creating ~/.codex for someone who does
     not use Codex would be litter, not setup."""
-    return [t for t, d in (("claude", ".claude"), ("codex", ".codex"))
-            if (root / d).is_dir()]
+    return [t for t in TARGETS if (root / f".{t}").is_dir()]
 
 
 def _desired(target: str, path: Path, cmd: str) -> str:
-    if target == "claude":
-        return skill_text(cmd)              # fleet owns this file outright
+    # A SKILL.md is a file fleet owns outright; anything else belongs to the user and
+    # gets a marked region.
+    if path.name == "SKILL.md":
+        return hermes_skill_text(cmd) if target == "hermes" else skill_text(cmd)
     existing = path.read_text() if path.exists() else ""
     return apply_block(existing, agents_block(cmd))
 
@@ -135,8 +176,15 @@ def install(root: Path, targets: list[str], cmd: str, *,
             dry_run: bool = False, project: bool = False) -> list[Change]:
     paths = plan(root, project=project)
     changes: list[Change] = []
+    seen: set[Path] = set()
     for target in targets:
         path = paths[target]
+        # Codex and Hermes both read ./AGENTS.md in a project. The block is idempotent
+        # so writing twice is harmless, but reporting two changes for one file is a lie
+        # about what happened.
+        if path in seen:
+            continue
+        seen.add(path)
         current = path.read_text() if path.exists() else None
         desired = _desired(target, path, cmd)
         action = ("unchanged" if current == desired
@@ -152,8 +200,15 @@ def uninstall(root: Path, targets: list[str], *,
               dry_run: bool = False, project: bool = False) -> list[Change]:
     paths = plan(root, project=project)
     changes: list[Change] = []
+    seen: set[Path] = set()
     for target in targets:
         path = paths[target]
+        # Codex and Hermes both read ./AGENTS.md in a project. The block is idempotent
+        # so writing twice is harmless, but reporting two changes for one file is a lie
+        # about what happened.
+        if path in seen:
+            continue
+        seen.add(path)
         if not path.exists():
             changes.append(Change(target, path, "unchanged"))
             continue

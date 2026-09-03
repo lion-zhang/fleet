@@ -29,7 +29,7 @@ from .onboard import onboard
 from .probe.runner import (probe_env, probe_many, run_probe,
                            run_probe_with_password)
 from . import secrets as sec
-from .setup import detect_targets, fleet_command, install, uninstall
+from .setup import TARGETS, detect_targets, fleet_command, install, uninstall
 from .sshcmd import build_argv, resolve_command
 from .top import Schedule, render_device, render_fleet
 from .view import Detail, device_view, fleet_view
@@ -974,7 +974,7 @@ def cmd_ssh(ctx: typer.Context, name: str):
 @app.command("setup")
 def cmd_setup(
     target: str = typer.Option("auto", "--target",
-                               help="claude | codex | all | auto (whatever is installed)"),
+                               help="claude | codex | hermes | all | auto (whatever is installed)"),
     project: bool = typer.Option(False, "--project",
                                  help="write into the current directory, not your home"),
     dry_run: bool = typer.Option(False, "--dry-run", help="show what would change; write nothing"),
@@ -993,12 +993,13 @@ def cmd_setup(
         # assumes the one whose layout is identical in both scopes.
         targets = ["claude"] if project else detect_targets(root)
     elif target == "all":
-        targets = ["claude", "codex"]
+        targets = list(TARGETS)
     else:
         targets = [target]
 
-    if unknown := [t for t in targets if t not in ("claude", "codex")]:
-        err.print(f"[red]Unknown target {unknown[0]!r}[/red]  (claude | codex | all | auto)")
+    if unknown := [t for t in targets if t not in TARGETS]:
+        err.print(f"[red]Unknown target {unknown[0]!r}[/red]  "
+                  f"({' | '.join(TARGETS)} | all | auto)")
         raise typer.Exit(2)
     if not targets:
         err.print("[yellow]No coding agent found.[/yellow]  Looked for ~/.claude and "
