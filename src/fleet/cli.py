@@ -557,8 +557,19 @@ def maybe_autosync() -> None:
         return
 
 
+def _show_version(value: bool):
+    if value:
+        from .setup import package_version
+        console.print(f"fleet {package_version()}")
+        raise typer.Exit()
+
+
 @app.callback()
-def _before_any_command(ctx: typer.Context):
+def _before_any_command(
+    ctx: typer.Context,
+    version: bool = typer.Option(None, "--version", callback=_show_version,
+                                 is_eager=True, help="show the installed version"),
+):
     # not for sync itself (it would recurse), nor for commands that must not reach the
     # network as a side effect of being run
     if ctx.invoked_subcommand not in ("sync", "setup", "paths", "install",

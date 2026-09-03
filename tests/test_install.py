@@ -52,7 +52,10 @@ def _sandbox_bin(tmp_path):
     uv.write_text(f'#!/bin/sh\necho "$@" >> {log}\n')
     uv.chmod(0o755)
     fleet = bin_dir / "fleet"          # the script ends with `fleet --version`
-    fleet.write_text('#!/bin/sh\necho "fleet 0.2.0"\n')
+    # rejects unknown options exactly as the real CLI does: a stub that accepts any
+    # argument cannot catch the installer verifying with a flag that does not exist.
+    fleet.write_text('#!/bin/sh\ncase "$1" in --version) echo "fleet 0.1.0";;'
+                     ' *) echo "No such option: $1" >&2; exit 2;; esac\n')
     fleet.chmod(0o755)
     spool = tmp_path / "crontab.txt"
     if not spool.exists():
@@ -257,4 +260,32 @@ def test_no_timer_is_installed_when_it_is_not_wanted(tmp_path):
 def test_a_device_without_cron_still_installs_successfully(tmp_path):
     """A missing crontab is a missing convenience, not a failed install."""
     result = _run(install_script(str(_origin(tmp_path)), timer_minutes=10), tmp_path)
+    assert result.returncode == 0, result.stderr
+
+
+def test_the_cli_supports_the_flag_the_installer_verifies_with():
+    """The install script ends by running `fleet --version` to prove the install works.
+    If the CLI does not accept that flag, every install reports failure after having
+    actually succeeded -- which is exactly what happened on the first real run."""
+    from typer.testing import CliRunner
+
+    from fleet.cli import app
+
+    result = CliRunner().invoke(app, ["--version"])
+    assert result.exit_code == 0, result.output
+    assert "fleet" in result.output.lower()
+
+
+def test_the_installer_fails_loudly_if_it_verifies_with_an_unsupported_flag(tmp_path):
+    """The stub now rejects unknown options the way the real CLI does. A stub that
+    accepts anything cannot catch an interface mismatch, and mine did not."""
+    bin_dir, _ = _sandbox_bin(tmp_path)
+    fleet = bin_dir / "fleet"
+    fleet.write_text('#!/bin/sh\ncase "$1" in --version) echo "fleet 0.1.0";;'
+                     ' *) echo "No such option: $1" >&2; exit 2;; esac\n')
+    fleet.chmod(0o755)
+    result = subprocess.run(
+        ["sh", "-c", install_script(str(_origin(tmp_path)), timer_minutes=0)],
+        capture_output=True, text=True, timeout=60,
+        env={"HOME": str(tmp_path), "PATH": f"{bin_dir}:/usr/bin:/bin"})
     assert result.returncode == 0, result.stderr
