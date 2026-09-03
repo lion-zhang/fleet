@@ -165,6 +165,28 @@ def control_dir() -> str | None:
     return d
 
 
+def remote_command(args: list[str]) -> str:
+    """What to hand ssh when the caller asked to run something, rather than get a shell.
+
+    A non-interactive ssh runs with a minimal PATH -- no ~/.local/bin -- so anything
+    installed by uv, pipx or cargo is invisible, fleet included. That is why
+    `fleet ssh box -- fleet ls` failed with "command not found" while `fleet sync`
+    worked: sync already wrapped its command this way.
+
+    The login shell covers hosts that set PATH from a profile, and the explicit export
+    covers hosts that set it from .bashrc, which a login shell does not read.
+
+    Arguments are joined with spaces and left for the far shell to parse, exactly as
+    OpenSSH itself joins them. Quoting each word instead would be safer in the abstract
+    and would break `fleet ssh box "fleet ls | head"`, which is how people actually use
+    it.
+    """
+    if not args:
+        return ""                           # no command: the user wants a login shell
+    inner = 'export PATH="$HOME/.local/bin:$PATH"; ' + " ".join(args)
+    return "sh -lc " + shlex.quote(inner)
+
+
 def build_argv(ep: Endpoint, *, connect_timeout: int = 8, multiplex: bool = True,
                remote: str = "sh -s", env: dict[str, str] | None = None) -> list[str]:
     argv = [

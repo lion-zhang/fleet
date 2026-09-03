@@ -31,7 +31,7 @@ from .probe.runner import (probe_env, probe_many, run_probe, run_probe_local,
                            run_probe_with_password)
 from . import secrets as sec
 from .setup import TARGETS, detect_targets, fleet_command, install, uninstall
-from .sshcmd import build_argv, resolve_command
+from .sshcmd import build_argv, remote_command, resolve_command
 from .top import Schedule, render_device, render_fleet
 from .view import Detail, device_view, fleet_view
 
@@ -983,7 +983,8 @@ def cmd_ssh(ctx: typer.Context, name: str):
         argv += ["-J", ep.jump]
     argv.append(f"{ep.user}@{ep.target}" if ep.user else ep.target)
     extra = [a for a in ctx.args if a != "--"]
-    argv += extra
+    if extra:
+        argv.append(remote_command(extra))
 
     password = stored_password(dev.name) if dev.auth_state == "needs_credentials" else None
     if password:
