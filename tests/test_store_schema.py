@@ -10,6 +10,8 @@ from __future__ import annotations
 
 import sqlite3
 
+import pytest
+
 from fleet import store
 from fleet.models import ProbeResult, Snapshot, Status
 
@@ -18,27 +20,50 @@ def _res(status=Status.OK, host="box"):
     return ProbeResult(status=status, snapshot=Snapshot(hostname=host), latency_ms=5)
 
 
-def test_an_old_cache_is_rebuilt_rather_than_raising(tmp_path):
-    """The v1 shape, as shipped. Opening it with the new code must not explode."""
-    db = tmp_path / "cache.db"
+V1 = """
+    CREATE TABLE device_state (
+      device_id TEXT PRIMARY KEY, status TEXT, error_class TEXT, error_detail TEXT,
+      endpoint_used TEXT, last_probe_at INTEGER, last_ok_at INTEGER, probe_ms INTEGER,
+      stderr_tail TEXT);
+    CREATE TABLE meta (key TEXT PRIMARY KEY, value TEXT);
+    INSERT INTO device_state (device_id, status) VALUES ('box', 'ok');
+    INSERT INTO meta (key, value) VALUES ('last_sync_at', '12345');
+"""
+
+
+def _v1_cache(db, *, stamped: int):
     old = sqlite3.connect(db)
-    old.executescript("""
-        CREATE TABLE device_state (
-          device_id TEXT PRIMARY KEY, status TEXT, error_class TEXT, error_detail TEXT,
-          endpoint_used TEXT, last_probe_at INTEGER, last_ok_at INTEGER, probe_ms INTEGER,
-          stderr_tail TEXT);
-        CREATE TABLE meta (key TEXT PRIMARY KEY, value TEXT);
-        INSERT INTO device_state (device_id, status) VALUES ('box', 'ok');
-        INSERT INTO meta (key, value) VALUES ('last_sync_at', '12345');
-    """)
-    old.execute("PRAGMA user_version=1")
+    old.executescript(V1)
+    old.execute(f"PRAGMA user_version={stamped}")
     old.commit()
     old.close()
+
+
+@pytest.mark.parametrize("stamped", [0, 1, 2])
+def test_an_old_cache_is_rebuilt_rather_than_raising(tmp_path, stamped):
+    """Three stamps, three ways this went wrong.
+
+    0 is what every database written before versioning existed reports -- and also what
+    a brand-new file reports, which is why "0 means fresh" skipped the rebuild on every
+    real install. 2 is the state those files were then left in: stamped current while
+    carrying the old columns, so no version check could ever repair them. 1 is the only
+    one the original test covered, and it never existed anywhere.
+    """
+    db = tmp_path / "cache.db"
+    _v1_cache(db, stamped=stamped)
 
     conn = store.connect(db)
     store.record(conn, "box", _res())
     assert store.latest(conn, "box")[0]["status"] == "ok"
     assert store.get_meta(conn, "last_sync_at") == "12345", "meta is not a cache"
+    conn.close()
+
+
+def test_a_brand_new_cache_is_not_mistaken_for_an_old_one(tmp_path):
+    """The other half of the ambiguity: version 0 with no tables is simply new."""
+    conn = store.connect(tmp_path / "cache.db")
+    store.record(conn, "box", _res())
+    assert store.latest(conn, "box")[0]["status"] == "ok"
     conn.close()
 
 

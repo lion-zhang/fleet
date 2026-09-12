@@ -52,14 +52,34 @@ def _migrate(conn: sqlite3.Connection) -> None:
     is excluded -- `last_sync_at` living there is the one durable thing here, and losing
     it would make every upgrade trigger an immediate sweep.
     """
-    have = conn.execute("PRAGMA user_version").fetchone()[0]
-    if have == SCHEMA_VERSION:
+    if conn.execute("PRAGMA user_version").fetchone()[0] == SCHEMA_VERSION \
+            and _shape_matches(conn):
         return
-    if have:                       # 0 means a fresh file, nothing to drop
-        for table in ("device_state", "snapshot", "event"):
-            conn.execute(f"DROP TABLE IF EXISTS {table}")
+    for table in ("device_state", "snapshot", "event"):
+        conn.execute(f"DROP TABLE IF EXISTS {table}")
     conn.execute(f"PRAGMA user_version={SCHEMA_VERSION}")
     conn.commit()
+
+
+def _shape_matches(conn: sqlite3.Connection) -> bool:
+    """Whether the tables really look like the current schema.
+
+    The version alone cannot be trusted, for two reasons that compound. Databases
+    written before versioning existed report 0 -- which is also what a brand-new file
+    reports -- so "0 means fresh, nothing to drop" silently skipped the rebuild on every
+    existing install and then stamped them as current. Those files now claim to be up to
+    date while carrying the old columns, and no version check can ever fix them.
+
+    Looking at the shape is self-healing regardless of what the stamp says, and costs one
+    pragma on a file we are already opening.
+    """
+    try:
+        cols = {row[1] for row in conn.execute("PRAGMA table_info(device_state)")}
+    except sqlite3.Error:
+        return False
+    if not cols:
+        return True            # nothing created yet; executescript is about to
+    return {"source", "probed_by"} <= cols
 
 
 def record(conn: sqlite3.Connection, device_id: str, res: ProbeResult, *,
