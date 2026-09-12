@@ -24,7 +24,7 @@ from . import store
 from .config import DB_PATH, INVENTORY_PATH, load_config
 from .edit import apply_edits
 from .install import build_install_argv, install_script
-from .keys import askpass_script, install_key, public_key
+from .keys import install_key, public_key
 from .models import Device, Kind, Status
 from .onboard import onboard
 from .probe.runner import (probe_env, probe_many, run_probe, run_probe_local,
@@ -993,18 +993,6 @@ def cmd_ssh(ctx: typer.Context, name: str):
     if extra:
         argv.append(remote_command(extra))
 
-    password = stored_password(dev.name) if dev.auth_state == "needs_credentials" else None
-    if password:
-        # SSH_ASKPASS is the only way to answer the prompt without standing between the
-        # user and their shell. subprocess rather than execvp so the helper is cleaned
-        # up afterwards; ssh still inherits this terminal either way.
-        import tempfile
-        with tempfile.TemporaryDirectory() as scratch:
-            helper = askpass_script(Path(scratch))
-            env = {**os.environ, "SSH_ASKPASS": str(helper),
-                   "SSH_ASKPASS_REQUIRE": "force", "FLEET_ASKPASS": password,
-                   "DISPLAY": os.environ.get("DISPLAY", ":0")}
-            raise typer.Exit(subprocess.run(argv, env=env).returncode)
     os.execvp("ssh", argv)      # replace this process; ssh owns the tty from here
 
 

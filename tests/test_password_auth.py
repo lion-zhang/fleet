@@ -1,23 +1,21 @@
 """Using a stored password to actually connect.
 
-`fleet secret set` stores one; this is the half that spends it. Two paths, because they
-have opposite constraints:
+`fleet secret set` stores one; this is the half that spends it. The probe is
+non-interactive and must come back as a normal ProbeResult, but its stdin is the pty
+carrying the password prompt, so the payload cannot be piped in and rides in argv instead.
 
-- the probe is non-interactive and must come back as a normal ProbeResult, but its stdin
-  is the pty carrying the password prompt, so the payload cannot be piped in;
-- `fleet ssh` is interactive and must hand the user a real terminal, so nothing may sit
-  between them and the shell once authentication is done.
+(The interactive `fleet ssh` half was an SSH_ASKPASS branch that could never execute --
+its guard was the same condition that had already exited two statements earlier -- and it
+was deleted along with its tests.)
 """
 
 from __future__ import annotations
 
-import stat
 import subprocess
 import sys
 
 import pytest
 
-from fleet.keys import askpass_script
 from fleet.probe.parse import parse_payload
 from fleet.probe.runner import first_marker, password_probe_command
 
@@ -64,26 +62,6 @@ def test_output_with_no_marker_at_all_is_left_for_the_parser_to_reject():
 
 
 # --------------------------------------------------------------- the interactive path
-
-def test_the_askpass_helper_hands_ssh_the_password(tmp_path):
-    """SSH_ASKPASS lets ssh get the password from us while the user keeps a real
-    terminal -- nothing sits between them and the shell."""
-    path = askpass_script(tmp_path)
-    out = subprocess.run([str(path)], capture_output=True, text=True,
-                         env={"FLEET_ASKPASS": "hunter2", "PATH": "/usr/bin:/bin"})
-    assert out.stdout.strip() == "hunter2"
-
-
-def test_the_askpass_helper_does_not_contain_the_password(tmp_path):
-    """It reads from the environment. Writing the secret into a file on disk would
-    outlive the connection and defeat the point of encrypting it at rest."""
-    path = askpass_script(tmp_path)
-    assert "hunter2" not in path.read_text()
-
-
-def test_the_askpass_helper_is_not_readable_by_other_users(tmp_path):
-    assert stat.S_IMODE(askpass_script(tmp_path).stat().st_mode) & 0o077 == 0
-
 
 # --------------------------------------------------------------- CLI wiring
 
