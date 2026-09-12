@@ -23,6 +23,16 @@ from ..sshcmd import IS_WINDOWS, Endpoint, build_argv
 from .parse import MissingSentinel, parse_payload
 
 PAYLOAD = Path(__file__).with_name("payload.sh")
+PAYLOAD_PS1 = Path(__file__).with_name("payload.ps1")
+
+# What cmd.exe says when handed `sh -s`. The host is up and the key worked; it
+# simply has no POSIX shell, so the same probe is retried in PowerShell.
+_NO_POSIX_SHELL = ("is not recognized as an internal or external command",
+                   "operable program or batch file")
+# What the classifier turns those into. Matched as well as the raw text, because
+# classification runs first and would otherwise replace the only signal the retry has --
+# which it did, silently, the first time this was wired up.
+WINDOWS_DETAIL = "host is Windows: no POSIX shell for the probe payload"
 
 # stderr signature -> status. Order matters: the first match wins.
 _ERROR_SIGNATURES: tuple[tuple[str, Status, str], ...] = (
@@ -44,9 +54,8 @@ _ERROR_SIGNATURES: tuple[tuple[str, Status, str], ...] = (
     # no POSIX shell. Without this the failure arrives as the tail of a Windows error
     # ("operable program or batch file.") which says nothing about what to do.
     ("is not recognized as an internal or external command", Status.PROBE_ERROR,
-     "host is Windows: no POSIX shell for the probe payload"),
-    ("operable program or batch file", Status.PROBE_ERROR,
-     "host is Windows: no POSIX shell for the probe payload"),
+     WINDOWS_DETAIL),
+    ("operable program or batch file", Status.PROBE_ERROR, WINDOWS_DETAIL),
 )
 
 
@@ -142,10 +151,47 @@ def run_probe_local(*, mode: str = "full", disk_paths: list[str] | None = None,
 def run_probe(ep: Endpoint, *, mode: str = "full", timeout: float = 20.0,
               connect_timeout: int = 8, multiplex: bool = True,
               disk_paths: list[str] | None = None) -> ProbeResult:
-    """Probe one endpoint. Never raises for a remote-side problem."""
-    payload = PAYLOAD.read_text()
-    argv = build_argv(ep, connect_timeout=connect_timeout, multiplex=multiplex,
-                      remote="sh -s", env=probe_env(mode, disk_paths))
+    """Probe one endpoint. Never raises for a remote-side problem.
+
+    A host whose shell is cmd.exe is retried in PowerShell. Detected rather than
+    configured: the answer is a property of the remote sshd's DefaultShell, which we
+    cannot know before asking and which the user should not have to declare. It costs a
+    second connection on Windows hosts only, and only the first time each probe runs.
+    """
+    res = _run_probe_once(ep, mode=mode, timeout=timeout, connect_timeout=connect_timeout,
+                          multiplex=multiplex, disk_paths=disk_paths)
+    if res.ok or not _looks_like_cmd_exe(res):
+        return res
+    return _run_probe_once(ep, mode=mode, timeout=timeout, connect_timeout=connect_timeout,
+                           multiplex=multiplex, disk_paths=disk_paths, windows=True)
+
+
+def _looks_like_cmd_exe(res: ProbeResult) -> bool:
+    haystack = f"{res.error_detail} {res.stderr_tail}".lower()
+    return (WINDOWS_DETAIL.lower() in haystack
+            or any(sig in haystack for sig in _NO_POSIX_SHELL))
+
+
+def _run_probe_once(ep: Endpoint, *, mode: str = "full", timeout: float = 20.0,
+                    connect_timeout: int = 8, multiplex: bool = True,
+                    disk_paths: list[str] | None = None,
+                    windows: bool = False) -> ProbeResult:
+    env = probe_env(mode, disk_paths)
+    if windows:
+        # PowerShell reads the script from stdin with a trailing `-`, the same shape as
+        # `sh -s`. The environment cannot ride the command line the same way: build_argv
+        # prefixes `KEY=value ` in POSIX style, and cmd.exe reads that as the name of a
+        # program to run -- producing the very "not recognized" error that sent us here,
+        # so the retry failed exactly like the attempt it was retrying. Set it inside the
+        # script instead, where PowerShell understands it.
+        prelude = "".join(f"$env:{k}='{v}'\n" for k, v in env.items())
+        payload = prelude + PAYLOAD_PS1.read_text()
+        argv = build_argv(ep, connect_timeout=connect_timeout, multiplex=multiplex,
+                          remote="powershell -NoProfile -Command -", env=None)
+    else:
+        payload = PAYLOAD.read_text()
+        argv = build_argv(ep, connect_timeout=connect_timeout, multiplex=multiplex,
+                          remote="sh -s", env=env)
     started = time.monotonic()
     popen_kw: dict = {"stdin": subprocess.PIPE, "stdout": subprocess.PIPE,
                       "stderr": subprocess.PIPE, "text": True}

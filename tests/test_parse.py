@@ -167,3 +167,47 @@ def test_a_windows_host_is_not_mistaken_for_an_auth_failure():
 
     status, _ = classify_stderr("operable program or batch file.\n")
     assert status is not Status.AUTH_FAILED
+
+
+def test_the_powershell_payload_speaks_the_same_protocol():
+    """One parser reads both payloads, so the wire format is the contract between them:
+    `#FLEET v1`, key=value, section markers, `#END rc=`."""
+    import pathlib
+
+    ps1 = (pathlib.Path(__file__).parent.parent / "src" / "fleet" / "probe"
+           / "payload.ps1").read_text()
+    for marker in ('"#FLEET v1"', '"#DISK mount|', '"#END rc=0"'):
+        assert marker in ps1, f"the Windows payload does not emit {marker}"
+    for key in ("host.hostname", "host.machine_id", "cpu.cores", "mem.total_kb"):
+        assert key in ps1, f"the Windows payload does not emit {key}"
+
+
+def test_the_windows_retry_recognises_its_own_classified_message():
+    """The retry matches on the detail the classifier produces, not only the raw cmd.exe
+    text -- classification runs first, so matching only the raw text meant the signal was
+    gone by the time anything looked for it."""
+    from fleet.models import ProbeResult, Status
+    from fleet.probe.runner import WINDOWS_DETAIL, _looks_like_cmd_exe
+
+    classified = ProbeResult(status=Status.PROBE_ERROR, error_detail=WINDOWS_DETAIL)
+    assert _looks_like_cmd_exe(classified)
+
+    raw = ProbeResult(status=Status.PROBE_ERROR,
+                      stderr_tail="operable program or batch file.")
+    assert _looks_like_cmd_exe(raw)
+
+    assert not _looks_like_cmd_exe(
+        ProbeResult(status=Status.TIMEOUT, error_detail="network timeout"))
+
+
+def test_the_windows_payload_does_not_use_posix_env_syntax():
+    """build_argv prefixes `KEY=value ` in POSIX style, and cmd.exe reads that as a
+    program name -- producing the very error that triggered the retry, so the retry
+    failed identically to the attempt it was retrying."""
+    import inspect
+
+    from fleet.probe import runner
+
+    src = inspect.getsource(runner._run_probe_once)
+    assert "env=None" in src, "the Windows branch must not pass env through build_argv"
+    assert "$env:" in src, "it sets the environment inside the script instead"
