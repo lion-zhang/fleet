@@ -91,7 +91,6 @@ def onboard(ssh_command: str, *, name: str | None = None, kind: str | None = Non
         name=name or suggest_name(snap, ep, taken),
         kind=classify_kind(snap, ep, override=kind),
         endpoints=[endpoint_dict(ep, via=ep.via)],
-        auth_state="needs_credentials" if res.status is Status.AUTH_FAILED else "ok",
         needs_review=not res.ok,
     )
     if dev.kind is Kind.SHARED:

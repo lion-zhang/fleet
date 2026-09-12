@@ -182,7 +182,6 @@ class Device:
     # that merely vanishes is indistinguishable from one the other machine has not seen
     # yet, and the next sync would resurrect it.
     deleted_at: int = 0
-    auth_state: str = "ok"                 # ok | needs_credentials
     needs_review: bool = False
     added_at: int = field(default_factory=lambda: int(time.time()))
     # when this record last changed. added_at cannot serve: it says when the device was

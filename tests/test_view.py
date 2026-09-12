@@ -8,7 +8,7 @@ import pathlib
 
 from fleet.models import Device, Kind
 from fleet.probe.parse import parse_payload
-from fleet.view import Detail, connect_view, device_view, fleet_view
+from fleet.view import Detail, auth_of, connect_view, device_view, fleet_view
 
 FIX = pathlib.Path(__file__).parent / "fixtures" / "probe"
 
@@ -25,6 +25,7 @@ def make(name="gpu-box", kind=Kind.PERMANENT, **kw) -> Device:
 
 STATE_OK = {"status": "ok", "last_probe_at": 10**9, "last_ok_at": 10**9,
             "error_class": "", "error_detail": ""}
+STATE_AUTH_FAILED = {**STATE_OK, "status": "auth_failed"}
 
 
 # ------------------------------------------------------------------ the headline case
@@ -98,15 +99,26 @@ def test_busy_rental_is_not_flagged():
     assert not any("costing money" in a for a in v["alerts"])
 
 
+def test_auth_is_recomputed_rather_than_remembered():
+    """`auth_state` was a stored conclusion that drifted in both directions: nothing
+    moved it back to ok after a good probe, and nothing moved it to needs_credentials
+    after a later failure. It therefore disagreed with the cached probe status, which is
+    the thing the retry path actually consulted."""
+    d = make("ds720")
+    assert auth_of(d, STATE_AUTH_FAILED) == "needs_key"
+    assert auth_of(d, STATE_OK) == "ok", "a good probe clears it"
+    assert auth_of(d, None) == "ok", "never probed is not the same as known broken"
+
+
 # ------------------------------------------------------------------ the security boundary
 def test_connect_view_never_returns_a_password():
     """Anything returned here lands in an agent transcript and is replayed forever."""
-    d = make("ds720", auth_state="needs_credentials")
-    c = connect_view(d)
+    d = make("ds720")
+    c = connect_view(d, STATE_AUTH_FAILED)
     assert c["ssh_command"] is None
     assert c["secret_ref"] == "fleet://secret/ds720"
     assert "fleet ssh ds720" in c["hint"]
-    blob = json.dumps(device_view(d, STATE_OK, None, Detail.FULL)).lower()
+    blob = json.dumps(device_view(d, STATE_AUTH_FAILED, None, Detail.FULL)).lower()
     for banned in ("password", "passphrase", "secret_value", "hunter"):
         assert f'"{banned}":' not in blob
 

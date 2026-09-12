@@ -68,12 +68,29 @@ def _roomiest(snap: dict | None) -> dict | None:
     return max(disks, key=lambda d: d["free_gb"]) if disks else None
 
 
+def auth_of(dev: Device, state: dict | None) -> str:
+    """Whether key auth works here. Derived, never stored.
+
+    This used to be a `Device.auth_state` field, set once at onboarding and cleared only
+    by a successful key install. Nothing moved it back to "ok" after a good probe and
+    nothing moved it to "needs_credentials" after a later failure, so it drifted away
+    from the truth in both directions and routinely disagreed with the cached probe
+    status -- which is why the password retry keyed off the probe and ignored the field.
+    A value with two sources that disagree is worse than one that is recomputed.
+
+    A device nobody has probed yet reads "ok": "we have no reason to think this will
+    fail" is the right default, and it is what the field defaulted to anyway.
+    """
+    if state and state.get("status") == Status.AUTH_FAILED.value:
+        return "needs_key"
+    return "ok"
+
+
 def _alerts(dev: Device, snap: dict | None, state: dict | None) -> list[str]:
     out: list[str] = []
-    if dev.auth_state == "needs_credentials":
-        out.append("no working credentials -- run `fleet key install` or add a password")
-    if state and state.get("status") == Status.AUTH_FAILED.value:
-        out.append("host is UP but rejected our credentials (this is not 'offline')")
+    if auth_of(dev, state) == "needs_key":
+        out.append("host is UP but rejected our key (this is not 'offline') -- "
+                   "run `fleet key install`")
     if snap:
         for g in snap.get("gpus", []):
             if _gpu_view(g)["unattributed_mib"] >= 256:
@@ -175,7 +192,7 @@ def device_view(dev: Device, state: dict | None, snap: dict | None,
             "services_detail": (snap or {}).get("services", []),
             "endpoints": [{k: v for k, v in e.items() if k != "identity"}
                           for e in dev.endpoints],
-            "connect": connect_view(dev),
+            "connect": connect_view(dev, state),
             "probe_policy": dev.probe_policy,
             "provider": dev.provider,
             "cost": dev.cost,
@@ -183,7 +200,7 @@ def device_view(dev: Device, state: dict | None, snap: dict | None,
     return out
 
 
-def connect_view(dev: Device) -> dict[str, Any]:
+def connect_view(dev: Device, state: dict | None = None) -> dict[str, Any]:
     """How to reach this device -- NEVER the secret itself.
 
     Anything returned here can land in an agent transcript, be persisted to disk, and be
@@ -196,7 +213,7 @@ def connect_view(dev: Device) -> dict[str, Any]:
     if not eps:
         return {"ssh_command": None, "auth": "none", "hint": "no endpoint recorded"}
     best = eps[0]
-    if dev.auth_state == "needs_credentials":
+    if auth_of(dev, state) == "needs_key":
         return {"ssh_command": None, "auth": "password", "user": best.user, "port": best.port,
                 "secret_ref": f"fleet://secret/{dev.name}",
                 "hint": f"No working key for this host. Run `fleet ssh {dev.name}` for "

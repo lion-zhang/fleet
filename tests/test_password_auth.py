@@ -84,7 +84,6 @@ def _pw_device(**kw):
     from fleet.models import Device, Kind
 
     return Device(id="net:1.2.3.4:22", name="pwbox", kind=Kind.RENTAL,
-                  auth_state="needs_credentials",
                   endpoints=[{"target": "1.2.3.4", "user": "root", "port": 22}], **kw)
 
 

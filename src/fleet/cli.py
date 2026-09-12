@@ -34,7 +34,7 @@ from .setup import TARGETS, detect_targets, fleet_command, install, uninstall
 from .sshcmd import build_argv, remote_command, resolve_command
 from .top import (Schedule, device_lines, disk_cell, gpu_cells_compact,
                   name_cell, render_device, render_fleet)
-from .view import Detail, device_view, fleet_view
+from .view import Detail, auth_of, device_view, fleet_view
 
 app = typer.Typer(
     add_completion=False, no_args_is_help=True, rich_markup_mode="rich",
@@ -338,7 +338,16 @@ def _install_key(dev, *, quiet: bool = False) -> bool:
     finally:
         password = ""                      # not security, just hygiene: drop it promptly
     if ok:
-        dev.auth_state = "ok"
+        # Re-probe rather than recording a verdict: auth is derived from the last probe
+        # now, so without this the device keeps reporting needs_key until someone runs
+        # `fleet refresh`. It also proves the key actually works -- an append that
+        # succeeds is not the same as a key sshd will accept.
+        conn = store.connect()
+        try:
+            store.record(conn, dev.id, run_probe(ep, mode=dev.probe_mode,
+                                                 disk_paths=dev.disk_paths))
+        finally:
+            conn.close()
         console.print(f"[green]✓[/green] key installed on {dev.name}; password discarded.")
     else:
         err.print(f"[red]Could not install the key.[/red]\n{output.strip()[-400:]}")
@@ -359,7 +368,6 @@ def cmd_key_install(name: str):
     if not _install_key(dev):
         raise typer.Exit(2)
     inv.save(devices)
-    console.print(f"  [dim]run `fleet refresh {dev.name}` to confirm.[/dim]")
 
 
 @app.command("edit")
@@ -975,9 +983,13 @@ def cmd_ssh(ctx: typer.Context, name: str):
         err.print(f"[red]{dev.name} has no endpoint recorded[/red]")
         raise typer.Exit(1)
     ep = eps[0]
-    if dev.auth_state == "needs_credentials":
-        err.print(f"[yellow]{dev.name} has no working key.[/yellow] Password auth is not "
-                  "implemented yet (v0.4). Install your key instead:")
+    conn = store.connect()
+    try:
+        cached, _ = store.latest(conn, dev.id)
+    finally:
+        conn.close()
+    if auth_of(dev, cached) == "needs_key":
+        err.print(f"[yellow]{dev.name} rejected our key.[/yellow] Install one:")
         err.print(f"  [bold]ssh-copy-id -i ~/.ssh/id_ed25519.pub "
                   f"{ep.user}@{ep.target}[/bold]" + (f" -p {ep.port}" if ep.port != 22 else ""))
         raise typer.Exit(2)
