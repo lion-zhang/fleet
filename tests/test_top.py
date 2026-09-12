@@ -346,7 +346,6 @@ def _cli(tmp_path, monkeypatch, devices):
     inv.save(devices, path)
     monkeypatch.setattr(inv, "INVENTORY_PATH", path)
     monkeypatch.setattr(store, "DB_PATH", tmp_path / "cache.db")
-    monkeypatch.setattr(cli, "maybe_autosync", lambda: None)
     monkeypatch.setattr(cli, "probe_many", lambda jobs, **kw: {})
     return CliRunner()
 

@@ -305,79 +305,6 @@ def test_a_merge_that_produces_two_centers_keeps_only_the_newer(tmp_path):
 
 
 # --------------------------------------------------------------- automatic sync
-
-def _auto_env(tmp_path, monkeypatch, devices, **cfg):
-    from fleet import cli, inventory as inv, store
-
-    path = tmp_path / "inventory.yaml"
-    inv.save(devices, path)
-    monkeypatch.setattr(inv, "INVENTORY_PATH", path)
-    monkeypatch.setattr(store, "DB_PATH", tmp_path / "cache.db")
-    monkeypatch.setattr(cli, "local_device_id", lambda: "linux:machine-id:me")
-    settings = {"auto_sync": True, "sync_ttl_s": 300, **cfg}
-    monkeypatch.setattr(cli, "load_config", lambda: type("C", (), {
-        "get": staticmethod(lambda k: settings.get(k))})())
-    spawned = []
-    monkeypatch.setattr(cli.subprocess, "Popen", lambda *a, **k: spawned.append(a))
-    return spawned
-
-
-def test_a_stale_fleet_syncs_itself_without_being_asked(tmp_path, monkeypatch):
-    from fleet import cli
-
-    spawned = _auto_env(tmp_path, monkeypatch, [_dev("hub", role="center")])
-    cli.maybe_autosync()
-    assert spawned, "a stale inventory should sync on its own"
-
-
-def test_a_recently_synced_fleet_does_not_sync_again(tmp_path, monkeypatch):
-    """Otherwise every command pays for an SSH round trip."""
-    from fleet import cli
-
-    spawned = _auto_env(tmp_path, monkeypatch, [_dev("hub", role="center")])
-    cli.maybe_autosync()
-    spawned.clear()
-    cli.maybe_autosync()
-    assert not spawned
-
-
-def test_the_center_does_not_sync_to_itself(tmp_path, monkeypatch):
-    from fleet import cli
-
-    spawned = _auto_env(tmp_path, monkeypatch,
-                        [_dev("me", id="linux:machine-id:me", role="center")])
-    cli.maybe_autosync()
-    assert not spawned
-
-
-def test_a_fleet_with_no_center_does_not_try(tmp_path, monkeypatch):
-    from fleet import cli
-
-    spawned = _auto_env(tmp_path, monkeypatch, [_dev("plain")])
-    cli.maybe_autosync()
-    assert not spawned
-
-
-def test_auto_sync_can_be_switched_off(tmp_path, monkeypatch):
-    from fleet import cli
-
-    spawned = _auto_env(tmp_path, monkeypatch, [_dev("hub", role="center")],
-                        auto_sync=False)
-    cli.maybe_autosync()
-    assert not spawned
-
-
-def test_a_broken_auto_sync_never_breaks_the_command_you_ran(tmp_path, monkeypatch):
-    """It is a background convenience. `fleet ls` must still work with a dead center,
-    an unreadable config, or no network at all."""
-    from fleet import cli
-
-    _auto_env(tmp_path, monkeypatch, [_dev("hub", role="center")])
-    monkeypatch.setattr(cli.subprocess, "Popen",
-                        lambda *a, **k: (_ for _ in ()).throw(OSError("no")))
-    cli.maybe_autosync()          # must not raise
-
-
 # --------------------------------------------------------------- deletion
 
 def test_removing_a_device_leaves_a_tombstone_rather_than_a_hole(tmp_path):
@@ -524,7 +451,6 @@ def test_sync_does_not_erase_a_device_added_while_it_was_running(tmp_path, monke
     monkeypatch.setattr(inv, "INVENTORY_PATH", path)
     monkeypatch.setattr(store, "DB_PATH", tmp_path / "cache.db")
     monkeypatch.setattr(cli, "local_device_id", lambda: "linux:machine-id:laptop")
-    monkeypatch.setattr(cli, "maybe_autosync", lambda: None)
 
     def racing_center(ep, payload):
         """The center answers -- and `fleet add` commits while we are waiting."""
@@ -551,7 +477,6 @@ def test_the_center_does_not_erase_a_device_added_while_it_was_serving(tmp_path,
     inv.save([_dev("center-only")], path)
     monkeypatch.setattr(inv, "INVENTORY_PATH", path)
     monkeypatch.setattr(store, "DB_PATH", tmp_path / "cache.db")
-    monkeypatch.setattr(cli, "maybe_autosync", lambda: None)
 
     real_loads = inv.loads
 

@@ -76,7 +76,6 @@ def _cli(tmp_path, monkeypatch, dev):
     monkeypatch.setattr(store, "DB_PATH", tmp_path / "cache.db")
     monkeypatch.setattr(sec, "IDENTITY_PATH", tmp_path / "identity.age")
     monkeypatch.setattr(sec, "SECRETS_PATH", tmp_path / "secrets.age")
-    monkeypatch.setattr(cli, "maybe_autosync", lambda: None)
     return CliRunner(), path
 
 

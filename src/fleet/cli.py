@@ -456,9 +456,6 @@ def cmd_install(name: str,
                 role: str = typer.Option(None, "--role",
                                          help="none | center | backup "
                                               "(default: keep, or backup if unset)"),
-                timer_minutes: int = typer.Option(10, "--timer-minutes",
-                                                  help="how often the device syncs itself; "
-                                                       "0 to install no timer"),
                 forward_agent: bool = typer.Option(True, "--forward-agent/--no-forward-agent",
                                                    help="authenticate the clone as you, "
                                                         "leaving no credential on the device")):
@@ -488,7 +485,7 @@ def cmd_install(name: str,
 
     console.print(f"[dim]installing fleet on {dev.name} from {url} ({ref})[/dim]")
     code, output = run_installer(sorted(eps, key=lambda e: e.preference)[0],
-                                 install_script(url, ref=ref, timer_minutes=timer_minutes),
+                                 install_script(url, ref=ref),
                                  forward_agent=forward_agent)
     if code != 0:
         err.print(f"[red]Install failed[/red] (exit {code})\n{output.strip()[-600:]}")
@@ -549,39 +546,6 @@ def run_sync(ep, payload: str) -> tuple[int, str]:
     return p.returncode, (p.stdout if p.returncode == 0 else p.stdout + p.stderr)
 
 
-def maybe_autosync() -> None:
-    """Sync in the background when the last one has gone stale.
-
-    Mirrors how telemetry already works: a read refreshes what is stale rather than
-    making you remember to. It is spawned detached and its result is never waited on,
-    because sync is a convenience -- `fleet ls` must still work with a dead center, an
-    unreadable config, or no network at all. Every failure here is swallowed for that
-    reason.
-    """
-    try:
-        cfg = load_config()
-        if not cfg.get("auto_sync"):
-            return
-        center = next((d for d in inv.live(inv.load()) if d.role == "center"), None)
-        if center is None or (center.id and center.id == local_device_id()):
-            return
-        conn = store.connect()
-        try:
-            last = int(store.get_meta(conn, "last_sync_at") or 0)
-            if time.time() - last < int(cfg.get("sync_ttl_s")):
-                return
-            # stamped before spawning, so a slow or failing sync cannot make every
-            # subsequent command spawn another one
-            store.set_meta(conn, "last_sync_at", str(int(time.time())))
-        finally:
-            conn.close()
-        subprocess.Popen([fleet_command(), "sync"],
-                         stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
-                         start_new_session=True)
-    except Exception:
-        return
-
-
 def _show_version(value: bool):
     if value:
         from .setup import package_version
@@ -595,11 +559,14 @@ def _before_any_command(
     version: bool = typer.Option(None, "--version", callback=_show_version,
                                  is_eager=True, help="show the installed version"),
 ):
-    # not for sync itself (it would recurse), nor for commands that must not reach the
-    # network as a side effect of being run
-    if ctx.invoked_subcommand not in ("sync", "setup", "paths", "install",
-                                      "identity", "secret"):
-        maybe_autosync()
+    """Only `--version` lives here now.
+
+    This used to fire a detached background sync for nearly every command. That was
+    reasonable when sync only merged inventories, and is not once sync also installs and
+    removes keys: `fleet ls` would have quietly mutated credentials across the fleet
+    every few minutes, unsupervised, with every exception swallowed by design. Sync is
+    explicit now.
+    """
 
 
 @app.command("sync")

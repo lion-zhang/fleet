@@ -93,7 +93,6 @@ def test_the_current_machine_is_not_probed_over_ssh(tmp_path, monkeypatch):
     inv.save(devices, path)
     monkeypatch.setattr(inv, "INVENTORY_PATH", path)
     monkeypatch.setattr(store, "DB_PATH", tmp_path / "cache.db")
-    monkeypatch.setattr(cli, "maybe_autosync", lambda: None)
     monkeypatch.setattr(cli, "local_device_id", lambda: "linux:machine-id:me")
 
     over_ssh = []

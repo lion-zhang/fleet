@@ -37,7 +37,6 @@ def seeded(tmp_path, monkeypatch):
     inv.save(devices, path)
     monkeypatch.setattr(inv, "INVENTORY_PATH", path)
     monkeypatch.setattr(store, "DB_PATH", tmp_path / "cache.db")
-    monkeypatch.setattr(cli, "maybe_autosync", lambda: None)
     monkeypatch.setattr(cli, "probe_many", lambda jobs, **kw: {})
     monkeypatch.setenv("COLUMNS", "200")   # else rich truncates names to "macos-lap…"
 

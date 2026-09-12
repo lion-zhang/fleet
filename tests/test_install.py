@@ -40,10 +40,10 @@ def _origin(tmp_path):
 def _sandbox_bin(tmp_path):
     """A PATH containing stubs for every command the installer shells out to.
 
-    crontab is stubbed unconditionally, not just in the timer tests: install_script
-    defaults to timer_minutes=10, so any test that forgets would run the real crontab
-    and edit the machine's own schedule. A test that escapes its sandbox is a bug in
-    the test, and this one did exactly that.
+    crontab is stubbed unconditionally, not just in the cron tests: install_script
+    always touches the table -- it removes the entry earlier versions left -- so any
+    test that forgets would edit the machine's own schedule. A test that escapes its
+    sandbox is a bug in the test, and this one did exactly that.
     """
     bin_dir = tmp_path / "bin"
     bin_dir.mkdir(exist_ok=True)
@@ -226,40 +226,34 @@ cat > {spool}
 ''')
     ct.chmod(0o755)
     return spool
-
-
-def test_an_idle_broker_gets_a_timer_so_it_syncs_without_anyone_logging_in(tmp_path):
-    """Opportunistic sync only fires when a command runs. A backup node may go weeks
-    without one, and a replica that stopped replicating is worse than none."""
-    spool = _fake_crontab(tmp_path)
-    _run(install_script(str(_origin(tmp_path)), timer_minutes=10), tmp_path)
-    assert "fleet sync" in spool.read_text()
-
-
-def test_reinstalling_does_not_stack_up_timers(tmp_path):
-    spool = _fake_crontab(tmp_path)
-    origin = _origin(tmp_path)
-    _run(install_script(str(origin), timer_minutes=10), tmp_path)
-    _run(install_script(str(origin), timer_minutes=10), tmp_path)
-    assert spool.read_text().count("fleet sync") == 1
-
-
-def test_the_timer_leaves_the_users_own_cron_entries_alone(tmp_path):
+def test_removing_our_timer_leaves_the_users_own_cron_entries_alone(tmp_path):
     spool = _fake_crontab(tmp_path)
     spool.write_text("0 3 * * * /usr/local/bin/backup.sh\n")
-    _run(install_script(str(_origin(tmp_path)), timer_minutes=10), tmp_path)
+    _run(install_script(str(_origin(tmp_path))), tmp_path)
     assert "backup.sh" in spool.read_text()
 
 
-def test_no_timer_is_installed_when_it_is_not_wanted(tmp_path):
+def test_the_old_sync_timer_is_removed(tmp_path):
+    """It dialled the center, and nothing connects to the center now, so it could only
+    fail silently every ten minutes forever."""
     spool = _fake_crontab(tmp_path)
-    _run(install_script(str(_origin(tmp_path)), timer_minutes=0), tmp_path)
+    spool.write_text('0 3 * * * /usr/local/bin/backup.sh\n'
+                     '*/10 * * * * PATH="$HOME/.local/bin:$PATH" fleet sync # fleet-sync\n')
+    _run(install_script(str(_origin(tmp_path))), tmp_path)
+    out = spool.read_text()
+    assert "fleet sync" not in out
+    assert "backup.sh" in out
+
+
+def test_no_timer_is_installed(tmp_path):
+    spool = _fake_crontab(tmp_path)
+    _run(install_script(str(_origin(tmp_path))), tmp_path)
     assert "fleet sync" not in spool.read_text()
 
 
 def test_a_device_without_cron_still_installs_successfully(tmp_path):
     """A missing crontab is a missing convenience, not a failed install."""
-    result = _run(install_script(str(_origin(tmp_path)), timer_minutes=10), tmp_path)
+    result = _run(install_script(str(_origin(tmp_path))), tmp_path)
     assert result.returncode == 0, result.stderr
 
 
@@ -285,7 +279,7 @@ def test_the_installer_fails_loudly_if_it_verifies_with_an_unsupported_flag(tmp_
                      ' *) echo "No such option: $1" >&2; exit 2;; esac\n')
     fleet.chmod(0o755)
     result = subprocess.run(
-        ["sh", "-c", install_script(str(_origin(tmp_path)), timer_minutes=0)],
+        ["sh", "-c", install_script(str(_origin(tmp_path)))],
         capture_output=True, text=True, timeout=60,
         env={"HOME": str(tmp_path), "PATH": f"{bin_dir}:/usr/bin:/bin"})
     assert result.returncode == 0, result.stderr

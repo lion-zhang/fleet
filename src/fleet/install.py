@@ -19,18 +19,16 @@ from .sshcmd import Endpoint
 INSTALL_DIR = "$HOME/.local/share/fleet"
 
 
-def install_script(repo: str, *, ref: str = "main", timer_minutes: int = 10) -> str:
+def install_script(repo: str, *, ref: str = "main") -> str:
     """The sh run on the device. Idempotent: `fleet install` doubles as `fleet update`.
 
     uv is fetched when missing because it also solves the Python problem -- fleet needs
     3.12 and most servers ship something older, and uv will fetch its own interpreter
     rather than requiring one to be present.
 
-    A cron entry keeps an idle broker syncing. Opportunistic sync only fires when a
-    command runs, and a backup node may go weeks without one -- a replica that quietly
-    stopped replicating is worse than no replica, because you would still count on it.
-    cron rather than a systemd user unit: it is present on far more servers and needs no
-    lingering enabled to run without a login session. `timer_minutes=0` skips it.
+    Earlier versions left a cron entry here so an idle broker kept syncing itself. Sync
+    is center-initiated now -- the center dials out and nothing connects to it -- so that
+    entry can only fail, silently, forever. Installing removes it.
     """
     return f"""set -e
 REPO={shlex.quote(repo)}
@@ -54,27 +52,24 @@ fi
 
 uv tool install --force --quiet "$DIR"
 PATH="$HOME/.local/bin:$PATH" fleet --version
-{_timer_block(timer_minutes)}"""
+{_drop_timer_block()}"""
 
 
-def _timer_block(minutes: int) -> str:
-    """Idempotent cron entry. Filtered by a marker comment so re-installing replaces our
-    line and leaves every other entry the user has untouched."""
-    if minutes <= 0:
-        return ""
+def _drop_timer_block() -> str:
+    """Remove the cron entry earlier versions installed.
+
+    It ran `fleet sync` on a timer, which dialled the center. Sync is center-initiated
+    now -- nothing connects to the center at all -- so the entry can only fail, silently,
+    every ten minutes forever. Filtered by the same marker it was written with, so the
+    user's own entries are untouched.
+    """
     marker = "# fleet-sync"
-    line = (f'*/{minutes} * * * * PATH="$HOME/.local/bin:$PATH" '
-            f'fleet sync >/dev/null 2>&1 {marker}')
-    # Read the existing table into a variable BEFORE writing. Piping `crontab -l`
-    # straight into `crontab -` runs both ends concurrently, so the writer can truncate
-    # the table before the reader has seen it -- and the user's own entries vanish.
+    # Read before writing: piping `crontab -l` straight into `crontab -` runs both ends
+    # concurrently, and the writer can truncate the table before the reader has seen it.
     return f"""
 if command -v crontab >/dev/null 2>&1; then
-  fleet_cron_existing=$(crontab -l 2>/dev/null | grep -v {shlex.quote(marker)} || true)
-  {{
-    if [ -n "$fleet_cron_existing" ]; then printf '%s\\n' "$fleet_cron_existing"; fi
-    echo {shlex.quote(line)}
-  }} | crontab - || true
+  fleet_cron_rest=$(crontab -l 2>/dev/null | grep -v {shlex.quote(marker)} || true)
+  printf '%s\\n' "$fleet_cron_rest" | crontab - || true
 fi
 """
 
