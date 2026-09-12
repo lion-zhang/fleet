@@ -31,6 +31,16 @@ def _lock(path: Path) -> FileLock:
     return FileLock(str(path) + ".lock", timeout=10)
 
 
+def _via(raw: str) -> str:
+    """Normalise the route kind, accepting the pre-rename spelling.
+
+    `via` used to name a vendor. Inventories written then are on disk now, and reading
+    one of those routes as direct would let `edit` overwrite the single address that
+    never moves with a public IP that does.
+    """
+    return "mesh" if (raw or "") == "tailscale" else (raw or "")
+
+
 def endpoints_of(dev: Device) -> list[Endpoint]:
     out: list[Endpoint] = []
     for i, e in enumerate(dev.endpoints):
@@ -38,7 +48,7 @@ def endpoints_of(dev: Device) -> list[Endpoint]:
             target=e.get("target", ""), user=e.get("user", ""),
             port=int(e.get("port", 22) or 22), identity=os.path.expanduser(e.get("identity", "") or ""),
             jump=e.get("jump", "") or "", name=e.get("name", f"ep{i}"),
-            preference=int(e.get("preference", 10)), via=e.get("via", "") or "",
+            preference=int(e.get("preference", 10)), via=_via(e.get("via", "")),
         ))
     return out
 

@@ -21,7 +21,7 @@ from rich.text import Text
 
 from . import inventory as inv
 from . import store
-from .config import DB_PATH, INVENTORY_PATH, load_config
+from .config import DB_PATH, FLEET_KEY, INVENTORY_PATH, load_config
 from .edit import apply_edits
 from .install import build_install_argv, install_script
 from .keys import install_key, public_key
@@ -990,10 +990,13 @@ def cmd_ssh(ctx: typer.Context, name: str):
         conn.close()
     if auth_of(dev, cached) == "needs_key":
         err.print(f"[yellow]{dev.name} rejected our key.[/yellow] Install one:")
-        err.print(f"  [bold]ssh-copy-id -i ~/.ssh/id_ed25519.pub "
-                  f"{ep.user}@{ep.target}[/bold]" + (f" -p {ep.port}" if ep.port != 22 else ""))
+        err.print(f"  [bold]fleet key install {dev.name}[/bold]")
         raise typer.Exit(2)
     argv = ["ssh"]
+    # The fleet key, or `fleet ssh` connects with a personal key that fleet no longer
+    # installs anywhere -- and this is the most-used command in the tool.
+    if FLEET_KEY.exists():
+        argv += ["-i", str(FLEET_KEY)]
     if ep.port and ep.port != 22:
         argv += ["-p", str(ep.port)]
     if ep.identity:

@@ -106,6 +106,19 @@ def test_a_half_written_pair_does_not_wedge_forever(tmp_path):
     assert pub.startswith("ssh-ed25519 ")
 
 
+def test_the_first_dial_lets_the_agent_answer():
+    """IdentitiesOnly=yes means ssh offers only what we name, so it never offers an
+    agent key. The commonest way into a fresh cloud VM is exactly such a key, and
+    probing with IdentitiesOnly would report AUTH_FAILED and send us asking for a
+    password the host does not even accept."""
+    from fleet.sshcmd import build_argv, build_enroll_argv
+
+    ep = Endpoint(target="oracle", user="ubuntu")
+    assert "IdentitiesOnly=yes" in build_argv(ep), "steady state still pins identities"
+    assert "IdentitiesOnly=yes" not in build_enroll_argv(ep)
+    assert "BatchMode=yes" in build_enroll_argv(ep), "still never prompts"
+
+
 def test_a_jump_host_device_can_still_be_bootstrapped():
     """build_password_argv dropped -J, so a device behind a bastion could not have a key
     installed at all. -i stays dropped: it is meaningless under PubkeyAuthentication=no.

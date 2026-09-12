@@ -189,6 +189,33 @@ def remote_command(args: list[str]) -> str:
     return "sh -lc " + shlex.quote(inner)
 
 
+def build_enroll_argv(ep: Endpoint, *, connect_timeout: int = 8) -> list[str]:
+    """The *first* dial at a host, before it knows our key. Deliberately permissive.
+
+    `build_argv` sets IdentitiesOnly=yes, which means ssh offers only the identities
+    named on the command line -- and therefore **never offers an agent key**. That is
+    right for the steady state (five default identities trip MaxAuthTries on strict
+    servers) and exactly wrong here: the most common way into a fresh cloud VM is a key
+    that lives only in your agent. Probing such a host with IdentitiesOnly would report
+    AUTH_FAILED and send us asking for a password that does not exist.
+
+    So this one omits it, and lets the agent and ~/.ssh/config answer. Once the fleet key
+    is installed, every later connection goes back through `build_argv`.
+    """
+    argv = ["ssh", "-o", "BatchMode=yes", "-o", f"ConnectTimeout={connect_timeout}",
+            "-o", "StrictHostKeyChecking=accept-new"]
+    if ep.identity:
+        argv += ["-i", ep.identity]
+    if FLEET_KEY.exists():
+        argv += ["-i", str(FLEET_KEY)]
+    if ep.port and ep.port != 22:
+        argv += ["-p", str(ep.port)]
+    if ep.jump:
+        argv += ["-J", ep.jump]
+    argv.append(f"{ep.user}@{ep.target}" if ep.user else ep.target)
+    return argv
+
+
 def build_argv(ep: Endpoint, *, connect_timeout: int = 8, multiplex: bool = True,
                remote: str = "sh -s", env: dict[str, str] | None = None) -> list[str]:
     argv = [
