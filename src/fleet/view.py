@@ -103,6 +103,7 @@ def device_view(dev: Device, state: dict | None, snap: dict | None,
     mem_total = (snap or {}).get("mem_total_kb")
     mem_avail = (snap or {}).get("mem_avail_kb")
     roomiest = _roomiest(snap)
+    disks = [_disk_view(d) for d in (snap or {}).get("disks", [])]
 
     out: dict[str, Any] = {
         "name": dev.name,
@@ -123,9 +124,15 @@ def device_view(dev: Device, state: dict | None, snap: dict | None,
         "cpu_cores": (snap or {}).get("cpu_cores"),
         "ram_total_gb": round(mem_total / 1048576, 1) if mem_total else None,
         "ram_free_gb": round(mem_avail / 1048576, 1) if mem_avail else None,
-        # one number for list views; the per-mount breakdown is a full-view detail
+        # the roomiest mount stays, as the one a job should be pointed at
         "disk_free_gb": roomiest["free_gb"] if roomiest else None,
         "disk_mount": roomiest["mount"] if roomiest else None,
+        # ...but every mount is listed beside it, because reducing to one number hid a
+        # rental's nearly full / behind its big /workspace -- and the mount that ends a
+        # long job is precisely the hidden one. Trimmed to mount+free at COMPACT, the
+        # way `gpus` is, so `fleet ls --json` stays small for the agents reading it.
+        "disks": ([{"mount": d["mount"], "free_gb": d["free_gb"]} for d in disks]
+                  if detail is Detail.COMPACT else disks),
         "usd_per_hour": (dev.cost or {}).get("usd_per_hour"),
         "services": [{"name": s.get("name"), "kind": s.get("kind"), "port": s.get("port"),
                       "healthy": s.get("healthy")}
@@ -160,7 +167,6 @@ def device_view(dev: Device, state: dict | None, snap: dict | None,
             "load": (snap or {}).get("load"),
             "is_container": (snap or {}).get("is_container"),
             "gpu_driver": (snap or {}).get("gpu_driver"),
-            "disks": [_disk_view(d) for d in (snap or {}).get("disks", [])],
             # top compute processes only; display apps collapse to one number because a
             # single Chromium cmdline is ~1 KB and would flood an agent's context.
             "processes": sorted(compute, key=lambda p: -p.get("vram_mib", 0))[:8],

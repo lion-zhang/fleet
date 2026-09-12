@@ -122,7 +122,7 @@ def test_full_view_does_not_leak_identity_file_paths_into_endpoints():
 def test_compact_view_omits_process_lists():
     """Process lists are the main context-blowout risk; list views must not carry them."""
     v = device_view(make(), STATE_OK, snap_of("gpu-box"), Detail.COMPACT)
-    assert "processes" not in v and "top_cpu" not in v and "disks" not in v
+    assert "processes" not in v and "top_cpu" not in v
 
 
 def test_view_is_json_serialisable_for_every_fixture():
@@ -151,11 +151,17 @@ def test_fleet_summary_counts_and_burn_rate():
 
 
 # ------------------------------------------------------------------ disk
-def test_compact_view_carries_free_space_as_a_scalar():
-    """`fleet ls` needs one number per device. The list of mounts is a full-view detail."""
+def test_compact_view_keeps_its_headline_number_and_lists_the_mounts_behind_it():
+    """`fleet ls` still gets one number per device -- but not *only* that number.
+
+    Reducing to the roomiest mount alone hid a rental's nearly full / behind its big
+    /workspace, which is the mount that actually ends a long job. Each entry is trimmed
+    to mount+free, the way `gpus` is, so the payload an agent reads stays small.
+    """
     v = device_view(make(), STATE_OK, snap_of("gpu-box"), Detail.COMPACT)
     assert v["disk_free_gb"] == 1647.5
-    assert "disks" not in v
+    assert v["disks"]
+    assert all(set(d) == {"mount", "free_gb"} for d in v["disks"])
 
 
 def test_the_compact_number_names_the_mount_it_came_from():

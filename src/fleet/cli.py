@@ -32,7 +32,8 @@ from .probe.runner import (probe_env, probe_many, run_probe, run_probe_local,
 from . import secrets as sec
 from .setup import TARGETS, detect_targets, fleet_command, install, uninstall
 from .sshcmd import build_argv, remote_command, resolve_command
-from .top import Schedule, render_device, render_fleet
+from .top import (Schedule, device_lines, disk_cell, gpu_cells_compact,
+                  name_cell, render_device, render_fleet)
 from .view import Detail, device_view, fleet_view
 
 app = typer.Typer(
@@ -157,37 +158,33 @@ def cmd_ls(json_out: bool = typer.Option(False, "--json"),
         raise typer.Exit(0)
 
     t = Table(box=None, pad_edge=False, header_style="bold")
+    # Right-justifying a multi-line cell pads its short lines from the left and comes
+    # out ragged, so these two flip left only when some device really has more than one
+    # card. A fleet of single-GPU boxes renders exactly as it always did.
+    tall = any(device_lines(r) > 1 for r in rows)
     for col, kw in (("", {}), ("NAME", {"no_wrap": True}), ("KIND", {"no_wrap": True}),
-                    ("GPU", {"no_wrap": True}),
-                    ("VRAM FREE", {"justify": "right", "no_wrap": True}),
+                    ("GPU", {"no_wrap": True, "overflow": "ellipsis",
+                             "max_width": 24}),
+                    ("VRAM FREE", {"justify": "left" if tall else "right",
+                                   "no_wrap": True}),
                     ("CPU", {"justify": "right", "no_wrap": True}),
                     ("RAM FREE", {"justify": "right", "no_wrap": True}),
-                    ("DISK FREE", {"justify": "right", "no_wrap": True}),
+                    ("DISK FREE", {"justify": "left" if tall else "right",
+                                   "no_wrap": True}),
                     ("$/HR", {"justify": "right", "no_wrap": True}),
                     ("AGE", {"justify": "right", "no_wrap": True}),
                     ("NOTE", {"no_wrap": True, "overflow": "ellipsis", "max_width": 42})):
         t.add_column(col, **kw)
     for r in rows:
-        gpu = r["gpus"][0]["name"].replace("NVIDIA GeForce ", "") if r["gpus"] else "-"
-        if r["gpu_count"] > 1:
-            gpu += f" x{r['gpu_count']}"
-        vram = f"{r['free_vram_mib']/1024:.1f}G" if r["free_vram_mib"] else "-"
-        if r["gpus"]:
-            vram += " [red]busy[/red]" if any(g["busy"] for g in r["gpus"]) else " [green]idle[/green]"
+        gpu, vram = gpu_cells_compact(r)
         note = r.get("error", {}).get("detail", "") if r["status"] != "ok" else (
             r["alerts"][0] if r["alerts"] else "")
         age = f"{r['telemetry_age_s']}s" if r["telemetry_age_s"] is not None else "-"
-        # name the mount unless it is root: "1648G" alone is misleading on a rental
-        # whose / is a small overlay and whose real storage lives elsewhere.
-        disk = "-" if r["disk_free_gb"] is None else (
-            f"{r['disk_free_gb']:.0f}G" + ("" if r["disk_mount"] == "/"
-                                           else f" [dim]{r['disk_mount']}[/dim]"))
-        name = f"[bold]{r['name']}[/bold]" + (" [dim]←[/dim]" if r.get("is_self") else "")
-        t.add_row(_DOT.get(r["status"], "?"), name,
+        t.add_row(_DOT.get(r["status"], "?"), name_cell(r),
                   r["kind"], gpu, vram,
                   str(r["cpu_cores"] or "-"),
                   f"{r['ram_free_gb']:.0f}G" if r["ram_free_gb"] else "-",
-                  disk,
+                  disk_cell(r),
                   f"${r['usd_per_hour']:.2f}" if r["usd_per_hour"] else "-",
                   age, note)
     console.print(t)

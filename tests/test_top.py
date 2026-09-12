@@ -12,7 +12,9 @@ not to hammer, and would redial a dead host hundreds of times an hour.
 from __future__ import annotations
 
 from fleet.models import Device, Kind
-from fleet.top import Schedule, cpu_pct, gpu_pct, meter, render_fleet, staleness
+from fleet.top import (EMPTY, FILLED, Schedule, cpu_pct, device_lines, disk_cell,
+                       gpu_cells, gpu_cells_compact, gpu_pct, meter, name_cell,
+                       render_fleet, staleness)
 
 
 def _dev(name: str, kind: Kind = Kind.PERMANENT) -> Device:
@@ -91,6 +93,127 @@ def test_gpu_percent_survives_a_card_that_reports_no_utilisation():
     """nvidia-smi returns [N/A] for utilisation on some cards; a KeyError here would
     take down the whole render loop."""
     assert gpu_pct({"gpus": [{"name": "weird"}]}) == 0
+
+
+# ------------------------------------------------- multi-gpu / multi-disk rows
+
+def _gpu(name="RTX 4090", util=0, free=20000, total=24564):
+    return {"name": name, "util_pct": util,
+            "vram_total_mib": total, "vram_free_mib": free}
+
+
+def test_every_gpu_gets_its_own_line():
+    """"RTX 4090 x2" hides a heterogeneous box, and one bar over both cards describes
+    neither of them."""
+    names, utils, vram = gpu_cells(
+        _row(gpus=[_gpu("RTX 4090", 12), _gpu("RTX 3090", 98)]))
+    assert names.split("\n") == ["RTX 4090", "RTX 3090"]
+    assert utils.split("\n") == ["12%", "98%"]
+    assert len(vram.split("\n")) == 2
+
+
+def test_a_single_gpu_device_is_unchanged():
+    """A fleet of one-card boxes must look exactly as it did before."""
+    names, utils, vram = gpu_cells(_row(gpus=[_gpu(util=34)]))
+    assert "\n" not in names and "\n" not in utils and "\n" not in vram
+
+
+def test_a_gpuless_device_reports_dashes():
+    assert gpu_cells(_row(gpus=[])) == ("-", "-", "-")
+
+
+def test_each_card_gets_a_meter_of_its_own():
+    """The old cell summed used/total across every card but printed the *max* free of
+    any one of them, so the bar and the number beside it described different hardware.
+    """
+    _, _, vram = gpu_cells(_row(gpus=[_gpu(free=0, total=24000),
+                                      _gpu(free=24000, total=24000)]))
+    full, empty = vram.split("\n")
+    assert FILLED * 6 in full
+    assert EMPTY * 6 in empty
+
+
+def test_ls_reports_busy_per_card_not_per_box():
+    """`ls` marked the whole machine busy if *any* card was, so a box with one
+    saturated card and one free one looked entirely unusable."""
+    names, vram = gpu_cells_compact(_row(gpus=[
+        {"name": "RTX 4090", "vram_free_mib": 1024, "busy": True},
+        {"name": "RTX 3090", "vram_free_mib": 24000, "busy": False}]))
+    busy, idle = vram.split("\n")
+    assert names.split("\n") == ["RTX 4090", "RTX 3090"]
+    assert "busy" in busy and "idle" in idle
+
+
+def test_every_mount_gets_its_own_line():
+    """A rental whose / is a full 38G overlay and whose real storage is /workspace
+    reported only the roomiest mount, hiding the one about to fill up."""
+    cell = disk_cell(_row(disks=[{"mount": "/", "free_gb": 38},
+                                 {"mount": "/workspace", "free_gb": 2150}]))
+    first, second = cell.split("\n")
+    assert "38G" in first and "/" in first
+    assert "2.1T" in second and "/workspace" in second
+
+
+def test_a_lone_root_disk_stays_a_bare_number():
+    assert disk_cell(_row(disks=[{"mount": "/", "free_gb": 890}])) == "890G"
+
+
+def test_a_lone_disk_elsewhere_still_names_its_mount():
+    cell = disk_cell(_row(disks=[{"mount": "/volume1", "free_gb": 9200}]))
+    assert "9.0T" in cell and "/volume1" in cell
+
+
+def test_rows_without_a_mount_list_fall_back_to_the_single_figure():
+    """Snapshots cached before every mount reached list views carry only the reduced
+    number, and must still render."""
+    assert disk_cell(_row(disk_free_gb=890, disk_mount="/")) == "890G"
+    assert "/volume1" in disk_cell(_row(disk_free_gb=9200, disk_mount="/volume1"))
+    assert disk_cell(_row()) == "-"
+
+
+def test_large_disks_read_as_terabytes():
+    """"1648G" is arithmetic; "1.6T" is the answer to the question actually asked."""
+    assert disk_cell(_row(disks=[{"mount": "/", "free_gb": 1648}])) == "1.6T"
+    assert disk_cell(_row(disks=[{"mount": "/", "free_gb": 890}])) == "890G"
+
+
+def test_a_long_card_name_cannot_squeeze_the_table():
+    """Stripping the vendor prefix is not enough: the pro cards carry another twenty
+    characters of marketing after the part anyone reads."""
+    out = _rendered([_row(name="box", gpus=[
+        _gpu("NVIDIA RTX PRO 6000 Blackwell Workstation Edition")])])
+    assert "RTX PRO 6000" in out
+    assert "Workstation Edition" not in out
+
+
+def test_the_vendor_prefix_is_stripped_from_every_card():
+    """Only "NVIDIA GeForce " was stripped, so datacentre cards kept a "NVIDIA " that
+    says nothing -- and those are exactly the boxes with enough cards to need the room.
+    """
+    names, _, _ = gpu_cells(_row(gpus=[_gpu("NVIDIA GeForce RTX 4090"),
+                                       _gpu("NVIDIA H100 80GB HBM3"),
+                                       _gpu("Apple M3 Max")]))
+    assert names.split("\n") == ["RTX 4090", "H100 80GB HBM3", "Apple M3 Max"]
+
+
+def test_a_tall_device_grows_a_gutter_under_its_name():
+    """One dim mark says "this line is still the box above" without spending a row."""
+    lines = name_cell(_row(name="koa04", gpus=[_gpu(), _gpu()])).split("\n")
+    assert len(lines) == 2
+    assert "koa04" in lines[0]
+    assert "\u2502" in lines[1]
+
+
+def test_a_short_device_has_no_gutter():
+    assert "\n" not in name_cell(_row(name="koa04", gpus=[_gpu()]))
+
+
+def test_a_row_is_as_tall_as_its_longest_list():
+    row = _row(gpus=[_gpu()], disks=[{"mount": "/", "free_gb": 1},
+                                     {"mount": "/d", "free_gb": 2},
+                                     {"mount": "/e", "free_gb": 3}])
+    assert device_lines(row) == 3
+    assert device_lines(_row()) == 1
 
 
 def _rendered(rows) -> str:
@@ -184,6 +307,23 @@ def test_backoff_has_a_ceiling():
     for _ in range(20):
         s.record(dev.id, ok=False, now=0)
     assert [d.name for d in s.due([dev], now=61)] == ["dead"]
+
+
+def test_backoff_survives_a_host_that_has_been_down_for_days():
+    """`2 ** fails` is an unbounded int, and one past DBL_MAX cannot become a float.
+
+    The ceiling bounds the wait but not the counter, so a dead device keeps
+    incrementing at one failure per 60s and crosses 1024 in about 17 hours -- exactly
+    the overnight case the ceiling exists to serve.
+    """
+    # 2.0, not 2: cmd_top's --interval is a Typer float option, and int * int would
+    # stay exact integer arithmetic and never reach the conversion that fails.
+    s = Schedule(interval=2.0, max_backoff=60)
+    dev = _dev("gone")
+    for _ in range(1100):
+        s.record(dev.id, ok=False, now=0)
+    assert s._wait_for(dev) == 60
+    assert [d.name for d in s.due([dev], now=61)] == ["gone"]
 
 
 def test_recovering_clears_the_backoff():

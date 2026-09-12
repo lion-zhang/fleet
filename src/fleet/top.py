@@ -87,6 +87,16 @@ def staleness(row: dict[str, Any], live_within: int) -> str:
     return f"{int(age // 3600)}h"
 
 
+# Ceiling on the backoff exponent. `2 ** fails` is an unbounded Python int, but `base`
+# is a float (cmd_top's --interval is a Typer float option), and multiplying a float by
+# an int larger than DBL_MAX raises OverflowError rather than returning inf. A device
+# that stays unreachable keeps incrementing at one failure per max_backoff, so it
+# crosses 2 ** 1024 in about 17 hours -- precisely the host-down-overnight case the
+# ceiling exists to serve. Doubling 64 times already dwarfs any sane max_backoff, so
+# clamping here changes no reachable answer.
+_MAX_DOUBLINGS = 64
+
+
 @dataclass
 class Schedule:
     """Decides which devices are due for a re-probe.
@@ -107,7 +117,7 @@ class Schedule:
         fails = self._fails.get(dev.id, 0)
         if not fails:
             return base
-        return min(self.max_backoff, base * (2 ** fails))
+        return min(self.max_backoff, base * (2 ** min(fails, _MAX_DOUBLINGS)))
 
     def due(self, devices: list[Device], now: float) -> list[Device]:
         out = []
@@ -131,48 +141,144 @@ _DOT = {"ok": "[green]●[/green]", "auth_failed": "[yellow]◐[/yellow]",
         "probe_error": "[yellow]◐[/yellow]", "unknown": "[dim]?[/dim]"}
 
 
-def _gpu_cell(row: dict[str, Any]) -> tuple[str, str]:
+def _model(name: str) -> str:
+    """The card, without the vendor boilerplate that widens the column.
+
+    Only "NVIDIA GeForce " used to be stripped, so every datacentre card kept a
+    "NVIDIA " that says nothing -- and those are exactly the machines with enough cards
+    for the space to matter.
+    """
+    for prefix in ("NVIDIA GeForce ", "NVIDIA "):
+        if name.startswith(prefix):
+            return name[len(prefix):]
+    return name
+
+
+def _gb(gb: float) -> str:
+    """Free space at a glance: "1648G" is arithmetic, "1.6T" is the answer."""
+    return f"{gb / 1024:.1f}T" if gb >= 1024 else f"{gb:.0f}G"
+
+
+def _models(gpus: list[dict[str, Any]]) -> str:
+    return "\n".join(_model(g.get("name", "")) for g in gpus)
+
+
+def gpu_cells(row: dict[str, Any]) -> tuple[str, str, str]:
+    """`top`'s three GPU columns -- model, utilisation, VRAM -- one line per card.
+
+    Per card rather than "RTX 4090 x2", which named a heterogeneous pair after whichever
+    card happened to be first. The VRAM cell was worse than terse: it drew one bar over
+    the *sum* of every card's memory and printed the *largest single card's* free figure
+    beside it, so the meter and the number described different hardware. One line each
+    and they describe the same card.
+    """
     gpus = row.get("gpus") or []
     if not gpus:
-        return "-", ""
-    name = gpus[0].get("name", "").replace("NVIDIA GeForce ", "")
-    if len(gpus) > 1:
-        name += f" x{len(gpus)}"
-    used = sum(g.get("vram_total_mib", 0) - g.get("vram_free_mib", 0) for g in gpus)
-    total = sum(g.get("vram_total_mib", 0) for g in gpus)
-    free_gb = max((g.get("vram_free_mib", 0) for g in gpus), default=0) / 1024
-    return name, f"{escape(meter(used, total, 6))} {free_gb:.1f}G"
+        return "-", "-", "-"
+    utils = "\n".join(f"{g.get('util_pct') or 0}%" for g in gpus)
+    vram = "\n".join(
+        escape(meter(g.get("vram_total_mib", 0) - g.get("vram_free_mib", 0),
+                     g.get("vram_total_mib", 0), 6))
+        + f" {g.get('vram_free_mib', 0) / 1024:.1f}G"
+        for g in gpus)
+    return _models(gpus), utils, vram
+
+
+def gpu_cells_compact(row: dict[str, Any]) -> tuple[str, str]:
+    """`ls`'s two GPU columns: the model, and free VRAM tagged busy or idle.
+
+    ls answers "can I claim this card", so it reports a verdict where `top` draws a
+    meter. Per card also fixes the verdict itself: it used to read `busy` when *any*
+    card was, so a box with one saturated card and three idle ones looked unusable.
+    """
+    gpus = row.get("gpus") or []
+    if not gpus:
+        return "-", "-"
+    vram = "\n".join(
+        f"{g.get('vram_free_mib', 0) / 1024:.1f}G "
+        + ("[red]busy[/red]" if g.get("busy") else "[green]idle[/green]")
+        for g in gpus)
+    return _models(gpus), vram
+
+
+def disk_cell(row: dict[str, Any]) -> str:
+    """Free space, one line per mount.
+
+    A rental whose `/` is a nearly full container overlay and whose real storage sits on
+    /workspace reported only the roomiest of the two -- true, and useless, because the
+    mount that will end a long job is precisely the one that got hidden.
+
+    Rows built at Detail.COMPACT (`fleet ls`) carry no per-mount list, only the single
+    reduced figure, and fall back to it.
+    """
+    disks = row.get("disks")
+    if not disks:
+        free = row.get("disk_free_gb")
+        if not free:
+            return "-"
+        mount = row.get("disk_mount")
+        # name the mount unless it is root: "1.6T" alone is misleading on a rental
+        # whose / is a small overlay and whose real storage lives elsewhere.
+        return _gb(free) if mount == "/" else f"{_gb(free)} [dim]{mount}[/dim]"
+    if len(disks) == 1 and disks[0].get("mount") == "/":
+        return _gb(disks[0].get("free_gb", 0))
+    return "\n".join(_gb(d.get("free_gb", 0)).rjust(5)
+                      + f" [dim]{d.get('mount', '')}[/dim]" for d in disks)
+
+
+def device_lines(row: dict[str, Any]) -> int:
+    """How many lines this device's tallest column needs."""
+    return max(len(row.get("gpus") or []), len(row.get("disks") or []), 1)
+
+
+def name_cell(row: dict[str, Any]) -> str:
+    """The device name, with a dim gutter continuing it down a multi-line row.
+
+    Without it a trailing card or mount floats with nothing tying it to the machine
+    above. One quiet mark in one column answers that: a glyph in every multi-line column
+    repeats the noise per column, and a rule between devices spends a whole row per
+    machine in a view whose point is fitting the fleet on one screen.
+    """
+    name = f"[bold]{row['name']}[/bold]" + (" [dim]\u2190[/dim]" if row.get("is_self") else "")
+    return name + "\n[dim]\u2502[/dim]" * (device_lines(row) - 1)
 
 
 def render_fleet(rows: list[dict[str, Any]], summary: dict[str, Any],
                  live_within: int = 10) -> Table:
     t = Table(box=None, pad_edge=False, header_style="bold", expand=False)
-    for col, kw in (("", {}), ("NAME", {"no_wrap": True}), ("GPU", {"no_wrap": True}),
+    # A right-justified DISK FREE pads the short lines of a multi-mount cell from the
+    # left and comes out ragged, so the column flips left only once some device really
+    # has more than one card or mount. A fleet of plain boxes renders as it always did.
+    tall = any(device_lines(r) > 1 for r in rows)
+    for col, kw in (("", {}), ("NAME", {"no_wrap": True}),
+                    # "RTX PRO 6000 Blackwell Workstation Edition" is 41 characters of
+                    # column; stripping the vendor prefix is not enough to stop a name
+                    # like that pushing every number off a narrow terminal.
+                    ("GPU", {"no_wrap": True, "overflow": "ellipsis", "max_width": 24}),
                     ("GPU%", {"justify": "right", "no_wrap": True}),
                     ("VRAM FREE", {"no_wrap": True}),
                     ("CPU", {"justify": "right", "no_wrap": True}),
                     ("RAM FREE", {"justify": "right", "no_wrap": True}),
-                    ("DISK FREE", {"justify": "right", "no_wrap": True}),
+                    ("DISK FREE", {"justify": "left" if tall else "right",
+                                   "no_wrap": True}),
                     ("AGE", {"justify": "right", "no_wrap": True}),
                     ("NOTE", {"no_wrap": True, "overflow": "ellipsis", "max_width": 34})):
         t.add_column(col, **kw)
     for row in rows:
-        gpu, vram = _gpu_cell(row)
+        gpu, util, vram = gpu_cells(row)
         pct = cpu_pct(row)
-        util = gpu_pct(row)
         stale = staleness(row, live_within)
         note = (row.get("error", {}).get("detail", "") if row["status"] != "ok"
                 else (row["alerts"][0] if row.get("alerts") else ""))
         t.add_row(
             _DOT.get(row["status"], "?"),
-            f"[bold]{row['name']}[/bold]"
-            + (" [dim]←[/dim]" if row.get("is_self") else ""),
+            name_cell(row),
             gpu,
-            "-" if util is None else f"{util}%",
+            util,
             vram,
             "?" if pct is None else f"{pct}%",
             f"{row['ram_free_gb']:.0f}G" if row.get("ram_free_gb") else "-",
-            f"{row['disk_free_gb']:.0f}G" if row.get("disk_free_gb") else "-",
+            disk_cell(row),
             f"[dim]{stale}[/dim]" if stale else "[green]live[/green]",
             note,
         )

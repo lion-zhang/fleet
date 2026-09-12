@@ -239,6 +239,30 @@ def test_a_full_writable_volume_still_raises_one():
     assert any("/workspace" in a for a in v["alerts"])
 
 
+def test_list_views_carry_every_mount_not_just_the_roomiest():
+    """Reporting only the roomiest mount hid a rental's nearly-full / behind its big
+    /workspace -- and the mount that ends a long job is precisely the hidden one.
+
+    Trimmed to mount+free at COMPACT, the way `gpus` is, so `fleet ls --json` stays
+    small for the agents that read it.
+    """
+    from fleet.models import Device, Kind
+    from fleet.view import Detail, device_view
+
+    gb = 1048576  # df reports kb, and free_gb rounds -- toy numbers all collapse to 0.0
+    snap = {"disks": [{"mount": "/", "total_kb": 40 * gb, "used_kb": 38 * gb,
+                       "avail_kb": 2 * gb},
+                      {"mount": "/workspace", "total_kb": 2200 * gb,
+                       "used_kb": 100 * gb, "avail_kb": 2100 * gb}]}
+    v = device_view(Device(id="x", name="box", kind=Kind.PERMANENT),
+                    {"status": "ok", "last_probe_at": 1, "last_ok_at": 1},
+                    snap, Detail.COMPACT)
+    assert [d["mount"] for d in v["disks"]] == ["/", "/workspace"]
+    assert set(v["disks"][0]) == {"mount", "free_gb"}
+    # the reduced figures stay exactly as they were: this is additive
+    assert v["disk_mount"] == "/workspace"
+
+
 def test_a_read_only_volume_is_still_listed_in_full_detail():
     """Skipping the alert is not the same as hiding the disk."""
     from fleet.models import Device, Kind
