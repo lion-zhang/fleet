@@ -50,6 +50,22 @@ _DOT = {"ok": "[green]●[/green]", "auth_failed": "[yellow]◐[/yellow]",
         "probe_error": "[yellow]◐[/yellow]", "unknown": "[dim]?[/dim]"}
 
 
+def _this_machine(devices, what: str):
+    """The device record for the machine we are on, or a useful error.
+
+    Lets a name be omitted where "the one I am standing on" is the obvious default. Not
+    offered everywhere: `fleet ssh` to yourself is what a terminal already is, and a
+    destructive command must never guess which machine it is about.
+    """
+    me = inv.find(devices, local_device_id()) if local_device_id() else None
+    if me is None:
+        err.print(f"[red]This machine is not in the inventory,[/red] so there is nothing "
+                  f"to {what}.")
+        err.print("  [dim]add it with [bold]fleet add --self[/bold][/dim]")
+        raise typer.Exit(2)
+    return me
+
+
 def _emit(payload, as_json: bool) -> bool:
     if as_json:
         console.print_json(jsonlib.dumps(payload, default=str))
@@ -164,12 +180,15 @@ def cmd_ls(names: list[str] = typer.Argument(None, help="only these devices"),
 
 
 @app.command("show")
-def cmd_show(name: str, json_out: bool = typer.Option(False, "--json"),
+def cmd_show(name: str = typer.Argument(None, help="defaults to this machine"),
+             json_out: bool = typer.Option(False, "--json"),
              refresh: bool = typer.Option(True, "--refresh/--no-refresh")):
     """Full detail for one device.
 
     [dim]Example:[/dim]  fleet show lin-xps
     """
+    if name is None:
+        name = _this_machine(inv.load(), "show").name
     rows = _rows([name], refresh=refresh, detail=Detail.FULL)
     if not rows:
         err.print(f"[red]No device named {name!r}.[/red]  Try [bold]fleet ls[/bold]")
@@ -334,7 +353,7 @@ def _install_key(dev, *, quiet: bool = False) -> bool:
 
 
 @app.command("edit")
-def cmd_edit(name: str,
+def cmd_edit(name: str = typer.Argument(None, help="defaults to this machine"),
              ssh_command: str = typer.Option(None, "--ssh", metavar="CMD",
                                              help='new address, e.g. "ssh -p 2222 root@5.6.7.8"'),
              disk_path: list[str] = typer.Option(None, "--disk-path", metavar="PATH",
@@ -352,7 +371,7 @@ def cmd_edit(name: str,
     [dim]Example:[/dim]  fleet edit blackwell --ssh "ssh -p 40001 root@5.6.7.8"
     """
     devices = inv.load()
-    dev = inv.find(devices, name)
+    dev = _this_machine(devices, "edit") if name is None else inv.find(devices, name)
     if dev is None:
         err.print(f"[red]No device named {name!r}[/red]")
         raise typer.Exit(1)
@@ -420,7 +439,8 @@ def run_installer(ep, script: str, *, forward_agent: bool = True) -> tuple[int, 
 
 
 @app.command("install")
-def cmd_install(name: str,
+def cmd_install(name: str = typer.Argument(None,
+                                          help="defaults to this machine"),
                 repo: str = typer.Option(None, "--repo", metavar="URL",
                                          help="git URL to clone; defaults to config or this checkout"),
                 ref: str = typer.Option("main", "--ref", help="branch or tag to install"),
@@ -438,7 +458,7 @@ def cmd_install(name: str,
     [dim]Example:[/dim]  fleet install oracle
     """
     devices = inv.load()
-    dev = inv.find(devices, name)
+    dev = _this_machine(devices, "update") if name is None else inv.find(devices, name)
     if dev is None:
         err.print(f"[red]No device named {name!r}[/red]")
         raise typer.Exit(1)
@@ -904,7 +924,8 @@ def cmd_rm(name: str, yes: bool = typer.Option(False, "--yes", "-y")):
 
 
 @app.command("probe", hidden=True)
-def cmd_probe(name: str, raw: bool = typer.Option(False, "--raw", help="print payload stdout")):
+def cmd_probe(name: str = typer.Argument(None, help="defaults to this machine"),
+              raw: bool = typer.Option(False, "--raw", help="print payload stdout")):
     """Probe one device directly. --raw captures a new parser test fixture.
 
     Hidden: its real job is capturing fixtures for the parser tests, and without --raw it
@@ -912,6 +933,14 @@ def cmd_probe(name: str, raw: bool = typer.Option(False, "--raw", help="print pa
 
     [dim]Example:[/dim]  fleet probe lin-xps --raw
     """
+    if name is None:
+        # No ssh at all for our own machine: requiring sshd, a key and a network path to
+        # inspect the box we are running on is a lot of parts for no extra information.
+        res = run_probe_local()
+        console.print_json(jsonlib.dumps(
+            {"status": res.status.value, "latency_ms": res.latency_ms,
+             "snapshot": res.snapshot.to_dict() if res.snapshot else None}, default=str))
+        raise typer.Exit(0 if res.ok else 1)
     dev = inv.find(inv.load(), name)
     if dev is None:
         err.print(f"[red]No device named {name!r}[/red]")

@@ -146,3 +146,66 @@ def test_add_refuses_an_ssh_command_together_with_self(tmp_path, monkeypatch):
     assert r.exit_code == 2
     r = CliRunner().invoke(cli.app, ["add"])
     assert r.exit_code == 2
+
+
+# ------------------------------------------- "the machine I am on" as the default
+
+def test_show_defaults_to_this_machine(tmp_path, monkeypatch):
+    from typer.testing import CliRunner
+
+    from fleet import cli, inventory as inv, store
+    from fleet.models import Device, Kind
+
+    monkeypatch.setattr(inv, "INVENTORY_PATH", tmp_path / "inventory.yaml")
+    monkeypatch.setattr(store, "DB_PATH", tmp_path / "cache.db")
+    monkeypatch.setattr(cli, "local_device_id", lambda: "id:me")
+    inv.save([Device(id="id:me", name="macbook", kind=Kind.PERMANENT),
+              Device(id="id:other", name="oracle", kind=Kind.PERMANENT)],
+             inv.INVENTORY_PATH)
+
+    r = CliRunner().invoke(cli.app, ["show", "--json", "--no-refresh"])
+    assert r.exit_code == 0, r.output
+    assert '"macbook"' in r.output and '"oracle"' not in r.output
+
+
+def test_a_machine_not_in_the_inventory_is_told_what_to_run(tmp_path, monkeypatch):
+    from typer.testing import CliRunner
+
+    from fleet import cli, inventory as inv, store
+
+    monkeypatch.setattr(inv, "INVENTORY_PATH", tmp_path / "inventory.yaml")
+    monkeypatch.setattr(store, "DB_PATH", tmp_path / "cache.db")
+    monkeypatch.setattr(cli, "local_device_id", lambda: "id:me")
+    inv.save([], inv.INVENTORY_PATH)
+
+    r = CliRunner().invoke(cli.app, ["show"])
+    assert r.exit_code == 2
+    assert "fleet add --self" in r.output
+
+
+def test_probe_with_no_name_needs_no_ssh(tmp_path, monkeypatch):
+    """Requiring sshd, a key and a network path to inspect the box we are running on is
+    a lot of moving parts for no extra information."""
+    from typer.testing import CliRunner
+
+    from fleet import cli
+
+    called = {}
+    monkeypatch.setattr(cli, "run_probe_local",
+                        lambda *a, **k: called.setdefault("local", True) or
+                        __import__("fleet.models", fromlist=["ProbeResult", "Status"])
+                        .ProbeResult(status=__import__("fleet.models",
+                                                       fromlist=["Status"]).Status.OK))
+    CliRunner().invoke(cli.app, ["probe"])
+    assert called.get("local"), "it went over ssh instead of probing locally"
+
+
+def test_destructive_and_pointless_defaults_are_not_offered():
+    """`fleet rm` must never guess which machine it is about, and `fleet ssh` to
+    yourself is what a terminal already is."""
+    from typer.testing import CliRunner
+
+    from fleet import cli
+
+    assert CliRunner().invoke(cli.app, ["rm"]).exit_code != 0
+    assert CliRunner().invoke(cli.app, ["ssh"]).exit_code != 0
