@@ -172,3 +172,26 @@ def test_suggest_name_prefers_hostname_and_uniquifies():
 def test_slugify():
     assert slugify("VM-0-8-ubuntu") == "vm-0-8-ubuntu"
     assert slugify("") == "device"
+
+
+def test_an_fqdn_is_trimmed_to_its_first_label():
+    """The trim was written but unreachable: slugify turns every dot into a dash, so
+    splitting on "." afterwards never found one. A tailnet host came out as
+    "box-tailXXXXXX-ts-net" instead of "box"."""
+    from fleet.onboard import suggest_name
+
+    assert suggest_name(None, Endpoint(target="box.tailXXXXXX.ts.net"), set()) == "box"
+    assert suggest_name(None, Endpoint(target="ssh2.vast.ai"), set()) == "ssh2"
+
+
+def test_an_address_is_not_trimmed():
+    """The first label of 5.6.7.8 is not a name."""
+    from fleet.onboard import suggest_name
+
+    assert suggest_name(None, Endpoint(target="5.6.7.8"), set()) == "5-6-7-8"
+
+
+def test_a_trimmed_name_still_avoids_collisions():
+    from fleet.onboard import suggest_name
+
+    assert suggest_name(None, Endpoint(target="box.tailXXXXXX.ts.net"), {"box"}) == "box-2"

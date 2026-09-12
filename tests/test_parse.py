@@ -144,3 +144,26 @@ def test_classify_unknown_process_is_compute():
     assert classify("python", 8000) is ProcClass.COMPUTE
     assert classify("msedge", 156) is ProcClass.DISPLAY
     assert classify("/usr/lib/foo/gnome-shell", 90) is ProcClass.DISPLAY
+
+
+def test_a_windows_host_says_it_is_windows():
+    """cmd.exe answering our `sh -s`. The host is up and the key worked -- it simply has
+    no POSIX shell. Untreated, the failure surfaces as the tail of a Windows error
+    ("operable program or batch file.") which says nothing about what to do about it."""
+    from fleet.probe.runner import classify_stderr
+
+    status, detail = classify_stderr(
+        "'sh' is not recognized as an internal or external command,\n"
+        "operable program or batch file.\n")
+    assert "Windows" in detail
+    assert "POSIX shell" in detail
+
+
+def test_a_windows_host_is_not_mistaken_for_an_auth_failure():
+    """It must not read as 'rejected our key' -- the key worked, and offering to install
+    another would be advice that cannot help."""
+    from fleet.models import Status
+    from fleet.probe.runner import classify_stderr
+
+    status, _ = classify_stderr("operable program or batch file.\n")
+    assert status is not Status.AUTH_FAILED

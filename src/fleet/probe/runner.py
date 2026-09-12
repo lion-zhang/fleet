@@ -40,6 +40,13 @@ _ERROR_SIGNATURES: tuple[tuple[str, Status, str], ...] = (
     ("Name or service not known", Status.UNREACHABLE, "DNS lookup failed"),
     ("No route to host", Status.UNREACHABLE, "no route"),
     ("Network is unreachable", Status.UNREACHABLE, "network unreachable"),
+    # cmd.exe answering our `sh -s`. The host is up and our key worked -- it simply has
+    # no POSIX shell. Without this the failure arrives as the tail of a Windows error
+    # ("operable program or batch file.") which says nothing about what to do.
+    ("is not recognized as an internal or external command", Status.PROBE_ERROR,
+     "host is Windows: no POSIX shell for the probe payload"),
+    ("operable program or batch file", Status.PROBE_ERROR,
+     "host is Windows: no POSIX shell for the probe payload"),
 )
 
 

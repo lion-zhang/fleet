@@ -32,13 +32,23 @@ def slugify(value: str) -> str:
     return value or "device"
 
 
+def _is_address(value: str) -> bool:
+    """An IPv4 address, or something close enough that trimming it would be wrong."""
+    parts = value.split(".")
+    return len(parts) == 4 and all(p.isdigit() for p in parts)
+
+
 def suggest_name(snap: Snapshot | None, ep: Endpoint, taken: set[str]) -> str:
     for cand in ((snap.vast_label if snap else ""), (snap.hostname if snap else ""), ep.target):
-        base = slugify(cand)
+        # Trim an FQDN to its first label *before* slugifying. Doing it afterwards can
+        # never work: slugify turns every dot into a dash, so there is nothing left to
+        # split on -- which is why a tailnet host came out as
+        # "box-tailXXXXXX-ts-net" rather than "box". An address is left whole, since
+        # the first label of 1.2.3.4 is not a name.
+        head = cand.split(".", 1)[0] if cand and not _is_address(cand) else cand
+        base = slugify(head)
         if not base or base == "device":
             continue
-        # a tailnet FQDN is a fine name once trimmed to its first label
-        base = base.split(".")[0] if not base.replace("-", "").isdigit() else base
         name, n = base, 2
         while name in taken:
             name, n = f"{base}-{n}", n + 1

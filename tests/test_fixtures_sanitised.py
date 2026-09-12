@@ -106,3 +106,19 @@ def test_no_real_address_in_the_source(f):
     """
     bad = sorted({ip for ip in _IP.findall(f.read_text()) if not _ALLOWED.match(ip)})
     assert not bad, f"{f.name} carries a real address: {bad}. Use 1.2.3.4 or 5.6.7.8."
+
+
+@pytest.mark.parametrize("f", list(_python_files()), ids=lambda p: p.name)
+def test_no_real_tailnet_name_in_the_source(f):
+    """Fixtures were checked for these and the source was not -- so one arrived in a
+    code comment, written while explaining a bug the same name had caused.
+
+    Real tailnets are <host>.tailXXXXXX.ts.net with a hex suffix. `example.ts.net` and a
+    literal `tailXXXXXX` are the placeholders.
+    """
+    # A real one is <host>.<tailnet>.ts.net -- four labels. The bare ".ts.net" suffix
+    # appears in source as a literal, and short fakes like "oracle.ts.net" name no real
+    # tailnet; matching either would make the guard noise, and a noisy guard gets muted.
+    bad = sorted({m for m in re.findall(r"\b[\w-]+\.[\w-]+\.ts\.net\b", f.read_text())
+                  if not m.endswith("example.ts.net") and "tailXXXXXX" not in m})
+    assert not bad, f"{f.name} leaks a real tailnet name: {bad}"
