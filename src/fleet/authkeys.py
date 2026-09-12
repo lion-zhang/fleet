@@ -84,7 +84,7 @@ def posix_sync_command(fleet_id: str, from_id: str, *, user: str = "",
 
 
 def powershell_sync_command(fleet_id: str, from_id: str, *, user: str = "",
-                            pubkey: str | None = None) -> str:
+                            pubkey: str | None = None, path: str = "") -> str:
     """The Windows twin. Same contract, entirely different mechanics.
 
     Two traps, both of which fail *silently* -- the command succeeds and the key simply
@@ -102,15 +102,24 @@ def powershell_sync_command(fleet_id: str, from_id: str, *, user: str = "",
     begin, end = begin_marker(fleet_id, from_id), end_marker(fleet_id, from_id)
     add = ""
     if pubkey is not None:
-        body = block(fleet_id, from_id, user, pubkey).replace("'", "''")
-        add = f"$keep += '{body}'.Split(\"`n\")\n"
+        # One append per line, rather than one multi-line string literal split on
+        # newlines. `powershell -Command -` evaluates piped input statement by
+        # statement, so a literal spanning newlines is read as several broken
+        # statements -- which failed silently: the script exited 0 and appended nothing.
+        add = "".join(f"$keep += '{line.replace(chr(39), chr(39) * 2)}'\n"
+                      for line in block(fleet_id, from_id, user, pubkey).split("\n"))
     return (
         "$ErrorActionPreference='Stop'\n"
-        "$id=[Security.Principal.WindowsIdentity]::GetCurrent()\n"
-        "$admin=(New-Object Security.Principal.WindowsPrincipal($id)).IsInRole("
-        "[Security.Principal.WindowsBuiltInRole]::Administrator)\n"
-        "if($admin){$f=Join-Path $env:ProgramData 'ssh\\administrators_authorized_keys'}"
-        "else{$f=Join-Path $env:USERPROFILE '.ssh\\authorized_keys'}\n"
+        # An explicit path exists so the block logic -- the half that can lock someone
+        # out -- can be exercised against a scratch file. The real run resolves it, and
+        # resolving it wrongly is the silent failure this whole twin exists for.
+        + (f"$f='{path}'\n" if path else
+           "$id=[Security.Principal.WindowsIdentity]::GetCurrent()\n"
+           "$admin=(New-Object Security.Principal.WindowsPrincipal($id)).IsInRole("
+           "[Security.Principal.WindowsBuiltInRole]::Administrator)\n"
+           "if($admin){$f=Join-Path $env:ProgramData 'ssh\\administrators_authorized_keys'}"
+           "else{$f=Join-Path $env:USERPROFILE '.ssh\\authorized_keys'}\n")
+        +
         "$d=Split-Path $f; if(!(Test-Path $d)){New-Item -ItemType Directory -Path $d|Out-Null}\n"
         "if(!(Test-Path $f)){New-Item -ItemType File -Path $f|Out-Null}\n"
         "$lines=@(Get-Content -LiteralPath $f -ErrorAction SilentlyContinue)\n"
@@ -127,5 +136,6 @@ def powershell_sync_command(fleet_id: str, from_id: str, *, user: str = "",
         "Set-Content -LiteralPath $t -Value $keep -Encoding ascii\n"
         "Move-Item -LiteralPath $t -Destination $f -Force\n"
         # inheritance:r first, or inherited ACEs survive and sshd still refuses the file
-        "icacls $f /inheritance:r /grant 'SYSTEM:F' 'Administrators:F' | Out-Null\n"
+        + ("" if path else
+           "icacls $f /inheritance:r /grant 'SYSTEM:F' 'Administrators:F' | Out-Null\n")
     )

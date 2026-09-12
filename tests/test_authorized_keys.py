@@ -177,3 +177,29 @@ def test_both_shells_agree_on_the_markers():
         assert f"# fleet:{FID}:begin from={SRC}" in cmd
         assert f"# fleet:{FID}:end from={SRC}" in cmd
     assert b.splitlines()[0].startswith(f"# fleet:{FID}:begin")
+
+
+def test_windows_appends_one_line_at_a_time():
+    """Not one multi-line literal split on newlines. `powershell -Command -` evaluates
+    piped input statement by statement, so a literal spanning newlines arrives as
+    several broken statements -- and it failed *silently*: the script exited 0 and
+    appended nothing, which on a real host means a grant that reports success and never
+    works. Found by running this against Windows rather than by reading it."""
+    cmd = powershell_sync_command(FID, SRC, user="lin", pubkey=KEY)
+    appends = [l for l in cmd.splitlines() if "$keep +=" in l]
+    assert len(appends) == 3, "begin marker, key, end marker -- one statement each"
+    assert not any("\n" in l for l in appends)
+    assert 'Split(' not in cmd
+
+
+def test_windows_takes_an_explicit_path_for_testing():
+    """So the block logic -- the half that can lock someone out -- can be exercised
+    against a scratch file. The real run resolves admin vs user, and resolving that
+    wrongly is the silent failure the twin exists for, so it keeps the ACL reset."""
+    scratch = powershell_sync_command(FID, SRC, user="lin", pubkey=KEY, path=r"C:\tmp\ak")
+    assert r"$f='C:\tmp\ak'" in scratch
+    assert "icacls" not in scratch, "no ACL reset on a scratch file"
+
+    real = powershell_sync_command(FID, SRC, user="lin", pubkey=KEY)
+    assert "administrators_authorized_keys" in real
+    assert "icacls" in real

@@ -167,7 +167,7 @@ def control_dir() -> str | None:
     return d
 
 
-def remote_command(args: list[str]) -> str:
+def remote_command(args: list[str], *, windows: bool = False) -> str:
     """What to hand ssh when the caller asked to run something, rather than get a shell.
 
     A non-interactive ssh runs with a minimal PATH -- no ~/.local/bin -- so anything
@@ -185,6 +185,13 @@ def remote_command(args: list[str]) -> str:
     """
     if not args:
         return ""                           # no command: the user wants a login shell
+    if windows:
+        # Every word of the reasoning above is POSIX: there is no `sh`, no login shell
+        # and no ~/.local/bin. cmd.exe hands `sh -lc '...'` straight back as "not
+        # recognized", so the wrapper that makes this work everywhere else is exactly
+        # what breaks it here. Windows sets PATH machine-wide, so passing the command
+        # through is both simpler and correct.
+        return " ".join(args)
     inner = 'export PATH="$HOME/.local/bin:$PATH"; ' + " ".join(args)
     return "sh -lc " + shlex.quote(inner)
 

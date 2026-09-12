@@ -1113,9 +1113,14 @@ def cmd_ssh(ctx: typer.Context, name: str):
     ep = eps[0]
     conn = store.connect()
     try:
-        cached, _ = store.latest(conn, dev.id)
+        cached, snap = store.latest(conn, dev.id)
     finally:
         conn.close()
+    # Read from the last probe rather than a field on the device: a stored OS would ride
+    # inventory.merge, where a peer with a fast clock could flip a host's platform and
+    # change which shell we hand it a command in.
+    windows = str((snap or {}).get("os", "")).lower().startswith(("microsoft windows",
+                                                                 "windows"))
     if auth_of(dev, cached) == "needs_key":
         err.print(f"[yellow]{dev.name} rejected our key.[/yellow] Install one:")
         err.print(f"  [bold]fleet center --enroll {dev.name}[/bold]")
@@ -1134,7 +1139,7 @@ def cmd_ssh(ctx: typer.Context, name: str):
     argv.append(f"{ep.user}@{ep.target}" if ep.user else ep.target)
     extra = [a for a in ctx.args if a != "--"]
     if extra:
-        argv.append(remote_command(extra))
+        argv.append(remote_command(extra, windows=windows))
 
     os.execvp("ssh", argv)      # replace this process; ssh owns the tty from here
 

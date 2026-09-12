@@ -46,10 +46,25 @@ Emit "mem.total_kb" ([int64]$os.TotalVisibleMemorySize)
 Emit "mem.avail_kb" ([int64]$os.FreePhysicalMemory)
 
 Write-Output "#DISK mount|total_kb|used_kb|avail_kb|rw"
-Get-CimInstance Win32_LogicalDisk -Filter "DriveType=3" | ForEach-Object {
-    $total = [int64]($_.Size / 1024)
-    $free = [int64]($_.FreeSpace / 1024)
-    Write-Output ("{0}|{1}|{2}|{3}|1" -f $_.DeviceID, $total, ($total - $free), $free)
+if ($env:FLEET_DISK_PATHS) {
+    # Configured paths win outright, as they do on POSIX: the row is labelled with the
+    # path asked about rather than whatever volume happens to hold it, because "819G
+    # free on C:" answers a different question from "819G free where my data goes".
+    foreach ($path in ($env:FLEET_DISK_PATHS -split ' ' | Where-Object { $_ })) {
+        if (-not (Test-Path -LiteralPath $path)) { continue }
+        $root = [System.IO.Path]::GetPathRoot((Resolve-Path -LiteralPath $path).Path)
+        $vol = Get-CimInstance Win32_LogicalDisk -Filter "DeviceID='$($root.TrimEnd('\'))'"
+        if (-not $vol) { continue }
+        $total = [int64]($vol.Size / 1024)
+        $free = [int64]($vol.FreeSpace / 1024)
+        Write-Output ("{0}|{1}|{2}|{3}|1" -f $path, $total, ($total - $free), $free)
+    }
+} else {
+    Get-CimInstance Win32_LogicalDisk -Filter "DriveType=3" | ForEach-Object {
+        $total = [int64]($_.Size / 1024)
+        $free = [int64]($_.FreeSpace / 1024)
+        Write-Output ("{0}|{1}|{2}|{3}|1" -f $_.DeviceID, $total, ($total - $free), $free)
+    }
 }
 
 # nvidia-smi is the same everywhere it exists, so the GPU block is identical to the
