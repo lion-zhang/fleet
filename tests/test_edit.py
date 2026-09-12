@@ -269,3 +269,31 @@ def test_an_edit_that_changed_nothing_does_not_stamp():
     dev.updated_at = 1
     apply_edits(dev)
     assert dev.updated_at == 1
+
+
+def test_a_device_can_be_renamed():
+    """The name is a label; the id is what merge and the access list key on. So renaming
+    is safe and needs no cascade -- and it is the only way to fix a bad one, since
+    `fleet add` restores a tombstoned record under the name it already had."""
+    dev = _dev()
+    before = dev.id
+    out = apply_edits(dev, name="lin-beelink")
+    assert dev.name == "lin-beelink"
+    assert dev.id == before, "identity does not move with the label"
+    assert any("name" in c for c in out.changes)
+
+
+def test_renaming_to_a_taken_name_is_refused():
+    dev = _dev()
+    with pytest.raises(ValueError, match="already called"):
+        apply_edits(dev, name="oracle", taken={"oracle"})
+
+
+def test_renaming_to_the_same_name_is_a_no_op():
+    """A no-op edit must not stamp updated_at, or this machine's copy spuriously wins
+    the next merge."""
+    dev = _dev()
+    stamp = dev.updated_at
+    out = apply_edits(dev, name=dev.name)
+    assert not out.changes
+    assert dev.updated_at == stamp

@@ -84,8 +84,18 @@ def _migrate_identity(dev: Device, ep: Endpoint, out: Edits) -> None:
 
 
 def apply_edits(dev: Device, *, endpoint: Endpoint | None = None,
-                disk_paths: list[str] | None = None, role: str | None = None) -> Edits:
+                disk_paths: list[str] | None = None, role: str | None = None,
+                name: str | None = None, taken: set[str] | None = None) -> Edits:
     out = Edits()
+    if name is not None and name != dev.name:
+        # The name is a label, not an identity -- the id is what merge and the access
+        # list key on -- so renaming is safe and needs no cascade. It is also the only
+        # way to fix a bad one: `fleet add` restores a tombstoned record under its old
+        # name, so a device that was named wrongly once stays that way otherwise.
+        if name in (taken or set()):
+            raise ValueError(f"another device is already called {name!r}")
+        out.changes.append(f"name {dev.name} -> {name}")
+        dev.name = name
     if role is not None and role != dev.role:
         out.changes.append(f"role {dev.role} -> {role}")
         dev.role = role

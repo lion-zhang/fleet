@@ -361,6 +361,8 @@ def cmd_edit(name: str = typer.Argument(None, help="defaults to this machine"),
                                                       "space; repeatable"),
              clear_disk_paths: bool = typer.Option(False, "--clear-disk-paths",
                                                    help="go back to autodetecting mounts"),
+             new_name: str = typer.Option(None, "--name", metavar="NEW",
+                                          help="rename it; the id and its history stay"),
              role: str = typer.Option(None, "--role", help="none | center | backup"),
              json_out: bool = typer.Option(False, "--json")):
     """Change a device's address or settings after it was added.
@@ -378,7 +380,9 @@ def cmd_edit(name: str = typer.Argument(None, help="defaults to this machine"),
 
     endpoint = resolve_command(ssh_command) if ssh_command else None
     paths = [] if clear_disk_paths else (list(disk_path) if disk_path else None)
-    result = apply_edits(dev, endpoint=endpoint, disk_paths=paths,
+    result = apply_edits(dev, name=new_name,
+                         taken={d.name for d in inv.live(devices) if d is not dev},
+                         endpoint=endpoint, disk_paths=paths,
                          role=None if role == "center" else role)
     if role == "center":
         # Flipping the role alone strands the fleet: spokes verify the list against the
@@ -388,9 +392,6 @@ def cmd_edit(name: str = typer.Argument(None, help="defaults to this machine"),
         err.print("  [dim]it installs the successor's key everywhere and verifies it "
                   "first; this flag only changed a label[/dim]")
         raise typer.Exit(2)
-    if False:
-        # fleet-wide invariant, so it cannot live in apply_edits, which sees one device
-        result.changes += inv.promote_center(devices, dev)
 
     if not result.changes:
         if _emit({"name": dev.name, "changes": []}, json_out):
