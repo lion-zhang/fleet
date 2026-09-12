@@ -520,3 +520,37 @@ def test_the_center_does_not_erase_a_device_added_while_it_was_serving(tmp_path,
     assert result.exit_code == 0, result.output
     names = [d.name for d in inv.live(inv.load(path))]
     assert "added-on-the-center" in names, names
+
+
+# ------------------------------------------------- taking a route away, not just adding
+
+def test_an_endpoint_can_be_removed_by_the_authority():
+    """The union ran both ways, so a route one machine learned survived forever on
+    every machine however wrong it turned out to be -- there was no deletion primitive
+    anywhere. The center's answer replaces rather than merges."""
+    from fleet import inventory as inv
+
+    mine = _dev("box")
+    mine.endpoints = [{"target": "good", "user": "root", "port": 22},
+                      {"target": "bad", "user": "root", "port": 22, "preference": 1}]
+    theirs = _dev("box")
+    theirs.endpoints = [{"target": "good", "user": "root", "port": 22}]
+    theirs.updated_at = mine.updated_at + 10
+
+    merged, _ = inv.merge([mine], [theirs], authoritative=True)
+    assert [e["target"] for e in merged[0].endpoints] == ["good"]
+
+
+def test_an_ordinary_merge_still_unions():
+    """Between peers a route one side knows is still a real route; only the authority
+    may take one away."""
+    from fleet import inventory as inv
+
+    mine = _dev("box")
+    mine.endpoints = [{"target": "lan", "user": "root", "port": 22}]
+    theirs = _dev("box")
+    theirs.endpoints = [{"target": "mesh", "user": "root", "port": 22}]
+    theirs.updated_at = mine.updated_at + 10
+
+    merged, _ = inv.merge([mine], [theirs])
+    assert {e["target"] for e in merged[0].endpoints} == {"lan", "mesh"}

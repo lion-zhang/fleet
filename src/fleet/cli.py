@@ -634,7 +634,8 @@ def cmd_sync(serve: bool = typer.Option(False, "--serve",
 
     # NOT merged against `devices`: that list was loaded before the round trip, and
     # saving it back would erase anything committed while we were waiting.
-    merged, changes = inv.update(lambda current: inv.merge(current, returned))
+    merged, changes = inv.update(
+        lambda current: inv.merge(current, returned, authoritative=True))
     if _emit({"center": center.name, "devices": len(merged), "changes": changes}, json_out):
         return
     console.print(f"[green]✓[/green] synced with [bold]{center.name}[/bold] "
@@ -878,11 +879,48 @@ def cmd_rm(name: str, yes: bool = typer.Option(False, "--yes", "-y")):
     if dev is None:
         err.print(f"[red]No device named {name!r}[/red]")
         raise typer.Exit(1)
+    from . import access as acl
+
+    # Removing a machine revokes its keys everywhere, which only the center can do.
+    # Removing *yourself* is a different act -- leaving -- and needs nobody's permission,
+    # because you own the machine you are standing on.
+    itself = bool(dev.id) and dev.id == local_device_id()
+    if not itself:
+        try:
+            if not acl.is_center(acl.load()):
+                err.print(f"[red]Only the center can remove {dev.name}.[/red]")
+                err.print("  [dim]a machine can remove itself -- that is leaving -- but "
+                          "removing another revokes its keys, which only the center "
+                          "can do[/dim]")
+                raise typer.Exit(2)
+        except acl.AccessError:
+            pass          # no fleet yet: the inventory is just a list, remove freely
+
     if not yes and not typer.confirm(f"Remove {dev.name} ({dev.kind.value})?"):
         raise typer.Exit(1)
+
+    # Drop its edges before the record, so the sweep still knows where to go: the ledger
+    # kept the device on each edge precisely so a revoke survives losing the pin.
+    revoked = 0
+    try:
+        acc = acl.load()
+        if acl.is_center(acc):
+            fps = [fp for fp, m in acc.keys.items() if m.get("device_id") == dev.id]
+            for fp in fps:
+                acc.allow = [e for e in acc.allow if fp not in (e.src, e.dst)]
+                acc.keys.pop(fp, None)
+                revoked += 1
+            if fps:
+                acl.save(acc)
+    except acl.AccessError:
+        pass
+
     inv.remove(devices, dev)
     inv.save(devices)
     console.print(f"[green]✓[/green] removed {dev.name}")
+    if revoked:
+        console.print("  [yellow]its keys are still installed[/yellow] until the next "
+                      "[bold]fleet sync[/bold] reaches each machine.")
 
 
 @app.command("refresh")

@@ -241,7 +241,8 @@ def _one_center(devices: list[Device]) -> None:
             d.role = "backup"
 
 
-def merge(local: list[Device], remote: list[Device]) -> tuple[list[Device], list[str]]:
+def merge(local: list[Device], remote: list[Device], *,
+          authoritative: bool = False) -> tuple[list[Device], list[str]]:
     """Combine two inventories. Returns (merged, human-readable changes).
 
     Devices are matched on id, which is why id prefers machine-id over an address: two
@@ -265,10 +266,16 @@ def merge(local: list[Device], remote: list[Device]) -> tuple[list[Device], list
         endpoints = _union_endpoints(mine.endpoints, incoming.endpoints)
         gained = len(endpoints) - len(mine.endpoints)
         if incoming.updated_at > mine.updated_at:
-            incoming.endpoints = _union_endpoints(incoming.endpoints, mine.endpoints)
+            # Unioning both ways means an endpoint can be added but never removed: a
+            # route one machine learned survives forever, on every machine, however
+            # wrong it turns out to be. When the incoming side is the authority -- the
+            # center's signed answer -- its list replaces ours, so editing there is a
+            # way to take a route away rather than only to add one.
+            if not authoritative:
+                incoming.endpoints = _union_endpoints(incoming.endpoints, mine.endpoints)
             by_id[incoming.id] = incoming
             changes.append(f"updated {incoming.name}")
-        elif gained:
+        elif gained and not authoritative:
             mine.endpoints = endpoints
         if gained:
             changes.append(f"{by_id[incoming.id].name}: +{gained} endpoint(s)")

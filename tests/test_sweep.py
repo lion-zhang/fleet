@@ -57,9 +57,9 @@ def test_a_grant_is_actually_applied(fleet_at, monkeypatch):
     r = runner.invoke(cli.app, ["sync"])
     assert r.exit_code == 0, r.output
     assert calls, "the sweep never reached the reconciler"
-    edge, kw = calls[0]
-    assert edge == (A, B, "root")
-    assert kw["install"] is True
+    # set iteration order is not a contract; assert on the set of edges
+    assert {e for e, _ in calls} == {(A, B, "root"), (A, C, "root")}
+    assert all(kw["install"] is True for _, kw in calls)
     assert "installed on oracle" in r.output
 
 
@@ -148,3 +148,38 @@ def test_a_machine_that_is_not_the_center_does_not_sweep(fleet_at, monkeypatch):
     monkeypatch.setattr(rec, "apply_edge",
                         lambda *a, **k: pytest.fail("a spoke must never reconcile"))
     runner.invoke(cli.app, ["sync"])
+
+
+# --------------------------------------------------------------- removing a machine
+
+def test_a_spoke_cannot_remove_another_machine(fleet_at, monkeypatch):
+    """Removing a machine revokes its keys everywhere, which only the center can do."""
+    runner, _ = fleet_at
+    monkeypatch.setattr(cli, "local_device_id", lambda: "id:oracle")
+    r = runner.invoke(cli.app, ["rm", "lin-xps", "-y"])
+    assert r.exit_code == 2
+    assert "Only the center" in r.output
+    assert inv.find(inv.load(inv.INVENTORY_PATH), "lin-xps") is not None
+
+
+def test_a_machine_can_always_remove_itself(fleet_at, monkeypatch):
+    """That is leaving, and it needs nobody's permission: you own the machine you are
+    standing on."""
+    runner, _ = fleet_at
+    monkeypatch.setattr(cli, "local_device_id", lambda: "id:oracle")
+    r = runner.invoke(cli.app, ["rm", "oracle", "-y"])
+    assert r.exit_code == 0, r.output
+    assert inv.find(inv.load(inv.INVENTORY_PATH), "oracle") is None
+
+
+def test_the_center_removing_a_machine_drops_its_edges(fleet_at, monkeypatch):
+    """`fleet rm` used to leave every key installed forever, with merge never syncing
+    the deletion either."""
+    runner, _ = fleet_at
+    monkeypatch.setattr(acl, "is_center", lambda *a, **k: True)
+    r = runner.invoke(cli.app, ["rm", "oracle", "-y"])
+    assert r.exit_code == 0, r.output
+    acc = acl.load(acl.ACCESS_PATH)
+    assert B not in acc.keys
+    assert not any(B in (e.src, e.dst) for e in acc.allow)
+    assert "still installed" in r.output, "and it says the keys have not gone yet"
