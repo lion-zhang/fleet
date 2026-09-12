@@ -77,3 +77,32 @@ def test_fixtures_still_carry_the_numbers_the_parser_tests_rely_on():
     assert "24564|853|23197" in gpu          # total|used|free
     assert gpu.count("#GPUPROC") == 1
     assert "msedge" in gpu and "code" in gpu  # display-class processes must survive
+
+
+# ------------------------------------------------- and the source, not just the fixtures
+
+SRC = pathlib.Path(__file__).parent.parent
+# RFC 5737 / RFC 3849 documentation ranges, loopback, and the private blocks. Everything
+# else is somebody's real machine -- ours or, worse, a stranger's.
+_ALLOWED = re.compile(
+    r"^(1\.2\.3\.4|5\.6\.7\.8|0\.0\.0\.0|255\.|127\.|10\.|192\.168\.|100\.64\.0\.|"
+    r"172\.(1[6-9]|2[0-9]|3[01])\.|192\.0\.2\.|198\.51\.100\.|203\.0\.113\.)")
+_IP = re.compile(r"\b(?:\d{1,3}\.){3}\d{1,3}\b")
+
+
+def _python_files():
+    for d in ("src", "tests"):
+        yield from sorted((SRC / d).rglob("*.py"))
+
+
+@pytest.mark.parametrize("f", list(_python_files()), ids=lambda p: p.name)
+def test_no_real_address_in_the_source(f):
+    """`test_help.py` forbids real addresses in --help output. Nothing applied the same
+    rule to the source, which is exactly where one sat: a rental's public IP and port,
+    committed in the first commit and carried ever since.
+
+    A public resolver counts too. It is not ours to leak, but a test that ever really
+    dialled it would reach a stranger's service.
+    """
+    bad = sorted({ip for ip in _IP.findall(f.read_text()) if not _ALLOWED.match(ip)})
+    assert not bad, f"{f.name} carries a real address: {bad}. Use 1.2.3.4 or 5.6.7.8."
