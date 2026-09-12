@@ -274,3 +274,100 @@ def verify(payload: str, signature: str, signer_pubkey: str) -> bool:
         except (OSError, subprocess.CalledProcessError):
             return False
     return True
+
+
+# ------------------------------------------------------------------ the sync envelope
+
+PROTOCOL = 2
+
+
+def seal(inventory_yaml: str, *, key_path: Path | None = None) -> str:
+    """Wrap an inventory in a signature the receiver can check.
+
+    The inventory is not incidental cargo: it holds the endpoints that decide where
+    `fleet ssh oracle` actually dials. Under center-dials-spokes the sync filter runs on
+    the *spoke*, and a grant is a key on that spoke, so any granted peer can reach it and
+    push whatever it likes. Signing the access list and leaving this unsigned would have
+    protected the policy and left the routing wide open -- and `inventory.merge` unions
+    endpoints unconditionally, with no timestamp contest and no way to delete one, so an
+    injected low-preference route would win and could never be removed.
+    """
+    key_path = key_path or FLEET_KEY
+    return yaml.safe_dump({
+        "protocol": PROTOCOL,
+        "center_pubkey": key_path.with_suffix(".pub").read_text().strip(),
+        "signature": sign(inventory_yaml, key_path),
+        "inventory": inventory_yaml,
+    }, sort_keys=False)
+
+
+def unseal(payload: str, signer_pubkey: str) -> str:
+    """Return the inventory inside, or raise. Never returns unverified content.
+
+    An unsigned or unsealed payload is refused outright rather than accepted as a legacy
+    format: "old peer" and "hostile peer" look identical from here, and one of them must
+    not be given the benefit of the doubt.
+    """
+    try:
+        env = yaml.safe_load(payload) or {}
+    except yaml.YAMLError as exc:
+        raise AccessError(f"unreadable sync payload: {exc}") from exc
+    if not isinstance(env, dict) or "inventory" not in env:
+        raise AccessError("unsigned sync payload -- refusing it")
+    if int(env.get("protocol") or 0) != PROTOCOL:
+        raise AccessError(f"sync protocol {env.get('protocol')!r} is not {PROTOCOL}")
+    body = env["inventory"]
+    if not verify(body, env.get("signature") or "", signer_pubkey):
+        raise AccessError("sync payload is not signed by the center we trust")
+    return body
+
+
+def trusted_center_pubkey(cache_path: Path | None = None) -> str:
+    """The center's key as this machine last learned it, or "" on first contact.
+
+    Trust on first use, then pinned -- the same bargain ssh makes with host keys, and for
+    the same reason: there is no prior channel to learn it over, and refusing to start is
+    not a safer outcome than recording what we saw and noticing if it changes.
+    """
+    path = cache_path or CACHE_PATH
+    try:
+        return str((yaml.safe_load(path.read_text()) or {}).get("center_pubkey") or "")
+    except (OSError, yaml.YAMLError):
+        return ""
+
+
+def pin_center_pubkey(pubkey: str, cache_path: Path | None = None) -> None:
+    path = cache_path or CACHE_PATH
+    try:
+        data = yaml.safe_load(path.read_text()) or {}
+    except (OSError, yaml.YAMLError):
+        data = {}
+    data["center_pubkey"] = pubkey.strip()
+    data["pinned_at"] = int(time.time())
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = path.with_suffix(".tmp")
+    tmp.write_text(yaml.safe_dump(data, sort_keys=False))
+    os.replace(tmp, path)
+
+
+def unseal_first_contact(payload: str) -> str:
+    """Accept a sealed payload from a center we have not met, and pin its key.
+
+    Trust on first use. There is no earlier channel to learn the key over, so the choice
+    is between recording what we saw and refusing to start at all -- and refusing does
+    not make anyone safer, it just means the fleet cannot be set up. Every payload after
+    this one is checked against what was pinned here, so an imposter has exactly one
+    chance and only before the real center has ever called.
+    """
+    try:
+        env = yaml.safe_load(payload) or {}
+    except yaml.YAMLError as exc:
+        raise AccessError(f"unreadable sync payload: {exc}") from exc
+    if not isinstance(env, dict) or "inventory" not in env:
+        raise AccessError("unsigned sync payload -- refusing it")
+    pub = str(env.get("center_pubkey") or "")
+    if not pub:
+        raise AccessError("sealed payload carries no center key to pin")
+    body = unseal(payload, pub)
+    pin_center_pubkey(pub)
+    return body

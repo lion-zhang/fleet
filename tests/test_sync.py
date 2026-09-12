@@ -165,7 +165,34 @@ def _serve_env(tmp_path, monkeypatch, devices):
     inv.save(devices, path)
     monkeypatch.setattr(inv, "INVENTORY_PATH", path)
     monkeypatch.setattr(store, "DB_PATH", tmp_path / "cache.db")
+    _sandbox_access(tmp_path, monkeypatch)
     return CliRunner(), path
+
+
+def _sandbox_access(tmp_path, monkeypatch):
+    """access.py resolves its paths at import, so the FLEET_*_DIR env vars do not reach
+    it. Without this a `--serve` test pins a center key into the real config directory
+    -- which one of these did, silently, until it was noticed."""
+    from fleet import access as acl
+
+    for name in ("ACCESS_PATH", "LEDGER_PATH", "CACHE_PATH", "OUTBOX_PATH"):
+        monkeypatch.setattr(acl, name, tmp_path / getattr(acl, name).name)
+
+
+def _sealed(tmp_path, devices):
+    """`--serve` only accepts a signed envelope now: it runs on a spoke that every
+    granted peer holds a key for, so an unsigned inventory is indistinguishable from a
+    hostile one."""
+    import subprocess
+
+    from fleet import access as acl
+    from fleet import inventory as inv
+
+    key = tmp_path / "center_key"
+    if not key.exists():
+        subprocess.run(["ssh-keygen", "-t", "ed25519", "-N", "", "-q", "-f", str(key)],
+                       check=True)
+    return acl.seal(inv.dumps(devices), key_path=key)
 
 
 def test_serve_merges_what_it_is_given_with_what_it_holds(tmp_path, monkeypatch):
@@ -173,7 +200,7 @@ def test_serve_merges_what_it_is_given_with_what_it_holds(tmp_path, monkeypatch)
     from fleet.cli import app
 
     runner, path = _serve_env(tmp_path, monkeypatch, [_dev("center-only")])
-    incoming = inv.dumps([_dev("laptop-only")])
+    incoming = _sealed(tmp_path, [_dev("laptop-only")])
     result = runner.invoke(app, ["sync", "--serve"], input=incoming)
     assert result.exit_code == 0, result.output
     assert _names(inv.loads(result.stdout)) == ["center-only", "laptop-only"]
@@ -184,7 +211,7 @@ def test_serve_persists_the_merge_so_the_center_stays_canonical(tmp_path, monkey
     from fleet.cli import app
 
     runner, path = _serve_env(tmp_path, monkeypatch, [_dev("center-only")])
-    runner.invoke(app, ["sync", "--serve"], input=inv.dumps([_dev("laptop-only")]))
+    runner.invoke(app, ["sync", "--serve"], input=_sealed(tmp_path, [_dev("laptop-only")]))
     assert _names(inv.load(path)) == ["center-only", "laptop-only"]
 
 
@@ -488,7 +515,8 @@ def test_the_center_does_not_erase_a_device_added_while_it_was_serving(tmp_path,
         return parsed
 
     monkeypatch.setattr(inv, "loads", loads_then_race)
-    result = CliRunner().invoke(app, ["sync", "--serve"], input=inv.dumps([_dev("remote")]))
+    _sandbox_access(tmp_path, monkeypatch)
+    result = CliRunner().invoke(app, ["sync", "--serve"], input=_sealed(tmp_path, [_dev("remote")]))
     assert result.exit_code == 0, result.output
     names = [d.name for d in inv.live(inv.load(path))]
     assert "added-on-the-center" in names, names

@@ -191,3 +191,44 @@ def test_a_signature_from_another_key_does_not_verify(tmp_path):
 def test_an_empty_signature_is_not_a_pass(tmp_path):
     _, pub = _keypair(tmp_path)
     assert access.verify("anything", "", pub) is False
+
+
+# ------------------------------------------------------------ the sync envelope
+
+def test_a_sealed_inventory_round_trips(tmp_path):
+    path, pub = _keypair(tmp_path)
+    body = "devices:\n- name: oracle\n"
+    assert access.unseal(access.seal(body, key_path=path), pub) == body
+
+
+def test_an_unsigned_payload_is_refused(tmp_path):
+    """"Old peer" and "hostile peer" look identical from here, and one of them must not
+    get the benefit of the doubt."""
+    _, pub = _keypair(tmp_path)
+    with pytest.raises(AccessError, match="unsigned"):
+        access.unseal("devices:\n- name: oracle\n", pub)
+
+
+def test_a_payload_signed_by_someone_else_is_refused(tmp_path):
+    """The attack: a grant is a key on the spoke, so any granted peer can reach it and
+    run the sync filter there claiming to be the center."""
+    theirs, _ = _keypair(tmp_path, "theirs")
+    _, centers_pub = _keypair(tmp_path, "center")
+    sealed = access.seal("devices: []\n", key_path=theirs)
+    with pytest.raises(AccessError, match="not signed by the center"):
+        access.unseal(sealed, centers_pub)
+
+
+def test_tampering_with_the_body_breaks_the_seal(tmp_path):
+    path, pub = _keypair(tmp_path)
+    sealed = access.seal("devices: []\n", key_path=path)
+    tampered = sealed.replace("devices: []", "devices: [{name: evil}]")
+    with pytest.raises(AccessError):
+        access.unseal(tampered, pub)
+
+
+def test_the_center_key_is_pinned_on_first_contact(tmp_path):
+    p = tmp_path / "access-cache.yaml"
+    assert access.trusted_center_pubkey(p) == ""
+    access.pin_center_pubkey("ssh-ed25519 AAAA center", p)
+    assert access.trusted_center_pubkey(p) == "ssh-ed25519 AAAA center"

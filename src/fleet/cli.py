@@ -12,6 +12,7 @@ import time
 from pathlib import Path
 
 import typer
+import yaml
 from contextlib import contextmanager
 from functools import lru_cache
 
@@ -554,7 +555,10 @@ def run_sync(ep, payload: str) -> tuple[int, str]:
     # `fleet install` puts fleet.
     remote = 'sh -lc \'PATH="$HOME/.local/bin:$PATH" fleet sync --serve\''
     argv = build_argv(ep, remote=remote)
-    p = subprocess.run(argv, input=payload, capture_output=True, text=True, timeout=180)
+    # Sealed, because the far side runs this filter for anyone holding a key on it.
+    from . import access as acl
+    p = subprocess.run(argv, input=acl.seal(payload), capture_output=True, text=True,
+                       timeout=180)
     return p.returncode, (p.stdout if p.returncode == 0 else p.stdout + p.stderr)
 
 
@@ -593,8 +597,21 @@ def cmd_sync(serve: bool = typer.Option(False, "--serve",
     [dim]Example:[/dim]  fleet sync
     """
     if serve:
+        from . import access as acl
+
+        raw = sys.stdin.read()
+        # The inventory carries the endpoints that decide where `fleet ssh` dials, and
+        # this filter runs on a spoke that every granted peer holds a key for. Verifying
+        # the access list and taking the routing on trust would have secured the policy
+        # and left the routes open, so the whole envelope is checked.
+        pinned = acl.trusted_center_pubkey()
         try:
-            incoming = inv.loads(sys.stdin.read())
+            body = acl.unseal(raw, pinned) if pinned else acl.unseal_first_contact(raw)
+        except acl.AccessError as exc:
+            err.print(f"[red]{exc}[/red]")
+            raise typer.Exit(2)
+        try:
+            incoming = inv.loads(body)
         except Exception as exc:
             # A truncated pipe must never be read as "the other side has no devices".
             err.print(f"[red]unreadable inventory on stdin:[/red] {exc}")
@@ -988,6 +1005,115 @@ def cmd_ssh(ctx: typer.Context, name: str):
         argv.append(remote_command(extra))
 
     os.execvp("ssh", argv)      # replace this process; ssh owns the tty from here
+
+
+@app.command("access")
+def cmd_access(target: str = typer.Argument(None, help="one machine, instead of all"),
+               allow: str = typer.Option(None, "--allow", metavar="MACHINE",
+                                         help="let MACHINE reach the target"),
+               deny: str = typer.Option(None, "--deny", metavar="MACHINE",
+                                        help="stop MACHINE reaching the target"),
+               user: str = typer.Option("root", "--user", help="whose authorized_keys"),
+               json_out: bool = typer.Option(False, "--json")):
+    """Who may reach what, and change it.
+
+    Granting installs a key; revoking removes one. Both are things the center does to a
+    machine over ssh, so both can be pending -- and a revoke that has not reached its
+    target is reported as not in effect, never as done.
+
+    [dim]Example:[/dim]  fleet access oracle --allow lin-xps
+    """
+    from . import access as acl
+    from . import reconcile as rec
+
+    try:
+        current = acl.load()
+    except acl.AccessError as exc:
+        err.print(f"[red]{exc}[/red]")
+        err.print("  [dim]start one with [bold]fleet center --init[/bold][/dim]")
+        raise typer.Exit(2)
+
+    centre = acl.is_center(current)
+    if (allow or deny) and not centre:
+        if deny:
+            # Never queue a revoke. Deferring one silently looks identical to having
+            # done it, which is the failure this whole design exists to remove.
+            err.print("[red]Only the center can revoke access.[/red]")
+            raise typer.Exit(2)
+        _file_request(current, target, allow, user)
+        console.print(f"[yellow]Not the center[/yellow] -- filed a request for "
+                      f"{allow} -> {target}. It applies when the center next sweeps.")
+        return
+
+    if allow or deny:
+        try:
+            dst = acl.resolve(current, target)
+            src = acl.resolve(current, allow or deny)
+            changed = (acl.grant(current, src, dst, user=user) if allow
+                       else acl.revoke(current, src, dst, user=user))
+        except acl.AccessError as exc:
+            err.print(f"[red]{exc}[/red]")
+            raise typer.Exit(2)
+        if changed:
+            acl.save(current)
+        verb = "granted" if allow else "revoked"
+        console.print(f"[green]✓[/green] {verb} {current.name_of(src)} -> "
+                      f"{current.name_of(dst)}"
+                      + ("" if changed else "  [dim](already so)[/dim]"))
+        console.print("  [dim]run [bold]fleet sync[/bold] to apply it[/dim]")
+
+    ledger = rec.load_ledger()
+    rows = []
+    for edge in sorted(current.edges()):
+        src, dst, who = edge
+        if target and dst != acl.resolve(current, target):
+            continue
+        st = ledger.get(">".join(edge), rec.EdgeState())
+        rows.append({"from": current.name_of(src), "to": current.name_of(dst),
+                     "user": who, "state": st.observed,
+                     "pending_s": (int(time.time()) - st.pending_since)
+                                  if not st.converged and st.pending_since else 0,
+                     "last_error": st.last_error})
+    if _emit({"center": current.name_of(current.center), "edges": rows}, json_out):
+        return
+    if not rows:
+        console.print("[dim]no access granted yet[/dim]")
+        return
+    t = Table(box=None, pad_edge=False, header_style="bold")
+    for col in ("", "FROM", "TO", "USER", "STATE", "NOTE"):
+        t.add_column(col, no_wrap=(col != "NOTE"))
+    for r in rows:
+        live = r["state"] == "present"
+        dot = "[green]●[/green]" if live else "[yellow]○[/yellow]"
+        note = r["last_error"] or ("" if live else "not applied yet")
+        if r["pending_s"]:
+            note = f"pending {r['pending_s'] // 60}m · {note}" if note else \
+                   f"pending {r['pending_s'] // 60}m"
+        t.add_row(dot, r["from"], r["to"], r["user"], r["state"], note)
+    console.print(t)
+    if not centre:
+        console.print(f"\n[dim]center is {current.name_of(current.center)}; "
+                      "changes are filed as requests from here[/dim]")
+
+
+def _file_request(current, target: str, allow: str, user: str) -> None:
+    """Ask the center for an edge we cannot create ourselves.
+
+    Written to our own outbox and carried by the next sweep. A request is not a grant --
+    the center decides -- but a request matching an edge that already exists is simply
+    key placement that failed, and reconciles without anyone being asked.
+    """
+    from . import access as acl
+
+    out = []
+    if acl.OUTBOX_PATH.exists():
+        out = (yaml.safe_load(acl.OUTBOX_PATH.read_text()) or {}).get("requests", [])
+    entry = {"to": target, "from": allow, "user": user, "at": int(time.time())}
+    if entry not in [{k: v for k, v in r.items() if k != "at"} | {"at": r.get("at")}
+                     for r in out]:
+        out.append(entry)
+    acl.OUTBOX_PATH.parent.mkdir(parents=True, exist_ok=True)
+    acl.OUTBOX_PATH.write_text(yaml.safe_dump({"requests": out}, sort_keys=False))
 
 
 @app.command("setup")
