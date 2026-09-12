@@ -1,3 +1,8 @@
+> **The secrets half of this document is superseded by [access.md](access.md).**
+> `secrets.age`, age recipients and `fleet identity` no longer exist: the center
+> installs an SSH key once and there is no credential left to keep. The sync half
+> below is still accurate.
+
 # Sync and secrets
 
 Status: design, 2026-08-31. Implements the `role: center | backup` field that has been

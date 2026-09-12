@@ -81,8 +81,9 @@ def _usage(cmd: str) -> str:
   fields: the wrapper resolves the endpoint so credentials stay out of the transcript.
 - Treat `alerts` as blocking. A device reporting unattributed VRAM is not free, and a
   rental flagged idle is costing money right now.
-- `status` is not a boolean. `auth_failed` means the host is UP but rejected our key --
-  that is a credential problem to report, not an offline machine to skip.
+- `status` is not a boolean. `auth_failed` means the host is UP but rejected our key.
+  Report it; do not try to fix it. Only the center installs keys, with
+  `fleet access NAME --allow MACHINE`, and it may be offline right now.
 """
 
 

@@ -235,17 +235,26 @@ def test_key_install_rejects_an_unknown_device(tmp_path, monkeypatch):
     assert runner.invoke(app, ["key", "install", "nosuchbox"]).exit_code != 0
 
 
-def test_key_install_says_so_when_there_is_no_public_key(tmp_path, monkeypatch):
-    from fleet import cli
-    from fleet.cli import app
+def test_key_install_uses_the_fleet_key_not_a_personal_one(tmp_path, monkeypatch):
+    """This key is fleet's handle on the machine: revocable fleet-wide without touching
+    the key you push to GitHub with, and identifiable in someone's authorized_keys. It
+    is also generated on demand, so "you have no key" is no longer a failure mode."""
+    import fleet.cli as cli
 
-    runner, _ = _cli(tmp_path, monkeypatch)
-    monkeypatch.setattr(cli, "public_key", lambda *a, **k: None)
-    monkeypatch.setattr("sys.stdin.isatty", lambda: True, raising=False)
-    result = runner.invoke(app, ["key", "install", "box"])
-    assert result.exit_code != 0
-    assert "ssh-keygen" in result.output
+    seen = {}
+    monkeypatch.setattr(cli, "ensure_keypair",
+                        lambda *a, **k: (tmp_path / "id_ed25519", "ssh-ed25519 AAAA fleet:me"))
+    monkeypatch.setattr(cli, "install_key",
+                        lambda ep, pw, pub, **k: seen.update(pub=pub) or (True, ""))
+    monkeypatch.setattr(cli.getpass, "getpass", lambda *a: "hunter2")
+    monkeypatch.setattr(cli.sys.stdin, "isatty", lambda: True, raising=False)
 
+    from fleet.models import Device, Kind
+    dev = Device(id="net:1.2.3.4:22", name="box", kind=Kind.RENTAL,
+                 endpoints=[{"target": "1.2.3.4", "user": "root", "port": 22}])
+    monkeypatch.setattr(cli.store, "DB_PATH", tmp_path / "cache.db")
+    cli._install_key(dev)
+    assert seen["pub"] == "ssh-ed25519 AAAA fleet:me"
 
 def test_add_does_not_prompt_for_a_password_without_a_terminal(tmp_path, monkeypatch):
     """`fleet add` is the command an agent is most likely to run unattended."""

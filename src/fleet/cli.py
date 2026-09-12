@@ -27,7 +27,7 @@ from . import store
 from .config import DB_PATH, FLEET_KEY, INVENTORY_PATH, load_config
 from .edit import apply_edits
 from .install import build_install_argv, install_script
-from .keys import install_key, public_key
+from .keys import ensure_keypair, install_key
 from .models import Device, Kind, Status
 from .onboard import onboard, onboard_self
 from .probe.runner import (probe_env, probe_many, run_probe, run_probe_local)
@@ -296,10 +296,13 @@ def _install_key(dev, *, quiet: bool = False) -> bool:
     if not eps:
         err.print(f"[red]{dev.name} has no endpoint recorded[/red]")
         return False
-    found = public_key()
-    if found is None:
-        err.print("[red]No SSH public key found.[/red]  Create one first:  "
-                  "[bold]ssh-keygen -t ed25519[/bold]")
+    # The fleet key, never one from ~/.ssh. This key is fleet's handle on the machine:
+    # it can be revoked fleet-wide without touching the key you push to GitHub with, and
+    # the entry it leaves in authorized_keys says where it came from.
+    try:
+        path, pubkey = ensure_keypair()
+    except KeyError as exc:
+        err.print(f"[red]{exc}[/red]")
         return False
     if not sys.stdin.isatty():
         # Hanging on a prompt would be bad; capturing the password into whatever called
@@ -310,7 +313,6 @@ def _install_key(dev, *, quiet: bool = False) -> bool:
         return False
 
     ep = sorted(eps, key=lambda e: e.preference)[0]
-    path, pubkey = found
     console.print(f"[dim]installing {path} on {ep.user}@{ep.target}[/dim]")
     password = getpass.getpass(f"Password for {ep.user}@{ep.target}: ")
     try:

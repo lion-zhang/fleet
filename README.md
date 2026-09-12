@@ -19,10 +19,13 @@ one SSH connection.
 ```bash
 fleet edit blackwell --ssh "ssh -p 40001 root@1.2.3.4"   # rentals recycle addresses
 fleet edit lin-xps --disk-path /workspace                # watch the volume that matters
-fleet key install ds720                                  # password typed once, then key auth
+fleet center --init                                      # this machine decides who reaches what
+fleet access oracle --allow lin-xps                      # the center installs the key
 fleet top                                                # live view, like htop for the fleet
 fleet setup                                              # teach your coding agents to use it
 ```
 
-Status: v0.3 -- inventory, probe, CLI, live `top`, agent setup (Claude Code,
-Codex, Hermes), key bootstrap, sync to a center node, and encrypted secrets.  See `docs/design/` for the design.
+Status: v0.4 -- inventory, probe, CLI, live `top`, agent setup (Claude Code,
+Codex, Hermes), and a center that installs SSH keys rather than keeping passwords.
+Nothing is stored that could be stolen: a password, where one is needed at all, is
+typed once and spent on a single connection. See `docs/design/access.md`.
