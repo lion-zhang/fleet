@@ -387,17 +387,39 @@ def test_the_instructions_separate_what_needs_the_center():
         assert center_only in text
 
 
-def test_every_command_an_agent_can_use_is_listed():
-    """Adding a command and not telling the agents is how it stays unused."""
+# Commands deliberately kept out of the agent instructions, each with the reason.
+# Anything not here must appear, so adding a command forces the decision rather than
+# letting it default to silence.
+NOT_FOR_AGENTS = {
+    "probe": "hidden maintainer tool for capturing parser fixtures",
+    "setup": "circular -- an agent reading these instructions is the result of it",
+}
+
+
+def test_every_command_is_either_listed_or_deliberately_excluded():
+    """The earlier version of this test compared the listed commands against a hardcoded
+    set of the same commands, so it could only ever pass. It missed five.
+
+    Adding a command and not telling the agents is how it stays unused, and the failure
+    is invisible: nothing breaks, the capability is simply never reached for.
+    """
     from fleet.cli import app
     from fleet.setup import skill_text
 
     text = skill_text("fleet")
-    # top needs a terminal and add/edit/install/probe/paths/setup are human-facing
-    expected = {"ls", "show", "ssh", "access", "center", "sync", "update", "rm", "top"}
-    listed = {c.name for c in app.registered_commands} & expected
-    for name in listed:
-        assert f"fleet {name}" in text, f"agents are not told about `fleet {name}`"
+    missing = [c.name for c in app.registered_commands
+               if c.name not in NOT_FOR_AGENTS and f"fleet {c.name}" not in text]
+    assert not missing, (
+        f"agents are not told about: {sorted(missing)}. Either document them in "
+        "setup._usage, or add them to NOT_FOR_AGENTS with a reason.")
+
+
+def test_the_exclusions_are_real_commands():
+    """A stale exclusion would silently re-open the hole it was written to close."""
+    from fleet.cli import app
+
+    names = {c.name for c in app.registered_commands}
+    assert set(NOT_FOR_AGENTS) <= names, f"stale: {set(NOT_FOR_AGENTS) - names}"
 
 
 def test_the_agent_is_told_never_to_handle_a_password():

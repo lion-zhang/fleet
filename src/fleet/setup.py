@@ -87,6 +87,13 @@ Anywhere. A name may be omitted where the obvious subject is the machine you are
 - `{cmd} center --json` -- `is_center`, who decides, and when it was last heard from
 - `{cmd} top` -- live view; needs a terminal, so not for an agent
 - `{cmd} update [NAME]` / `--all` -- deploy the newest fleet from git
+- `{cmd} add "ssh user@host"` -- record a new machine. It is reachable but not yet
+  managed: only the center can put a key on it
+- `{cmd} add --self` -- record the machine you are on, without ssh
+- `{cmd} edit [NAME] --ssh "ssh ..."` -- a rental moved; point the record at the new
+  address. `--disk-path /workspace` to watch the volume that matters
+- `{cmd} install NAME` -- put fleet on a machine that has none
+- `{cmd} paths` -- where the inventory, keys and access list live on this machine
 
 Only on the center. `{cmd} center --json` has `is_center`; if it is false,
 these either refuse or file a request for the center to act on later.
