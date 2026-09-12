@@ -69,6 +69,21 @@ def gpu_pct(row: dict[str, Any]) -> int | None:
     return max(int(g.get("util_pct") or 0) for g in gpus)
 
 
+def provenance(row: dict[str, Any]) -> str:
+    """"via <machine>" when this row is second-hand, "" when we measured it ourselves.
+
+    Under the access list a machine reaches only what it is granted, so the center
+    relays telemetry for the rest. A relayed number is still worth showing -- it beats a
+    blank row -- but it must not be displayed as though we had just taken it, for the
+    same reason `staleness` exists: rendering it as live would be a lie in exactly the
+    place someone would act on it.
+    """
+    if (row.get("source") or "self") == "self":
+        return ""
+    by = row.get("probed_by") or "center"
+    return f"via {by}"
+
+
 def staleness(row: dict[str, Any], live_within: int) -> str:
     """How out of date this row is, when that is worth saying.
 
@@ -280,7 +295,7 @@ def render_fleet(rows: list[dict[str, Any]], summary: dict[str, Any],
             f"{row['ram_free_gb']:.0f}G" if row.get("ram_free_gb") else "-",
             disk_cell(row),
             f"[dim]{stale}[/dim]" if stale else "[green]live[/green]",
-            note,
+            " · ".join(x for x in (provenance(row), note) if x),
         )
     return t
 

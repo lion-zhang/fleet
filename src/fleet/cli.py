@@ -189,6 +189,9 @@ def cmd_ls(json_out: bool = typer.Option(False, "--json"),
                   f"${r['usd_per_hour']:.2f}" if r["usd_per_hour"] else "-",
                   age, note)
     console.print(t)
+    from . import access as acl
+    if note := acl.staleness_note():
+        console.print(f"[yellow]![/yellow] [dim]{note}[/dim]")
     s = view["summary"]
     console.print(f"\n[dim]{s['online']}/{s['total']} online · {s['gpus_free']} free GPU(s)"
                   + (f" · ${s['hourly_burn']:.2f}/hr burning" if s["hourly_burn"] else "") + "[/dim]")

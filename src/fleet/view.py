@@ -148,6 +148,10 @@ def device_view(dev: Device, state: dict | None, snap: dict | None,
         "gpu_count": len(gpus),
         "free_vram_mib": max((g["vram_free_mib"] for g in gpus), default=0),
         "ssh_auth": auth_of(dev, state),
+        # where this row came from: a probe we ran, or one the center relayed
+        # for a machine we cannot reach ourselves
+        "source": (state or {}).get("source") or "self",
+        "probed_by": (state or {}).get("probed_by") or "",
         "cpu_cores": (snap or {}).get("cpu_cores"),
         "ram_total_gb": round(mem_total / 1048576, 1) if mem_total else None,
         "ram_free_gb": round(mem_avail / 1048576, 1) if mem_avail else None,

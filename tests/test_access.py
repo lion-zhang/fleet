@@ -232,3 +232,33 @@ def test_the_center_key_is_pinned_on_first_contact(tmp_path):
     assert access.trusted_center_pubkey(p) == ""
     access.pin_center_pubkey("ssh-ed25519 AAAA center", p)
     assert access.trusted_center_pubkey(p) == "ssh-ed25519 AAAA center"
+
+
+# ------------------------------------------------------------ an absent center
+
+def test_a_quiet_center_is_a_note_not_a_refusal(tmp_path):
+    """Everything already granted keeps working with the center switched off: the keys
+    are in authorized_keys and sshd enforces them without consulting fleet. Treating
+    silence as lost access would turn a closed laptop into a fleet outage."""
+    import time as _t
+
+    p = tmp_path / "access-cache.yaml"
+    assert access.staleness_note(p) == "", "never contacted: say nothing, do not nag"
+    access.note_center_seen(p)
+    assert access.staleness_note(p) == "", "fresh"
+
+    import yaml as _y
+    _y.safe_dump  # noqa: B018
+    data = _y.safe_load(p.read_text())
+    data["seen_at"] = int(_t.time()) - 30 * 86400
+    p.write_text(_y.safe_dump(data))
+    note = access.staleness_note(p)
+    assert "30d" in note and "queued" in note
+    assert "denied" not in note and "refus" not in note
+
+
+def test_a_corrupt_cache_reads_as_never_seen(tmp_path):
+    p = tmp_path / "access-cache.yaml"
+    p.write_text("{{{ not yaml")
+    assert access.center_last_seen(p) == 0
+    assert access.staleness_note(p) == ""

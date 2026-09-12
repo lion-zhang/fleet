@@ -371,3 +371,50 @@ def unseal_first_contact(payload: str) -> str:
     body = unseal(payload, pub)
     pin_center_pubkey(pub)
     return body
+
+
+# --------------------------------------------------------------- is the center about
+
+# A center is a laptop. Weeks of silence are a holiday, not a revocation.
+STALE_AFTER_S = 7 * 24 * 3600
+
+
+def center_last_seen(cache_path: Path | None = None) -> int:
+    """When the center last swept this machine. 0 if it never has."""
+    path = cache_path or CACHE_PATH
+    try:
+        return int((yaml.safe_load(path.read_text()) or {}).get("seen_at") or 0)
+    except (OSError, yaml.YAMLError, TypeError, ValueError):
+        return 0
+
+
+def note_center_seen(cache_path: Path | None = None) -> None:
+    path = cache_path or CACHE_PATH
+    try:
+        data = yaml.safe_load(path.read_text()) or {}
+    except (OSError, yaml.YAMLError):
+        data = {}
+    data["seen_at"] = int(time.time())
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = path.with_suffix(".tmp")
+    tmp.write_text(yaml.safe_dump(data, sort_keys=False))
+    os.replace(tmp, path)
+
+
+def staleness_note(cache_path: Path | None = None) -> str:
+    """A line for `ls` and `top` when the center has been quiet, or "".
+
+    Deliberately a note and never a refusal. Everything already granted keeps working
+    with the center switched off -- the keys are in authorized_keys and sshd enforces
+    them without consulting fleet at all -- so treating a quiet center as a loss of
+    access would turn a closed laptop into a fleet outage, which is precisely backwards.
+    """
+    seen = center_last_seen(cache_path)
+    if not seen:
+        return ""
+    age = int(time.time()) - seen
+    if age < STALE_AFTER_S:
+        return ""
+    days = age // 86400
+    return (f"the center has not swept this machine for {days}d -- grants and revokes "
+            "are queued until it does")
