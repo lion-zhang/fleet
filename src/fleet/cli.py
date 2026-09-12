@@ -543,8 +543,8 @@ def run_sync(ep, payload: str) -> tuple[int, str]:
     argv = build_argv(ep, remote=remote)
     # Sealed, because the far side runs this filter for anyone holding a key on it.
     from . import access as acl
-    p = subprocess.run(argv, input=acl.seal(payload), capture_output=True, text=True,
-                       timeout=180)
+    p = subprocess.run(argv, input=acl.seal(payload, telemetry=_telemetry_to_relay()),
+                       capture_output=True, text=True, timeout=180)
     return p.returncode, (p.stdout if p.returncode == 0 else p.stdout + p.stderr)
 
 
@@ -662,11 +662,18 @@ def cmd_sync(serve: bool = typer.Option(False, "--serve",
         # the access list and taking the routing on trust would have secured the policy
         # and left the routes open, so the whole envelope is checked.
         pinned = acl.trusted_center_pubkey()
+        relayed = []
         try:
-            body = acl.unseal(raw, pinned) if pinned else acl.unseal_first_contact(raw)
+            if pinned:
+                body, relayed = acl.unseal_with_telemetry(raw, pinned)
+            else:
+                body = acl.unseal_first_contact(raw)
         except acl.AccessError as exc:
             err.print(f"[red]{exc}[/red]")
             raise typer.Exit(2)
+        acl.note_center_seen()
+        if relayed:
+            _record_relayed(relayed)
         try:
             incoming = inv.loads(body)
         except Exception as exc:
@@ -771,6 +778,56 @@ def _endpoint_for(dev, user: str):
         return None
     ep = eps[0]
     return replace(ep, user=user or ep.user)
+
+
+def _telemetry_to_relay() -> list[dict]:
+    """What we measured ourselves, for machines the far side may not be able to reach.
+
+    First-hand only: relaying a row that was itself relayed would let a reading drift
+    between machines with nothing to say how far it had travelled or how old it really
+    was.
+    """
+    conn = store.connect()
+    try:
+        rows = conn.execute(
+            "SELECT device_id, status, last_probe_at FROM device_state "
+            "WHERE source='self'").fetchall()
+        out = []
+        for r in rows:
+            _, snap = store.latest(conn, r["device_id"])
+            out.append({"device_id": r["device_id"], "status": r["status"],
+                        "probed_at": r["last_probe_at"], "snapshot": snap})
+        return out
+    finally:
+        conn.close()
+
+
+def _record_relayed(rows: list) -> None:
+    """Store rows the center measured, marked as second-hand.
+
+    Never overwrites a probe we ran: `store.latest` prefers first-hand, so our own
+    reading of a machine we can reach always wins over the center's view of it.
+    """
+    from .models import ProbeResult, Snapshot, Status
+
+    by = ""
+    conn = store.connect()
+    try:
+        for row in rows:
+            if not isinstance(row, dict) or not row.get("device_id"):
+                continue
+            snap = None
+            if isinstance(row.get("snapshot"), dict):
+                with suppress(Exception):
+                    snap = Snapshot(**{k: v for k, v in row["snapshot"].items()
+                                       if k in Snapshot.__dataclass_fields__})
+            with suppress(ValueError):
+                store.record(conn, row["device_id"],
+                             ProbeResult(status=Status(row.get("status") or "unknown"),
+                                         snapshot=snap),
+                             source="broadcast", probed_by=by or "center")
+    finally:
+        conn.close()
 
 
 def _sweep(devices) -> None:

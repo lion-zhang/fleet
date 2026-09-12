@@ -281,7 +281,8 @@ def verify(payload: str, signature: str, signer_pubkey: str) -> bool:
 PROTOCOL = 2
 
 
-def seal(inventory_yaml: str, *, key_path: Path | None = None) -> str:
+def seal(inventory_yaml: str, *, key_path: Path | None = None,
+         telemetry: list | None = None) -> str:
     """Wrap an inventory in a signature the receiver can check.
 
     The inventory is not incidental cargo: it holds the endpoints that decide where
@@ -293,11 +294,16 @@ def seal(inventory_yaml: str, *, key_path: Path | None = None) -> str:
     injected low-preference route would win and could never be removed.
     """
     key_path = key_path or FLEET_KEY
+    body = yaml.safe_dump({"inventory": inventory_yaml,
+                           "telemetry": telemetry or []}, sort_keys=False)
     return yaml.safe_dump({
         "protocol": PROTOCOL,
         "center_pubkey": key_path.with_suffix(".pub").read_text().strip(),
-        "signature": sign(inventory_yaml, key_path),
-        "inventory": inventory_yaml,
+        # The signature covers the telemetry as well as the inventory. Relayed readings
+        # decide where work gets sent, so an unsigned one is a way to steer a job onto a
+        # machine of the sender's choosing.
+        "signature": sign(body, key_path),
+        "body": body,
     }, sort_keys=False)
 
 
@@ -312,14 +318,28 @@ def unseal(payload: str, signer_pubkey: str) -> str:
         env = yaml.safe_load(payload) or {}
     except yaml.YAMLError as exc:
         raise AccessError(f"unreadable sync payload: {exc}") from exc
-    if not isinstance(env, dict) or "inventory" not in env:
+    return _open(env, signer_pubkey)[0]
+
+
+def _open(env, signer_pubkey: str):
+    """Verify and split a sealed envelope into (inventory, telemetry)."""
+    if not isinstance(env, dict) or "body" not in env:
         raise AccessError("unsigned sync payload -- refusing it")
     if int(env.get("protocol") or 0) != PROTOCOL:
         raise AccessError(f"sync protocol {env.get('protocol')!r} is not {PROTOCOL}")
-    body = env["inventory"]
+    body = env["body"]
     if not verify(body, env.get("signature") or "", signer_pubkey):
         raise AccessError("sync payload is not signed by the center we trust")
-    return body
+    inner = yaml.safe_load(body) or {}
+    return inner.get("inventory", ""), list(inner.get("telemetry") or [])
+
+
+def unseal_with_telemetry(payload: str, signer_pubkey: str):
+    try:
+        env = yaml.safe_load(payload) or {}
+    except yaml.YAMLError as exc:
+        raise AccessError(f"unreadable sync payload: {exc}") from exc
+    return _open(env, signer_pubkey)
 
 
 def trusted_center_pubkey(cache_path: Path | None = None) -> str:
@@ -363,14 +383,14 @@ def unseal_first_contact(payload: str) -> str:
         env = yaml.safe_load(payload) or {}
     except yaml.YAMLError as exc:
         raise AccessError(f"unreadable sync payload: {exc}") from exc
-    if not isinstance(env, dict) or "inventory" not in env:
+    if not isinstance(env, dict) or "body" not in env:
         raise AccessError("unsigned sync payload -- refusing it")
     pub = str(env.get("center_pubkey") or "")
     if not pub:
         raise AccessError("sealed payload carries no center key to pin")
-    body = unseal(payload, pub)
+    inventory, _ = _open(env, pub)
     pin_center_pubkey(pub)
-    return body
+    return inventory
 
 
 # --------------------------------------------------------------- is the center about
