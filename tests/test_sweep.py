@@ -183,3 +183,39 @@ def test_the_center_removing_a_machine_drops_its_edges(fleet_at, monkeypatch):
     assert B not in acc.keys
     assert not any(B in (e.src, e.dst) for e in acc.allow)
     assert "still installed" in r.output, "and it says the keys have not gone yet"
+
+
+# ------------------------------------------------------------- the trimmed surface
+
+def test_ls_can_name_devices_so_refresh_is_not_needed(fleet_at):
+    """`fleet refresh` was `_rows(refresh=True)` followed by a worse printer, and `ls`
+    had no way to filter -- so the one thing refresh could do that ls could not was the
+    reason to keep it."""
+    runner, _ = fleet_at
+    r = runner.invoke(cli.app, ["ls", "oracle", "--json"])
+    assert r.exit_code == 0, r.output
+    assert '"oracle"' in r.output
+    assert '"lin-xps"' not in r.output
+
+
+def test_refresh_is_gone():
+    runner = CliRunner()
+    assert runner.invoke(cli.app, ["refresh"]).exit_code != 0
+
+
+def test_probe_still_works_but_is_not_advertised():
+    """Its real job is capturing parser fixtures; without --raw it says what `fleet show
+    --json` already says."""
+    out = CliRunner().invoke(cli.app, ["--help"]).output
+    assert "probe" not in out
+    assert "Usage" in CliRunner().invoke(cli.app, ["probe", "--help"]).output
+
+
+def test_paths_names_every_file_and_the_shared_directory(fleet_at):
+    """CONFIG_DIR and STATE_DIR are the same directory on macOS, which is why every
+    filename is distinct and nothing here may be cleaned up by globbing."""
+    runner, _ = fleet_at
+    out = runner.invoke(cli.app, ["paths"]).output
+    for expected in ("inventory", "fleet key", "access", "ledger", "outbox", "cache"):
+        assert expected in out
+    assert "same directory" in out

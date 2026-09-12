@@ -217,13 +217,13 @@ def _cli(tmp_path, monkeypatch, **devkw):
     return CliRunner(), path
 
 
-def test_key_install_refuses_to_prompt_without_a_terminal(tmp_path, monkeypatch):
+def test_enrolling_refuses_to_prompt_without_a_terminal(tmp_path, monkeypatch):
     """An agent running this in a subprocess must get a clean error, not a hung prompt
     and not a password captured into its context."""
     from fleet.cli import app
 
     runner, _ = _cli(tmp_path, monkeypatch)
-    result = runner.invoke(app, ["key", "install", "box"])
+    result = runner.invoke(app, ["center", "--enroll", "box"])
     assert result.exit_code != 0
     assert "terminal" in result.output.lower() or "tty" in result.output.lower()
 
@@ -275,4 +275,4 @@ def test_add_does_not_prompt_for_a_password_without_a_terminal(tmp_path, monkeyp
     result = runner.invoke(app, ["add", "ssh root@5.6.7.8"])
     assert result.exit_code == 0, result.output
     assert not called, "must never prompt when stdin is not a terminal"
-    assert "fleet key install" in result.output, "but must say how to fix it"
+    assert "fleet center --enroll" in result.output, "but must say how to fix it"

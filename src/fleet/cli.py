@@ -105,14 +105,15 @@ def _rows(names: list[str] | None = None, *, refresh: bool = False,
 
 
 @app.command("ls")
-def cmd_ls(json_out: bool = typer.Option(False, "--json"),
+def cmd_ls(names: list[str] = typer.Argument(None, help="only these devices"),
+           json_out: bool = typer.Option(False, "--json"),
            refresh: bool = typer.Option(False, "--refresh", "-r", help="force a live probe"),
            online: bool = typer.Option(False, "--online", help="only reachable devices")):
     """List every device with live resource availability.
 
     [dim]Example:[/dim]  fleet ls --json
     """
-    rows = _rows(refresh=refresh)
+    rows = _rows(list(names) if names else None, refresh=refresh)
     if online:
         rows = [r for r in rows if r["status"] == "ok"]
     view = fleet_view(rows)
@@ -274,16 +275,11 @@ def cmd_add(ssh_command: str = typer.Argument(None, help='e.g. "ssh -p 58418 roo
         # "host is up but rejected our key" is the one failure a password can fix.
         if res.status is Status.AUTH_FAILED and not no_key_prompt:
             if not sys.stdin.isatty():
-                console.print(f"  [dim]run [bold]fleet key install {dev.name}[/bold] from a "
+                console.print(f"  [dim]run [bold]fleet center --enroll {dev.name}[/bold] from a "
                               "terminal to install your key.[/dim]")
             elif typer.confirm(f"  Install your public key on {dev.name} now?", default=True):
                 if _install_key(dev):
                     inv.save(devices)
-
-
-key_app = typer.Typer(no_args_is_help=True,
-                      help="Install your SSH key on a device so password auth is not needed.")
-app.add_typer(key_app, name="key")
 
 
 def _install_key(dev, *, quiet: bool = False) -> bool:
@@ -308,7 +304,7 @@ def _install_key(dev, *, quiet: bool = False) -> bool:
     if not sys.stdin.isatty():
         # Hanging on a prompt would be bad; capturing the password into whatever called
         # us would be worse. Refuse, and say exactly what to run instead.
-        msg = ("  [dim]no terminal here — run [bold]fleet key install "
+        msg = ("  [dim]no terminal here — run [bold]fleet center --enroll "
                f"{dev.name}[/bold] yourself to install your key.[/dim]")
         (console if quiet else err).print(msg)
         return False
@@ -335,22 +331,6 @@ def _install_key(dev, *, quiet: bool = False) -> bool:
     else:
         err.print(f"[red]Could not install the key.[/red]\n{output.strip()[-400:]}")
     return ok
-
-
-@key_app.command("install")
-def cmd_key_install(name: str):
-    """Install your public key on a device, using a password typed once.
-
-    [dim]Example:[/dim]  fleet key install ds720
-    """
-    devices = inv.load()
-    dev = inv.find(devices, name)
-    if dev is None:
-        err.print(f"[red]No device named {name!r}[/red]")
-        raise typer.Exit(1)
-    if not _install_key(dev):
-        raise typer.Exit(2)
-    inv.save(devices)
 
 
 @app.command("edit")
@@ -923,23 +903,12 @@ def cmd_rm(name: str, yes: bool = typer.Option(False, "--yes", "-y")):
                       "[bold]fleet sync[/bold] reaches each machine.")
 
 
-@app.command("refresh")
-def cmd_refresh(names: list[str] = typer.Argument(None), json_out: bool = typer.Option(False, "--json")):
-    """Force a live probe of some or all devices.
-
-    [dim]Example:[/dim]  fleet refresh lin-xps
-    """
-    rows = _rows(list(names) if names else None, refresh=True)
-    if _emit(fleet_view(rows), json_out):
-        return
-    for r in rows:
-        console.print(f"{_DOT.get(r['status'],'?')} {r['name']:<16} {r['status']:<16} "
-                      f"{r['telemetry_age_s']}s ago")
-
-
-@app.command("probe")
+@app.command("probe", hidden=True)
 def cmd_probe(name: str, raw: bool = typer.Option(False, "--raw", help="print payload stdout")):
     """Probe one device directly. --raw captures a new parser test fixture.
+
+    Hidden: its real job is capturing fixtures for the parser tests, and without --raw it
+    says what `fleet show --json` already says.
 
     [dim]Example:[/dim]  fleet probe lin-xps --raw
     """
@@ -991,7 +960,7 @@ def cmd_ssh(ctx: typer.Context, name: str):
         conn.close()
     if auth_of(dev, cached) == "needs_key":
         err.print(f"[yellow]{dev.name} rejected our key.[/yellow] Install one:")
-        err.print(f"  [bold]fleet key install {dev.name}[/bold]")
+        err.print(f"  [bold]fleet center --enroll {dev.name}[/bold]")
         raise typer.Exit(2)
     argv = ["ssh"]
     # The fleet key, or `fleet ssh` connects with a personal key that fleet no longer
@@ -1191,6 +1160,9 @@ def cmd_center(name: str = typer.Argument(None, help="hand the role to this mach
                                            help="print the key to pre-place on a host"),
                export: bool = typer.Option(False, "--export",
                                            help="print the access list and pins"),
+               enroll: str = typer.Option(None, "--enroll", metavar="MACHINE",
+                                          help="put this fleet's key on a host for the "
+                                               "first time, using a password typed once"),
                leave: bool = typer.Option(False, "--leave",
                                           help="remove this fleet's keys from this machine"),
                force: bool = typer.Option(False, "--force")):
@@ -1210,6 +1182,21 @@ def cmd_center(name: str = typer.Argument(None, help="hand the role to this mach
         # want this is before the machine exists, writing a cloud-init file.
         _, pub = ensure_keypair()
         print(pub)
+        return
+
+    if enroll:
+        # The bootstrap the sweep cannot do: the sweep writes with a key the host already
+        # accepts, so a host the center has never reached needs one put there some other
+        # way. Deliberately before the access list is loaded -- this is how a fleet gets
+        # its first machine, and requiring the fleet to exist first would be circular.
+        dev = inv.find(inv.load(), enroll)
+        if dev is None:
+            err.print(f"[red]No device named {enroll!r}[/red]")
+            raise typer.Exit(1)
+        if not _install_key(dev):
+            raise typer.Exit(2)
+        console.print(f"  [dim]now grant it something: [bold]fleet access {dev.name} "
+                      f"--allow <machine>[/bold][/dim]")
         return
 
     if init:
@@ -1354,8 +1341,23 @@ def cmd_paths():
 
     [dim]Example:[/dim]  fleet paths
     """
+    from . import access as acl
+    from .config import CONFIG_DIR, FLEET_KEY, STATE_DIR
+
     console.print(f"inventory  {INVENTORY_PATH}")
+    console.print(f"fleet key  {FLEET_KEY}   [dim](never regenerate: it is this "
+                  "machine's identity)[/dim]")
+    console.print(f"access     {acl.ACCESS_PATH}   [dim](center only — the authority)[/dim]")
+    console.print(f"ledger     {acl.LEDGER_PATH}   [dim](center only — what has landed)[/dim]")
+    console.print(f"seen       {acl.CACHE_PATH}   [dim](the center's key, and when it "
+                  "last swept)[/dim]")
+    console.print(f"outbox     {acl.OUTBOX_PATH}   [dim](requests we have filed)[/dim]")
     console.print(f"cache      {DB_PATH}   [dim](disposable — delete and re-probe)[/dim]")
+    if CONFIG_DIR == STATE_DIR:
+        # Worth saying out loud: it is why every filename above is distinct, and why
+        # nothing here may ever be cleaned up by globbing a directory.
+        console.print(f"\n[dim]config and state are the same directory here "
+                      f"({CONFIG_DIR}).[/dim]")
 
 
 def main() -> None:

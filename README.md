@@ -20,6 +20,7 @@ one SSH connection.
 fleet edit blackwell --ssh "ssh -p 40001 root@1.2.3.4"   # rentals recycle addresses
 fleet edit lin-xps --disk-path /workspace                # watch the volume that matters
 fleet center --init                                      # this machine decides who reaches what
+fleet center --enroll ds720                              # password typed once, then key auth
 fleet access oracle --allow lin-xps                      # the center installs the key
 fleet top                                                # live view, like htop for the fleet
 fleet setup                                              # teach your coding agents to use it

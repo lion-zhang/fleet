@@ -19,9 +19,8 @@ from fleet.cli import app
 runner = CliRunner()
 
 COMMANDS = [
-    ("ls",), ("show",), ("add",), ("edit",), ("rm",), ("refresh",), ("probe",),
+    ("ls",), ("show",), ("add",), ("edit",), ("rm",), ("probe",),
     ("ssh",), ("setup",), ("paths",), ("top",), ("install",), ("sync",),
-    ("key", "install"),
     ("access",), ("center",),
 ]
 
