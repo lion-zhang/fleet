@@ -22,11 +22,54 @@ import time
 from contextlib import suppress
 from pathlib import Path
 
+from .config import FLEET_KEY
 from .sshcmd import Endpoint
 
 # sshd's prompt varies ("Password:", "root@host's password:", a PAM phrasing), so match
 # the one word they reliably share, case-insensitively.
 _PROMPT = re.compile(rb"password.*:\s*$", re.IGNORECASE)
+
+def ensure_keypair(path: Path | None = None) -> tuple[Path, str]:
+    """This machine's own fleet keypair, created once. Returns (private path, public text).
+
+    Dedicated rather than reusing ~/.ssh/id_*: this key is fleet's handle on the
+    machine, so it can be revoked fleet-wide without touching the key you push to
+    GitHub with, and an entry in someone's authorized_keys says plainly where it came
+    from.
+
+    **Never regenerates.** A new key would orphan every authorized_keys entry already
+    placed for this machine -- on every host, in every fleet -- with nothing left to
+    match them by and no way to find them again. Same rule, and same reason, as the age
+    identity this replaces.
+    """
+    import socket
+    import subprocess
+
+    path = path or FLEET_KEY
+    pub = path.with_suffix(".pub")
+    if path.exists() and pub.exists():
+        return path, pub.read_text().strip()
+
+    path.parent.mkdir(parents=True, exist_ok=True)
+    # ssh-keygen refuses to overwrite, which is the behaviour we want, but a half-made
+    # pair from an interrupted run would wedge it forever. Clear only that case.
+    if path.exists() or pub.exists():
+        with suppress(OSError):
+            path.unlink(missing_ok=True)
+        with suppress(OSError):
+            pub.unlink(missing_ok=True)
+    try:
+        subprocess.run(
+            ["ssh-keygen", "-t", "ed25519", "-N", "", "-q",
+             "-C", f"fleet:{socket.gethostname()}", "-f", str(path)],
+            check=True, capture_output=True, text=True)
+    except FileNotFoundError as exc:
+        raise KeyError("ssh-keygen not found -- install OpenSSH") from exc
+    except subprocess.CalledProcessError as exc:
+        raise KeyError(f"ssh-keygen failed: {(exc.stderr or '').strip()[:200]}") from exc
+    os.chmod(path, 0o600)
+    return path, pub.read_text().strip()
+
 
 _KEY_PREFERENCE = ("id_ed25519.pub", "id_ecdsa.pub", "id_rsa.pub")
 
@@ -76,6 +119,11 @@ def build_password_argv(ep: Endpoint, *, timeout: int = 15) -> list[str]:
     ]
     if ep.port and ep.port != 22:
         argv += ["-p", str(ep.port)]
+    # -J, but deliberately not -i: under PubkeyAuthentication=no an identity is
+    # meaningless, while without the jump host a device reached through a bastion
+    # cannot be bootstrapped at all.
+    if ep.jump:
+        argv += ["-J", ep.jump]
     argv.append(f"{ep.user}@{ep.target}" if ep.user else ep.target)
     return argv
 

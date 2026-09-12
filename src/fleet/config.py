@@ -15,6 +15,10 @@ _DIRS = PlatformDirs(appname="fleet", appauthor=False, roaming=False)
 CONFIG_DIR = Path(os.environ.get("FLEET_CONFIG_DIR") or _DIRS.user_config_dir)
 STATE_DIR = Path(os.environ.get("FLEET_STATE_DIR") or _DIRS.user_state_dir)
 INVENTORY_PATH = CONFIG_DIR / "inventory.yaml"
+# This machine's own fleet keypair. Lives beside the inventory because it is
+# configuration, not cache: losing it orphans every authorized_keys entry placed
+# for this machine, on every host, with nothing left to match them by.
+FLEET_KEY = CONFIG_DIR / "id_ed25519"
 CONFIG_PATH = CONFIG_DIR / "config.yaml"
 DB_PATH = STATE_DIR / "cache.db"
 

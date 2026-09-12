@@ -18,6 +18,7 @@ import pytest
 
 from fleet.keys import (
     authorized_keys_command,
+    ensure_keypair,
     build_password_argv,
     public_key,
     run_with_password,
@@ -71,6 +72,49 @@ def test_a_hostile_key_string_cannot_execute_anything(tmp_path):
 
 
 # --------------------------------------------------------------- the ssh invocation
+
+# ------------------------------------------------------------ this machine's own key
+
+def test_the_fleet_keypair_is_created_once(tmp_path):
+    path, pub = ensure_keypair(tmp_path / "id_ed25519")
+    assert path.exists() and pub.startswith("ssh-ed25519 ")
+    assert "fleet:" in pub, "the comment says where an authorized_keys entry came from"
+
+
+def test_the_fleet_keypair_is_never_regenerated(tmp_path):
+    """A new key orphans every authorized_keys entry already placed for this machine,
+    on every host, with nothing left to match them by."""
+    path, first = ensure_keypair(tmp_path / "id_ed25519")
+    again, second = ensure_keypair(tmp_path / "id_ed25519")
+    assert again == path
+    assert second == first
+
+
+def test_the_private_half_is_not_readable_by_other_users(tmp_path):
+    import stat
+
+    path, _ = ensure_keypair(tmp_path / "id_ed25519")
+    assert stat.S_IMODE(path.stat().st_mode) & 0o077 == 0
+
+
+def test_a_half_written_pair_does_not_wedge_forever(tmp_path):
+    """ssh-keygen refuses to overwrite, so an interrupted run would otherwise leave a
+    private half that can never be completed."""
+    path = tmp_path / "id_ed25519"
+    path.write_text("truncated garbage from an interrupted run")
+    _, pub = ensure_keypair(path)
+    assert pub.startswith("ssh-ed25519 ")
+
+
+def test_a_jump_host_device_can_still_be_bootstrapped():
+    """build_password_argv dropped -J, so a device behind a bastion could not have a key
+    installed at all. -i stays dropped: it is meaningless under PubkeyAuthentication=no.
+    """
+    argv = build_password_argv(Endpoint(target="box", user="root", jump="bastion",
+                                        identity="/home/u/.ssh/id_ed25519"))
+    assert "-J" in argv and argv[argv.index("-J") + 1] == "bastion"
+    assert "-i" not in argv
+
 
 def test_password_auth_is_forced_because_the_key_is_what_is_missing():
     argv = build_password_argv(_ep(), timeout=8)

@@ -14,6 +14,8 @@ import subprocess
 import sys
 from dataclasses import dataclass, field
 
+from .config import FLEET_KEY
+
 IS_WINDOWS = sys.platform == "win32"
 
 # ssh flags that take a value; anything else single-letter is a boolean switch.
@@ -207,6 +209,11 @@ def build_argv(ep: Endpoint, *, connect_timeout: int = 8, multiplex: bool = True
     ]
     if ep.identity:
         argv += ["-i", ep.identity]
+    # Offer the fleet key too, when there is one. IdentitiesOnly=yes above means ssh
+    # sends only what we name here, so a host that knows the fleet key but not the
+    # endpoint's identity would otherwise be unreachable.
+    if FLEET_KEY.exists() and str(FLEET_KEY) != ep.identity:
+        argv += ["-i", str(FLEET_KEY)]
     if ep.port and ep.port != 22:
         argv += ["-p", str(ep.port)]
     if ep.jump:
