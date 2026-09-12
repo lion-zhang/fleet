@@ -281,17 +281,17 @@ def test_promoting_a_center_demotes_the_previous_one():
 
     devices = [_dev("old", role="center"), _dev("new")]
     promote_center(devices, devices[1])
-    assert [d.role for d in devices] == ["backup", "center"]
+    assert [d.role for d in devices] == ["none", "center"]
 
 
-def test_the_demoted_center_becomes_a_backup_not_a_bystander():
+def test_the_demoted_center_keeps_no_standing_privilege():
     """It still has fleet installed and still holds a full copy. Dropping it to 'none'
     would silently throw away a replica."""
     from fleet.inventory import promote_center
 
     devices = [_dev("old", role="center"), _dev("new")]
     promote_center(devices, devices[1])
-    assert devices[0].role == "backup"
+    assert devices[0].role == "none"
 
 
 def test_demotion_is_stamped_so_it_survives_the_next_merge():
@@ -308,10 +308,13 @@ def test_demotion_is_stamped_so_it_survives_the_next_merge():
 def test_devices_that_are_not_brokers_are_left_alone():
     from fleet.inventory import promote_center
 
-    devices = [_dev("plain"), _dev("backup-node", role="backup"), _dev("new")]
+    # A legacy record may still say "backup" -- the role was removed, but inventories
+    # written before that are on disk. Promotion touches only the outgoing center, so a
+    # stale value is left exactly as found rather than silently rewritten.
+    devices = [_dev("plain"), _dev("legacy", role="backup"), _dev("new")]
     promote_center(devices, devices[2])
     assert devices[0].role == "none"
-    assert devices[1].role == "backup"
+    assert devices[1].role == "backup", "not ours to change; only the center is demoted"
 
 
 def test_promoting_the_current_center_again_changes_nothing():
@@ -327,7 +330,7 @@ def test_a_merge_that_produces_two_centers_keeps_only_the_newer(tmp_path):
     local = [_dev("a", role="center", updated_at=100), _dev("b", updated_at=100)]
     remote = [_dev("a", updated_at=100), _dev("b", role="center", updated_at=300)]
     merged, _ = merge(local, remote)
-    assert [d.role for d in merged] == ["backup", "center"]
+    assert [d.role for d in merged] == ["none", "center"]
     assert sum(1 for d in merged if d.role == "center") == 1
 
 

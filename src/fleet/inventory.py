@@ -218,9 +218,12 @@ def promote_center(devices: list[Device], new_center: Device) -> list[str]:
     changes: list[str] = []
     for d in live(devices):
         if d.role == "center" and d.id != new_center.id:
-            d.role = "backup"
+            # Demoted to none, not to a second-root role. A former center that keeps a
+            # key on every device can still open every door, permanently, to save an
+            # occasional manual recovery. There is exactly one fleet-root.
+            d.role = "none"
             touch(d)
-            changes.append(f"{d.name}: center -> backup")
+            changes.append(f"{d.name}: center -> none")
     if new_center.role != "center":
         new_center.role = "center"
         touch(new_center)
@@ -231,14 +234,14 @@ def promote_center(devices: list[Device], new_center: Device) -> list[str]:
 def _one_center(devices: list[Device]) -> None:
     """Two machines can each promote a different device before syncing. Left alone,
     `fleet sync` would then pick a center arbitrarily, so the newest promotion wins and
-    the rest fall back to backup."""
+    the rest fall back to none."""
     centers = [d for d in live(devices) if d.role == "center"]
     if len(centers) < 2:
         return
     keep = max(centers, key=lambda d: d.updated_at)
     for d in centers:
         if d is not keep:
-            d.role = "backup"
+            d.role = "none"
 
 
 def merge(local: list[Device], remote: list[Device], *,

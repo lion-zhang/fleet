@@ -458,6 +458,12 @@ def cmd_install(name: str = typer.Argument(None,
 
     [dim]Example:[/dim]  fleet install oracle
     """
+    if role == "center":
+        # Checked before anything reaches the network. It used to be validated after the
+        # install had already run, so an invalid flag cost a full ssh timeout before
+        # being told it was invalid.
+        err.print("[red]Use [bold]fleet center NAME[/bold] to move the role.[/red]")
+        raise typer.Exit(2)
     devices = inv.load()
     dev = _this_machine(devices, "update") if name is None else inv.find(devices, name)
     if dev is None:
@@ -494,12 +500,6 @@ def cmd_install(name: str = typer.Argument(None,
     # Only an explicit --role center is refused. `fleet install` doubles as `fleet
     # update`, so reinstalling on the existing center must leave it alone rather than
     # tripping over its own role.
-    if role == "center":
-        # The same unguarded promotion `fleet edit --role center` used to offer: no key
-        # installed on the successor, no handover signed, nothing verified. It defaulted
-        # every installed device to `backup` too, a role that no longer exists.
-        err.print("[red]Use [bold]fleet center NAME[/bold] to move the role.[/red]")
-        raise typer.Exit(2)
     if role is None:
         role = dev.role
     if role != dev.role:
@@ -1264,6 +1264,8 @@ def cmd_center(name: str = typer.Argument(None, help="hand the role to this mach
                enroll: str = typer.Option(None, "--enroll", metavar="MACHINE",
                                           help="put this fleet's key on a host for the "
                                                "first time, using a password typed once"),
+               accept: bool = typer.Option(False, "--accept",
+                                           help="take the role a handover offered"),
                leave: bool = typer.Option(False, "--leave",
                                           help="remove this fleet's keys from this machine"),
                json_out: bool = typer.Option(False, "--json"),
@@ -1322,6 +1324,9 @@ def cmd_center(name: str = typer.Argument(None, help="hand the role to this mach
         err.print("  [dim]start one with [bold]fleet center --init[/bold][/dim]")
         raise typer.Exit(2)
 
+    if accept:
+        _accept_handover(acc)
+        return
     if leave:
         _leave_fleet(acc)
         return
@@ -1350,6 +1355,67 @@ def cmd_center(name: str = typer.Argument(None, help="hand the role to this mach
         console.print("\n[dim]Changes are made on the center. Losing it means "
                       "re-configuring by hand -- keep a copy: [bold]fleet center "
                       "--export[/bold][/dim]")
+
+
+def _accept_handover(acc) -> None:
+    """Phase two, on the successor: prove we can write, then take the role.
+
+    The check is a no-op marker-block edit on every machine -- drop our own block and put
+    it straight back. Probing would only prove our key is *present*; it says nothing
+    about whether the file can be written, and on Windows every way that fails is
+    silent, so a handover verified by probing would hand the fleet to a machine that
+    cannot manage it and discover that only after the predecessor was gone.
+    """
+    from . import access as acl
+    from . import reconcile as rec
+    from .authkeys import posix_sync_command
+    from .keys import ensure_keypair
+
+    _, pub = ensure_keypair()
+    mine = acl.fingerprint(pub)
+    if mine == acc.center:
+        console.print("[dim]already the center[/dim]")
+        return
+    if mine not in acc.keys:
+        err.print("[red]This machine is not in the access list,[/red] so no handover "
+                  "could have named it.")
+        raise typer.Exit(2)
+
+    devices = {d.id: d for d in inv.live(inv.load())}
+    targets = [(fp, m) for fp, m in acc.keys.items() if fp != mine]
+    unwritable = []
+    for fp, meta in targets:
+        dev = devices.get(meta.get("device_id", ""))
+        eps = sorted(inv.endpoints_of(dev), key=lambda e: e.preference) if dev else []
+        if not eps:
+            unwritable.append((meta.get("name", fp[:18]), "no endpoint recorded"))
+            continue
+        # drop-then-append of our own block: idempotent, and it changes nothing if it
+        # works, which is what makes it safe to run as a test
+        script = posix_sync_command(acc.fleet_id, mine, user=eps[0].user, pubkey=pub)
+        ok, out = rec._remote(eps[0], script, windows=False)
+        name = meta.get("name", fp[:18])
+        if ok:
+            console.print(f"[green]✓[/green] can write {name}")
+        else:
+            unwritable.append((name, out[:80]))
+            console.print(f"[red]✗[/red] {name} [dim]{out[:60]}[/dim]")
+
+    if unwritable:
+        err.print(f"\n[red]Not taking the role.[/red] {len(unwritable)} machine(s) "
+                  "cannot be written from here, and a center that cannot write is a "
+                  "fleet nobody can manage:")
+        for name, why in unwritable:
+            err.print(f"  {name}: {why}")
+        err.print("\n  [dim]the current center still holds the role; fix these and "
+                  "run this again[/dim]")
+        raise typer.Exit(2)
+
+    acc.center = mine
+    acl.save(acc)
+    console.print(f"\n[green]✓[/green] this machine is now the center of {acc.fleet_id}.")
+    console.print("  [dim]run [bold]fleet sync[/bold] to sweep, then retire the old one "
+                  "with [bold]fleet rm[/bold] on it if it is leaving[/dim]")
 
 
 def _leave_fleet(acc) -> None:
@@ -1385,11 +1451,38 @@ def _handover(acc, name: str, *, force: bool) -> None:
     if successor == acc.center:
         console.print(f"[dim]{name} is already the center.[/dim]")
         return
-    err.print("[yellow]Handover is not implemented yet.[/yellow] It must first install "
-              f"{name}'s key on every machine, verify {name} can *write* each "
-              "authorized_keys -- probing only proves the key is there, and on Windows "
-              "both failure modes are silent -- and only then retire this one.")
-    raise typer.Exit(2)
+    # Phase one. The successor's key goes everywhere and a signed record names it, but
+    # nothing is retired yet: proving the successor can *write* each authorized_keys
+    # requires the successor to try, and on Windows both ways that fails are silent. So
+    # it finishes the job from its own side.
+    fp = successor
+    pub = (acc.keys.get(fp) or {}).get("pubkey", "")
+    if not pub:
+        err.print(f"[red]No pinned key for {name}.[/red]  Enrol it first:  "
+                  f"[bold]fleet center --enroll {name}[/bold]")
+        raise typer.Exit(2)
+
+    added = 0
+    for other in acc.keys:
+        if other != fp and acl.grant(acc, fp, other):
+            added += 1
+    acl.save(acc)
+    console.print(f"[green]✓[/green] {name} granted access to {added} machine(s)")
+
+    record = acl.handover_record(acc, fp)
+    signed = acl.sign(record)
+    bundle = acl.CACHE_PATH.with_name("handover.yaml")
+    bundle.write_text(yaml.safe_dump({"record": record, "signature": signed},
+                                     sort_keys=False))
+
+    console.print(f"\n[bold]Two things left, in this order.[/bold]")
+    console.print(f"  1. [bold]fleet sync[/bold] here, to install {name}'s key everywhere")
+    console.print(f"  2. on {name}: [bold]fleet center --accept[/bold]")
+    console.print(f"\n[dim]It verifies it can actually write each authorized_keys before "
+                  f"taking the role -- probing only proves a key is present. Nothing is "
+                  f"retired until it succeeds, so this machine stays the center until "
+                  f"then.[/dim]")
+    console.print(f"[dim]handover record: {bundle}[/dim]")
 
 
 @app.command("setup")

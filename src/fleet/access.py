@@ -456,3 +456,25 @@ def enroll(acc: Access, name: str, pubkey: str, device_id: str = "") -> str:
         acc.keys[fp] = {"name": name, "pubkey": pubkey.strip(), "device_id": device_id,
                         "pinned_at": int(time.time())}
     return fp
+
+
+# --------------------------------------------------------------------- handover
+
+def handover_record(acc: Access, successor_fp: str) -> str:
+    """The signed statement that names the next center.
+
+    Spokes verify a list against the key they have pinned, so a new center's list is
+    rejected outright unless something they already trust vouches for it. This is that
+    something: signed by the outgoing center, naming the incoming one, so a machine can
+    walk from whichever key it last trusted to the current one -- exactly like a
+    certificate chain, and for the same reason.
+    """
+    meta = acc.keys.get(successor_fp) or {}
+    return yaml.safe_dump({
+        "kind": "fleet-handover",
+        "fleet_id": acc.fleet_id,
+        "from": acc.center,
+        "to": successor_fp,
+        "to_pubkey": meta.get("pubkey", ""),
+        "at": int(time.time()),
+    }, sort_keys=False)
