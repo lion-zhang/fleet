@@ -1265,6 +1265,7 @@ def cmd_center(name: str = typer.Argument(None, help="hand the role to this mach
                                                "first time, using a password typed once"),
                leave: bool = typer.Option(False, "--leave",
                                           help="remove this fleet's keys from this machine"),
+               json_out: bool = typer.Option(False, "--json"),
                force: bool = typer.Option(False, "--force")):
     """Who decides, and handing that over.
 
@@ -1332,6 +1333,12 @@ def cmd_center(name: str = typer.Argument(None, help="hand the role to this mach
 
     # bare: status
     centre = acl.is_center(acc)
+    if _emit({"center": acc.name_of(acc.center), "is_center": centre,
+              "fleet_id": acc.fleet_id, "machines": len(acc.keys),
+              "edges": len(acc.edges()),
+              "last_seen_s": (int(time.time()) - acl.center_last_seen())
+                             if acl.center_last_seen() else None}, json_out):
+        return
     console.print(f"center   [bold]{acc.name_of(acc.center)}[/bold]"
                   + ("  [dim]← this machine[/dim]" if centre else ""))
     console.print(f"fleet    {acc.fleet_id}")

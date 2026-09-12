@@ -371,3 +371,56 @@ def test_target_all_covers_every_supported_agent(tmp_path, monkeypatch):
     monkeypatch.setattr(Path, "home", classmethod(lambda cls: tmp_path))
     out = CliRunner().invoke(app, ["setup", "--target", "all", "--dry-run"]).output
     assert len(out.strip().splitlines()) >= len(TARGETS)
+
+
+# ------------------------------------------- what the agent is told it may do
+
+def test_the_instructions_separate_what_needs_the_center():
+    """An agent that does not know the difference either avoids things that would work,
+    or tries things that cannot and reports a confusing refusal as a fault."""
+    from fleet.setup import skill_text
+
+    text = skill_text("fleet")
+    assert "Only on the center" in text
+    assert "is_center" in text, "and says how to find out, rather than guessing"
+    for center_only in ("--allow", "--deny", "--enroll", "fleet sync"):
+        assert center_only in text
+
+
+def test_every_command_an_agent_can_use_is_listed():
+    """Adding a command and not telling the agents is how it stays unused."""
+    from fleet.cli import app
+    from fleet.setup import skill_text
+
+    text = skill_text("fleet")
+    # top needs a terminal and add/edit/install/probe/paths/setup are human-facing
+    expected = {"ls", "show", "ssh", "access", "center", "sync", "update", "rm", "top"}
+    listed = {c.name for c in app.registered_commands} & expected
+    for name in listed:
+        assert f"fleet {name}" in text, f"agents are not told about `fleet {name}`"
+
+
+def test_the_agent_is_told_never_to_handle_a_password():
+    """The only command that asks for one needs a human, and an agent offering to type
+    it would put a credential in a transcript that is replayed forever."""
+    from fleet.setup import skill_text
+
+    text = skill_text("fleet")
+    assert "Never type a password" in text
+    assert "human must run it" in text
+
+
+def test_the_agent_is_told_an_absent_center_is_normal():
+    """It is usually a laptop. Reporting a closed lid as a fault would be noise."""
+    from fleet.setup import skill_text
+
+    text = skill_text("fleet")
+    assert "expected to be offline" in text
+    assert "not an error" in text
+
+
+def test_the_agent_is_told_relayed_telemetry_is_second_hand():
+    from fleet.setup import skill_text
+
+    text = skill_text("fleet")
+    assert "broadcast" in text and "do not present it as live" in text

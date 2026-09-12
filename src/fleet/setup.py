@@ -67,23 +67,57 @@ def package_version() -> str:
 
 
 def _usage(cmd: str) -> str:
+    """What an agent needs to know, split by what it is allowed to do.
+
+    Deliberately two lists. Most machines can only read the fleet and connect to what
+    they were already granted; the center can also change who reaches what. An agent
+    that does not know the difference will either not try things that would work, or
+    try things that cannot and report a confusing failure as a fault.
+    """
     return f"""## Commands
 
+Anywhere. A name may be omitted where the obvious subject is the machine you are on.
+
 - `{cmd} ls --json` -- every machine, with what is free right now
-- `{cmd} show NAME --json` -- full detail on one machine
+- `{cmd} ls NAME... --json` -- only those, `-r` to force a fresh probe
+- `{cmd} show [NAME] --json` -- full detail; no name means this machine
 - `{cmd} ssh NAME -- COMMAND` -- run a command there
+- `{cmd} ssh NAME` -- an interactive shell, exactly as plain ssh
+- `{cmd} access [NAME]` -- who may reach what, and what is still pending
+- `{cmd} center --json` -- `is_center`, who decides, and when it was last heard from
+- `{cmd} top` -- live view; needs a terminal, so not for an agent
+- `{cmd} update [NAME]` / `--all` -- deploy the newest fleet from git
+
+Only on the center. `{cmd} center --json` has `is_center`; if it is false,
+these either refuse or file a request for the center to act on later.
+
+- `{cmd} access NAME --allow MACHINE` -- grant, then `{cmd} sync` to apply it
+- `{cmd} access NAME --deny MACHINE` -- revoke
+- `{cmd} sync` -- the sweep: install and remove keys, and collect telemetry
+- `{cmd} center --enroll NAME` -- first key onto a host, needs a password typed by a human
+- `{cmd} center NAME` -- hand the role over
+- `{cmd} rm NAME` -- remove another machine. Any machine may remove *itself*
 
 ## Rules
 
 - Check `{cmd} ls --json` before assuming work must run locally. A free remote GPU is
   usually the better place for training, evaluation, or anything long-running.
 - Connect with `{cmd} ssh NAME`. Never hand-build an `ssh` invocation from inventory
-  fields: the wrapper resolves the endpoint so credentials stay out of the transcript.
+  fields: the wrapper resolves the endpoint and uses the fleet key.
 - Treat `alerts` as blocking. A device reporting unattributed VRAM is not free, and a
   rental flagged idle is costing money right now.
 - `status` is not a boolean. `auth_failed` means the host is UP but rejected our key.
-  Report it; do not try to fix it. Only the center installs keys, with
-  `fleet access NAME --allow MACHINE`, and it may be offline right now.
+  Report it; do not try to fix it -- only the center can, and it may be offline.
+- **Never type a password or accept one from the user.** The only command that asks for
+  one is `{cmd} center --enroll`, and a human must run it themselves.
+- A row in `{cmd} access` that is not `present` is a grant that has not reached its
+  target yet, not one that failed. Say so rather than retrying.
+- The center is expected to be offline -- it is usually a laptop. Everything already
+  granted keeps working without it; only *changes* wait. "The center was last seen 3h
+  ago" is a normal state to report, not an error.
+- A relayed row (`via <machine>` in `{cmd} top`, `source: broadcast` in JSON) was
+  measured by the center, not here. Quote its age; do not present it as live.
+- `{cmd} update --all` touches every machine. Ask first.
 """
 
 
