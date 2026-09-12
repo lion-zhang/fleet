@@ -182,6 +182,11 @@ class Device:
     # this machine's age public key, when it is one of yours and enrolled to read
     # secrets. Lives on the device so it syncs and merges like everything else.
     recipient: str = ""
+    # this machine's fleet SSH public key, published so others can see it. Informational
+    # only: the center pins the binding it read over its own connection, because a field
+    # that rides the merge can be overwritten by a peer with a fast clock -- and the
+    # center would then install that peer's key where this machine's belonged.
+    pubkey: str = ""
     # A tombstone. Deletion has to be a recorded fact rather than an absence: a record
     # that merely vanishes is indistinguishable from one the other machine has not seen
     # yet, and the next sync would resurrect it.
