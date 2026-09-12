@@ -170,7 +170,11 @@ class Device:
     notes: str = ""
     endpoints: list[dict] = field(default_factory=list)
     declared_services: list[dict] = field(default_factory=list)
-    tailscale: dict = field(default_factory=dict)
+    # Who authorizes ssh here: "" not yet asked, "keys" we manage authorized_keys,
+    # "external" the network does and we must not. A property of the server, not
+    # of the address -- see sshauth.
+    ssh_auth: str = ""
+    mesh: dict = field(default_factory=dict)   # optional, informational
     provider: str = ""
     provider_instance_id: str = ""
     cost: dict = field(default_factory=dict)

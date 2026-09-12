@@ -42,7 +42,7 @@ class Endpoint:
     jump: str = ""
     name: str = "default"
     preference: int = 10
-    via: str = ""                          # tailscale | lan | public
+    via: str = ""                          # mesh | lan | public
 
     def ssh_command(self) -> str:
         bits = ["ssh"]

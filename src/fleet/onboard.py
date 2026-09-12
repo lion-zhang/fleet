@@ -8,6 +8,7 @@ import unicodedata
 
 from .models import Device, Kind, ProbeResult, Snapshot, Status
 from .probe.runner import run_probe
+from .sshauth import classify, probe_server
 from .sshcmd import Endpoint, parse_ssh_command, resolve
 
 _RENTAL_HOST_RE = re.compile(r"(vast\.ai|runpod|autodl|seetacloud|lambdalabs|paperspace)", re.I)
@@ -80,9 +81,14 @@ def onboard(ssh_command: str, *, name: str | None = None, kind: str | None = Non
     ep = resolve(parse_ssh_command(ssh_command))
     ep.name = "primary"
     if ep.target.endswith(".ts.net"):
-        ep.via = "tailscale"
+        # An overlay address, which is all `via` needs to say: it means "stable, do not
+        # rewrite this when the public IP moves". Which overlay is not fleet's business.
+        ep.via = "mesh"
 
     res = run_probe(ep, timeout=timeout) if probe else ProbeResult(status=Status.SKIPPED_POLICY)
+    # Only ask who authorizes here when the key was actually refused: that is the one
+    # answer that changes what we do next, and it costs an extra handshake.
+    ssh_auth = classify(probe_server(ep)) if res.status is Status.AUTH_FAILED else ""
     snap = res.snapshot
     taken = taken_names or set()
 
@@ -91,6 +97,7 @@ def onboard(ssh_command: str, *, name: str | None = None, kind: str | None = Non
         name=name or suggest_name(snap, ep, taken),
         kind=classify_kind(snap, ep, override=kind),
         endpoints=[endpoint_dict(ep, via=ep.via)],
+        ssh_auth=ssh_auth,
         needs_review=not res.ok,
     )
     if dev.kind is Kind.SHARED:

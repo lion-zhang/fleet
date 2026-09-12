@@ -110,6 +110,17 @@ def test_auth_is_recomputed_rather_than_remembered():
     assert auth_of(d, None) == "ok", "never probed is not the same as known broken"
 
 
+def test_a_host_that_authorizes_upstream_is_not_told_to_install_a_key():
+    """There is no file on such a host that would change the answer, so advising a key
+    install would be advice that cannot work."""
+    d = make("tailnet-box", ssh_auth="external")
+    assert auth_of(d, STATE_AUTH_FAILED) == "external"
+    v = device_view(d, STATE_AUTH_FAILED, None, Detail.COMPACT)
+    assert not any("key install" in a for a in v["alerts"])
+    assert any("upstream" in a for a in v["alerts"])
+    assert connect_view(d, STATE_AUTH_FAILED)["auth"] == "external"
+
+
 # ------------------------------------------------------------------ the security boundary
 def test_connect_view_never_returns_a_password():
     """Anything returned here lands in an agent transcript and is replayed forever."""

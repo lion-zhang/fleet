@@ -28,12 +28,19 @@ def _address(user: str, target: str, port: int) -> str:
     return f"{user}@{target}:{port}" if user else f"{target}:{port}"
 
 
+# "tailscale" is the pre-rename spelling and is still accepted on read: inventories
+# written before `via` was de-vendored are on disk right now, and treating those routes
+# as direct would rewrite the one address that does not move -- the exact failure the
+# preference for a non-overlay route exists to prevent.
+_OVERLAY = frozenset({"mesh", "tailscale"})
+
+
 def _replace_primary(dev: Device, ep: Endpoint, out: Edits) -> None:
     """Repoint the endpoint the pasted address refers to.
 
     Prefer a direct route over a tailnet one. A tailnet name is stable -- it is the
     public or LAN address that churns when a rental is recycled -- so replacing the
-    tailscale route with a raw IP would throw away the more durable way in. Fall back
+    overlay route with a raw IP would throw away the more durable way in. Fall back
     to the most-preferred endpoint when every route is a tailnet one, because an edit
     must never silently do nothing.
     """
@@ -49,7 +56,7 @@ def _replace_primary(dev: Device, ep: Endpoint, out: Edits) -> None:
         return
 
     eps = list(dev.endpoints)
-    direct = [i for i, e in enumerate(eps) if (e.get("via") or "") != "tailscale"]
+    direct = [i for i, e in enumerate(eps) if (e.get("via") or "") not in _OVERLAY]
     idx = min(direct or range(len(eps)), key=lambda i: int(eps[i].get("preference", 10) or 10))
     old = eps[idx]
     before = _address(old.get("user", ""), old.get("target", ""), int(old.get("port", 22) or 22))

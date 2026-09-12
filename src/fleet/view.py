@@ -81,6 +81,11 @@ def auth_of(dev: Device, state: dict | None) -> str:
     A device nobody has probed yet reads "ok": "we have no reason to think this will
     fail" is the right default, and it is what the field defaulted to anyway.
     """
+    if dev.ssh_auth == "external":
+        # The network authorizes here, not authorized_keys. A refusal is a policy
+        # decision upstream, and offering to install a key would be advice that cannot
+        # work -- there is no file on this host that would change the answer.
+        return "external"
     if state and state.get("status") == Status.AUTH_FAILED.value:
         return "needs_key"
     return "ok"
@@ -88,9 +93,13 @@ def auth_of(dev: Device, state: dict | None) -> str:
 
 def _alerts(dev: Device, snap: dict | None, state: dict | None) -> list[str]:
     out: list[str] = []
-    if auth_of(dev, state) == "needs_key":
+    auth = auth_of(dev, state)
+    if auth == "needs_key":
         out.append("host is UP but rejected our key (this is not 'offline') -- "
                    "run `fleet key install`")
+    elif auth == "external" and state and state.get("status") == Status.AUTH_FAILED.value:
+        out.append("host is UP but the network refused us -- authorization for this one "
+                   "lives upstream, not in authorized_keys")
     if snap:
         for g in snap.get("gpus", []):
             if _gpu_view(g)["unattributed_mib"] >= 256:
@@ -138,6 +147,7 @@ def device_view(dev: Device, state: dict | None, snap: dict | None,
                   "busy": g["busy"]} for g in gpus] if detail is Detail.COMPACT else gpus,
         "gpu_count": len(gpus),
         "free_vram_mib": max((g["vram_free_mib"] for g in gpus), default=0),
+        "ssh_auth": auth_of(dev, state),
         "cpu_cores": (snap or {}).get("cpu_cores"),
         "ram_total_gb": round(mem_total / 1048576, 1) if mem_total else None,
         "ram_free_gb": round(mem_avail / 1048576, 1) if mem_avail else None,
@@ -213,6 +223,12 @@ def connect_view(dev: Device, state: dict | None = None) -> dict[str, Any]:
     if not eps:
         return {"ssh_command": None, "auth": "none", "hint": "no endpoint recorded"}
     best = eps[0]
+    if auth_of(dev, state) == "external":
+        return {"ssh_command": best.ssh_command(), "auth": "external",
+                "user": best.user, "port": best.port,
+                "hint": "This host authorizes upstream, not from authorized_keys. "
+                        "Access is granted in the network's own policy; fleet neither "
+                        "installs nor removes keys here."}
     if auth_of(dev, state) == "needs_key":
         return {"ssh_command": None, "auth": "password", "user": best.user, "port": best.port,
                 "secret_ref": f"fleet://secret/{dev.name}",

@@ -8,6 +8,8 @@ that forgets the cache silently orphans every snapshot the device ever recorded.
 
 from __future__ import annotations
 
+import pytest
+
 from fleet.edit import apply_edits
 from fleet.models import Device, Kind
 from fleet.sshcmd import Endpoint
@@ -42,11 +44,16 @@ def test_replacing_an_address_keeps_the_endpoint_name_and_preference():
     assert dev.endpoints[0]["via"] == "public"
 
 
-def test_other_endpoints_are_left_untouched():
-    """A tailnet route does not stop working because the public IP was recycled."""
+@pytest.mark.parametrize("via", ["mesh", "tailscale"])
+def test_other_endpoints_are_left_untouched(via):
+    """An overlay route does not stop working because the public IP was recycled.
+
+    Parametrised over the legacy spelling too: inventories written before `via` was
+    de-vendored say "tailscale", they are on disk right now, and reading one as a direct
+    route would rewrite the single address that never moves."""
     dev = _dev(endpoints=[
         {"target": "box.example.ts.net", "user": "root", "port": 22,
-         "name": "tailscale", "preference": 1, "via": "tailscale"},
+         "name": "overlay", "preference": 1, "via": via},
         {"target": "1.2.3.4", "user": "root", "port": 22, "name": "public", "preference": 10},
     ])
     apply_edits(dev, endpoint=_ep())
@@ -57,7 +64,7 @@ def test_other_endpoints_are_left_untouched():
 def test_a_tailnet_only_device_still_gets_its_address_replaced():
     """The tailnet-preferring rule must not make an edit silently do nothing."""
     dev = _dev(endpoints=[{"target": "box.example.ts.net", "user": "root", "port": 22,
-                           "name": "tailscale", "preference": 1, "via": "tailscale"}])
+                           "name": "overlay", "preference": 1, "via": "mesh"}])
     apply_edits(dev, endpoint=_ep())
     assert dev.endpoints[0]["target"] == "5.6.7.8"
 
