@@ -122,13 +122,12 @@ def test_a_host_that_authorizes_upstream_is_not_told_to_install_a_key():
 
 
 # ------------------------------------------------------------------ the security boundary
-def test_connect_view_never_returns_a_password():
+def test_connect_view_never_returns_a_credential():
     """Anything returned here lands in an agent transcript and is replayed forever."""
     d = make("ds720")
     c = connect_view(d, STATE_AUTH_FAILED)
     assert c["ssh_command"] is None
-    assert c["secret_ref"] == "fleet://secret/ds720"
-    assert "fleet ssh ds720" in c["hint"]
+    assert "fleet access ds720" in c["hint"]
     blob = json.dumps(device_view(d, STATE_AUTH_FAILED, None, Detail.FULL)).lower()
     for banned in ("password", "passphrase", "secret_value", "hunter"):
         assert f'"{banned}":' not in blob

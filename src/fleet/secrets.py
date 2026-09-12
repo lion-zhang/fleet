@@ -1,16 +1,12 @@
-"""Passwords at rest, encrypted per machine.
+"""Reading passwords an older fleet stored, so they can be migrated away.
 
-`fleet key install` covers the common case by trading a password for key auth. A host
-that genuinely refuses key auth still needs a stored credential, and that credential has
-to be usable on every machine you own without a shared passphrase ever travelling
-between them.
+Nothing writes here any more. Passwords are gone: the center installs an SSH key once,
+using whatever gets in that first time, and every later connection is key auth -- so
+there is no longer a credential to keep, encrypt, or distribute.
 
-Each machine holds its own age identity. `secrets.age` is encrypted to every enrolled
-machine's public recipient, so any of them can open it, none of them share a key, and
-dropping a recipient and rewriting the file is a real revocation rather than a hope.
-
-The recipient lives on the machine's own `Device` record, so it syncs and merges with
-everything else instead of needing a schema of its own.
+What survives is the read path, and only until `fleet access --migrate` has spent the
+last of them. Deleting it in the same release that added the migration would have
+stranded the data behind a dependency the user can no longer install.
 """
 
 from __future__ import annotations
@@ -39,27 +35,6 @@ def _pyrage():
     return pyrage
 
 
-def ensure_identity(path: Path | None = None) -> str:
-    """This machine's age identity, created on first use. Returns its public recipient.
-
-    Never regenerates: a new keypair would silently orphan every secret already
-    encrypted to the old public key.
-    """
-    pyrage = _pyrage()
-    path = path or IDENTITY_PATH
-    if path.exists():
-        return str(load_identity(path).to_public())
-    ensure_dirs()
-    path.parent.mkdir(parents=True, exist_ok=True)
-    identity = pyrage.x25519.Identity.generate()
-    # written 0600 from the start: a private key must never exist world-readable, not
-    # even for the instant between write and chmod.
-    fd = os.open(str(path), os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
-    with os.fdopen(fd, "w") as fh:
-        fh.write(str(identity) + "\n")
-    return str(identity.to_public())
-
-
 def load_identity(path: Path | None = None):
     pyrage = _pyrage()
     path = path or IDENTITY_PATH
@@ -67,33 +42,6 @@ def load_identity(path: Path | None = None):
         return pyrage.x25519.Identity.from_str((path).read_text().strip())
     except OSError as exc:
         raise SecretsError(f"no identity at {path} -- run `fleet identity`") from exc
-
-
-def recipients_of(devices: list[Device]) -> list[str]:
-    """Every machine enrolled to read secrets, in inventory order."""
-    # a removed machine must stop being able to read new secrets: that is what makes
-    # `fleet rm` an actual revocation rather than a note to self.
-    return [d.recipient for d in devices if d.recipient and not d.deleted_at]
-
-
-def write_secrets(path: Path, data: dict[str, str], recipients: list[str]) -> None:
-    """Encrypt to every recipient and replace the file.
-
-    Refuses an empty recipient list: a file encrypted to nobody is unreadable to
-    everyone including you, and writing that brick over a working secrets file would
-    destroy exactly what it was meant to protect.
-    """
-    pyrage = _pyrage()
-    if not recipients:
-        raise SecretsError("no recipients -- run `fleet identity` on this machine first")
-    keys = [pyrage.x25519.Recipient.from_str(r) for r in recipients]
-    blob = pyrage.encrypt(json.dumps(data).encode(), keys)
-    path.parent.mkdir(parents=True, exist_ok=True)
-    tmp = path.with_suffix(path.suffix + ".tmp")
-    fd = os.open(str(tmp), os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
-    with os.fdopen(fd, "wb") as fh:
-        fh.write(blob)
-    os.replace(tmp, path)
 
 
 def read_secrets(path: Path, identity) -> dict[str, str]:

@@ -179,9 +179,6 @@ class Device:
     provider_instance_id: str = ""
     cost: dict = field(default_factory=dict)
     disk_paths: list[str] = field(default_factory=list)   # empty = autodetect mounts
-    # this machine's age public key, when it is one of yours and enrolled to read
-    # secrets. Lives on the device so it syncs and merges like everything else.
-    recipient: str = ""
     # this machine's fleet SSH public key, published so others can see it. Informational
     # only: the center pins the binding it read over its own connection, because a field
     # that rides the merge can be overwritten by a peer with a fast clock -- and the

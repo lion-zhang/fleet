@@ -11,12 +11,13 @@ dependencies = [
     "platformdirs>=4.2",
     "filelock>=3.13",
     "psutil>=5.9",
-    # secrets are a core feature, not an add-on: a broker that syncs secrets.age
-    # and cannot decrypt it is worse than one that never received it.
-    "pyrage>=1.1",
 ]
 
 [project.optional-dependencies]
+# Only for `fleet access --migrate`, which reads passwords an older fleet stored.
+# Deliberately not dropped in the same release that added the migration: that would
+# strand the data behind a dependency you can no longer install.
+migrate = ["pyrage>=1.1"]
 web = ["fastapi>=0.111", "uvicorn[standard]>=0.30", "jinja2>=3.1", "httpx>=0.27"]
 mcp = ["mcp>=1.2"]
 

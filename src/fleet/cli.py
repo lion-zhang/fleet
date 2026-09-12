@@ -11,6 +11,8 @@ import sys
 import time
 from pathlib import Path
 
+from contextlib import suppress
+
 import typer
 import yaml
 from contextlib import contextmanager
@@ -28,9 +30,7 @@ from .install import build_install_argv, install_script
 from .keys import install_key, public_key
 from .models import Device, Kind, Status
 from .onboard import onboard, onboard_self
-from .probe.runner import (probe_env, probe_many, run_probe, run_probe_local,
-                           run_probe_with_password)
-from . import secrets as sec
+from .probe.runner import (probe_env, probe_many, run_probe, run_probe_local)
 from .setup import TARGETS, detect_targets, fleet_command, install, uninstall
 from .sshcmd import build_argv, remote_command, resolve_command
 from .top import (Schedule, device_lines, disk_cell, gpu_cells_compact,
@@ -53,28 +53,6 @@ def _emit(payload, as_json: bool) -> bool:
     if as_json:
         console.print_json(jsonlib.dumps(payload, default=str))
     return as_json
-
-
-def stored_password(name: str) -> str | None:
-    """A password for this device, if one is stored and this machine can read it.
-
-    Best-effort on purpose: no identity, no secrets file, or not being an enrolled
-    recipient are all ordinary states, and none of them may stop `fleet ls` working.
-    """
-    try:
-        return sec.read_secrets(sec.SECRETS_PATH, sec.load_identity()).get(name)
-    except Exception:
-        return None
-
-
-def _needs_password(conn, devices) -> set[str]:
-    """Devices whose last probe says the host is up but rejected our key."""
-    out = set()
-    for d in devices:
-        st, _ = store.latest(conn, d.id)
-        if st and st.get("status") == Status.AUTH_FAILED.value:
-            out.add(d.name)
-    return out
 
 
 def _rows(names: list[str] | None = None, *, refresh: bool = False,
@@ -115,21 +93,7 @@ def _rows(names: list[str] | None = None, *, refresh: bool = False,
         # A host that only accepts a password stays auth_failed forever otherwise. This
         # is a fallback rather than part of the sweep: the fan-out stays untouched, and
         # only the handful that actually failed pay for a second, serial attempt.
-        rejected = _needs_password(conn, stale)
-        for d in stale:
-            if d.name not in rejected:
-                continue
-            password = stored_password(d.name)
-            if not password:
-                continue
-            eps = inv.endpoints_of(d)
-            if not eps:
-                continue
-            res = run_probe_with_password(sorted(eps, key=lambda e: e.preference)[0],
-                                          password, mode=d.probe_mode,
-                                          disk_paths=d.disk_paths)
-            store.record(conn, d.id, res)
-
+    
     out = []
     self_id = local_device_id()
     for d in devices:
@@ -678,113 +642,6 @@ def cmd_sync(serve: bool = typer.Option(False, "--serve",
         console.print("  [dim]already up to date.[/dim]")
 
 
-@app.command("identity")
-def cmd_identity():
-    """Enrol this machine so it can read encrypted secrets.
-
-    Creates an age keypair if there is none and publishes only the public half onto this
-    machine's own device record, where it syncs like everything else. The private half
-    never leaves this machine and is never printed.
-
-    [dim]Example:[/dim]  fleet identity
-    """
-    try:
-        recipient = sec.ensure_identity()
-    except sec.SecretsError as exc:
-        err.print(f"[red]{exc}[/red]")
-        raise typer.Exit(2)
-    devices = inv.load()
-    me = next((d for d in inv.live(devices) if d.id and d.id == local_device_id()), None)
-    if me is None:
-        err.print("[red]This machine is not in the inventory[/red], so there is nowhere "
-                  "to publish its recipient.\n  Add it first:  [bold]fleet add "
-                  "\"ssh localhost\"[/bold]")
-        raise typer.Exit(2)
-    if me.recipient == recipient:
-        console.print(f"[dim]· {me.name} is already enrolled.[/dim]")
-        return
-    me.recipient = recipient
-    inv.touch(me)
-    inv.save(devices)
-    console.print(f"[green]✓[/green] {me.name} enrolled as [bold]{recipient}[/bold]")
-    console.print("  [dim]re-run `fleet secret set` for existing secrets to include "
-                  "this machine.[/dim]")
-
-
-secret_app = typer.Typer(
-    no_args_is_help=True, rich_markup_mode="rich",
-    help="Stored passwords, encrypted per machine.",)
-app.add_typer(secret_app, name="secret")
-
-
-def _secrets_now() -> tuple[dict, list[Device]]:
-    devices = inv.load()
-    return sec.read_secrets(sec.SECRETS_PATH, sec.load_identity()), devices
-
-
-@secret_app.command("set")
-def cmd_secret_set(name: str):
-    """Store a password for a device. Prompted for, never passed as an argument.
-
-    [dim]Example:[/dim]  fleet secret set blackwell
-    """
-    if not sys.stdin.isatty():
-        err.print("[yellow]Refusing to read a password without a terminal.[/yellow]  "
-                  f"Run [bold]fleet secret set {name}[/bold] yourself.")
-        raise typer.Exit(2)
-    try:
-        data, devices = _secrets_now()
-        value = getpass.getpass(f"Password for {name}: ")
-        data[name] = value
-        sec.write_secrets(sec.SECRETS_PATH, data, sec.recipients_of(devices))
-    except sec.SecretsError as exc:
-        err.print(f"[red]{exc}[/red]")
-        raise typer.Exit(2)
-    finally:
-        value = ""
-    console.print(f"[green]✓[/green] stored a password for [bold]{name}[/bold], readable "
-                  f"by {len(sec.recipients_of(devices))} enrolled machine(s).")
-
-
-@secret_app.command("ls")
-def cmd_secret_ls(json_out: bool = typer.Option(False, "--json")):
-    """List which devices have a stored password. Never prints a value.
-
-    [dim]Example:[/dim]  fleet secret ls
-    """
-    try:
-        data, _ = _secrets_now()
-    except sec.SecretsError as exc:
-        err.print(f"[red]{exc}[/red]")
-        raise typer.Exit(2)
-    if _emit({"secrets": sorted(data)}, json_out):
-        return
-    if not data:
-        console.print("[dim]No stored passwords.[/dim]")
-        return
-    for name in sorted(data):
-        console.print(f"  {name}")
-
-
-@secret_app.command("rm")
-def cmd_secret_rm(name: str):
-    """Forget a stored password.
-
-    [dim]Example:[/dim]  fleet secret rm blackwell
-    """
-    try:
-        data, devices = _secrets_now()
-        if name not in data:
-            err.print(f"[yellow]No stored password for {name!r}[/yellow]")
-            raise typer.Exit(1)
-        del data[name]
-        sec.write_secrets(sec.SECRETS_PATH, data, sec.recipients_of(devices))
-    except sec.SecretsError as exc:
-        err.print(f"[red]{exc}[/red]")
-        raise typer.Exit(2)
-    console.print(f"[green]✓[/green] forgot the password for [bold]{name}[/bold]")
-
-
 def _live_tick(conn, devices, schedule: Schedule, cfg, detail: Detail) -> list[dict]:
     """Probe whatever is due, then render every device from the cache.
 
@@ -1032,6 +889,8 @@ def cmd_access(target: str = typer.Argument(None, help="one machine, instead of 
                deny: str = typer.Option(None, "--deny", metavar="MACHINE",
                                         help="stop MACHINE reaching the target"),
                user: str = typer.Option("root", "--user", help="whose authorized_keys"),
+               migrate: bool = typer.Option(False, "--migrate",
+                                            help="spend passwords an older fleet stored"),
                json_out: bool = typer.Option(False, "--json")):
     """Who may reach what, and change it.
 
@@ -1043,6 +902,10 @@ def cmd_access(target: str = typer.Argument(None, help="one machine, instead of 
     """
     from . import access as acl
     from . import reconcile as rec
+
+    if migrate:
+        _migrate_passwords()
+        return
 
     try:
         current = acl.load()
@@ -1112,6 +975,62 @@ def cmd_access(target: str = typer.Argument(None, help="one machine, instead of 
     if not centre:
         console.print(f"\n[dim]center is {current.name_of(current.center)}; "
                       "changes are filed as requests from here[/dim]")
+
+
+def _migrate_passwords() -> None:
+    """Spend each stored password once, to install this machine's fleet key.
+
+    Install, verify, then remove -- in that order, never the reverse. A password dropped
+    before the key is proven leaves a host nobody can reach, and the whole point of the
+    change is that there is no second copy of it anywhere.
+
+    Reading them needs `pyrage`, which is now an optional extra. That is deliberate: the
+    encrypted file is still on disk, and removing the only thing that can read it in the
+    same release that added the migration would strand it.
+    """
+    from . import secrets as sec
+    from .keys import ensure_keypair, install_key
+
+    try:
+        data = sec.read_secrets(sec.SECRETS_PATH, sec.load_identity())
+    except Exception as exc:
+        err.print(f"[red]Cannot read the old secrets:[/red] {exc}")
+        # escaped: rich reads a bare [migrate] as a style tag and silently eats it,
+        # leaving the user an install command that does not install the reader
+        err.print("  [dim]install the reader with [bold]uv tool install "
+                  r"'fleet-broker\[migrate]'[/bold][/dim]")
+        raise typer.Exit(2)
+    if not data:
+        console.print("[dim]nothing stored -- nothing to migrate[/dim]")
+        return
+
+    _, pub = ensure_keypair()
+    devices = inv.load()
+    failed = []
+    for name, password in sorted(data.items()):
+        dev = inv.find(devices, name)
+        eps = inv.endpoints_of(dev) if dev else []
+        if not eps:
+            failed.append((name, "no endpoint recorded"))
+            continue
+        ok, out = install_key(sorted(eps, key=lambda e: e.preference)[0], password, pub)
+        if ok:
+            console.print(f"[green]✓[/green] {name}")
+        else:
+            failed.append((name, out.strip()[-120:]))
+    for name, why in failed:
+        err.print(f"[red]✗[/red] {name}: {why}")
+    if failed:
+        err.print(f"\n[yellow]Keeping {sec.SECRETS_PATH.name}[/yellow] -- "
+                  f"{len(failed)} of {len(data)} could not be migrated.")
+        raise typer.Exit(1)
+    # "removed", not "shredded": os.replace on a journalling filesystem or an SSD does
+    # not reliably destroy the old blocks, and saying otherwise would be a lie that
+    # outlives whoever wrote it.
+    for path in (sec.SECRETS_PATH, sec.IDENTITY_PATH):
+        with suppress(OSError):
+            path.unlink()
+    console.print(f"\n[green]✓[/green] all {len(data)} migrated; stored passwords removed.")
 
 
 def _file_request(current, target: str, allow: str, user: str) -> None:

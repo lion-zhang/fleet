@@ -98,58 +98,6 @@ def probe_env(mode: str, disk_paths: list[str] | None = None) -> dict[str, str]:
     return env
 
 
-def password_probe_command(*, mode: str = "full",
-                           disk_paths: list[str] | None = None) -> str:
-    """The remote command for the password path.
-
-    run_probe pipes the payload on stdin, but here stdin is the pty carrying the
-    password prompt. So the payload rides in argv instead, base64-encoded -- which
-    sidesteps shell quoting entirely and stays far under ARG_MAX at a few KB.
-    """
-    blob = base64.b64encode(PAYLOAD.read_bytes()).decode()
-    env = " ".join(f"{k}={shlex.quote(v)}" for k, v in probe_env(mode, disk_paths).items())
-    return f"echo {blob} | base64 -d | {env} sh"
-
-
-def first_marker(text: str) -> str:
-    """Drop anything before the payload's first section marker.
-
-    A pty has one stream, so ssh's warnings and the password prompt itself arrive in
-    front of the output. run_probe keeps stdout and stderr apart precisely to stop that
-    corrupting the line protocol; on this path they cannot be kept apart. Text with no
-    marker at all is returned untouched, so the parser's error describes what actually
-    arrived rather than a truncation we manufactured.
-    """
-    for i, line in enumerate(text.splitlines(keepends=True)):
-        if line.startswith("#"):
-            return "".join(text.splitlines(keepends=True)[i:])
-    return text
-
-
-def run_probe_with_password(ep: Endpoint, password: str, *, mode: str = "full",
-                            disk_paths: list[str] | None = None,
-                            timeout: float = 25.0) -> ProbeResult:
-    """Probe a host that only accepts a password. Same ProbeResult as any other probe."""
-    from ..keys import build_password_argv, run_with_password      # POSIX-only import
-
-    argv = build_password_argv(ep) + [password_probe_command(mode=mode, disk_paths=disk_paths)]
-    started = time.monotonic()
-    code, output = run_with_password(argv, password, timeout=timeout)
-    elapsed = int((time.monotonic() - started) * 1000)
-    body = first_marker(output)
-    try:
-        snap = parse_payload(body)
-    except MissingSentinel as exc:
-        status, detail = classify_stderr(output)
-        if code == 0:
-            status, detail = Status.PROBE_ERROR, str(exc)
-        return ProbeResult(status=status, error_class=status.value, error_detail=detail,
-                           endpoint_used=ep.name, latency_ms=elapsed,
-                           stderr_tail=scrub_stderr(output)[-400:])
-    return ProbeResult(status=Status.OK, snapshot=snap, endpoint_used=ep.name,
-                       latency_ms=elapsed)
-
-
 def run_probe_local(*, mode: str = "full", disk_paths: list[str] | None = None,
                     timeout: float = 20.0) -> ProbeResult:
     """Probe the machine we are running on, without SSH.

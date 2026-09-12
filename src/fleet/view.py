@@ -96,7 +96,7 @@ def _alerts(dev: Device, snap: dict | None, state: dict | None) -> list[str]:
     auth = auth_of(dev, state)
     if auth == "needs_key":
         out.append("host is UP but rejected our key (this is not 'offline') -- "
-                   "run `fleet key install`")
+                   "the center installs one with `fleet access`")
     elif auth == "external" and state and state.get("status") == Status.AUTH_FAILED.value:
         out.append("host is UP but the network refused us -- authorization for this one "
                    "lives upstream, not in authorized_keys")
@@ -234,11 +234,11 @@ def connect_view(dev: Device, state: dict | None = None) -> dict[str, Any]:
                         "Access is granted in the network's own policy; fleet neither "
                         "installs nor removes keys here."}
     if auth_of(dev, state) == "needs_key":
-        return {"ssh_command": None, "auth": "password", "user": best.user, "port": best.port,
-                "secret_ref": f"fleet://secret/{dev.name}",
-                "hint": f"No working key for this host. Run `fleet ssh {dev.name}` for "
-                        "the exact ssh-copy-id command. Credentials are never returned "
-                        "here -- they would persist in the transcript."}
+        return {"ssh_command": None, "auth": "needs_key", "user": best.user,
+                "port": best.port,
+                "hint": f"This host has not accepted our key yet. The center installs "
+                        f"one with `fleet access {dev.name} --allow <machine>`; nothing "
+                        "here is ever a credential."}
     return {"ssh_command": best.ssh_command(), "auth": "key",
             "user": best.user, "port": best.port,
             "hint": f"Key auth. Run it directly, or `fleet ssh {dev.name}`."}
