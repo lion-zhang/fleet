@@ -21,7 +21,7 @@ from pathlib import Path
 import yaml
 
 from . import access as acc_mod
-from .access import Access, AccessError, LEDGER_PATH
+from .access import Access, AccessError
 from .authkeys import posix_sync_command, powershell_sync_command
 from .sshcmd import Endpoint, build_argv
 
@@ -36,6 +36,11 @@ class EdgeState:
     last_attempt_at: int = 0
     last_error: str = ""
     pending_since: int = 0
+    # Which device this edge points at, recorded when the edge is first planned.
+    # Without it, dropping a machine from the access list would lose the binding needed
+    # to *undo* its grants -- so the key would stay installed, permanently, and the
+    # ledger could only report that it had no idea where to go.
+    dst_device: str = ""
 
     @property
     def converged(self) -> bool:
@@ -49,7 +54,7 @@ def _key(edge: tuple[str, str, str]) -> str:
 def load_ledger(path: Path | None = None) -> dict[str, EdgeState]:
     """Unlike the access list, a missing ledger is fine -- it means nothing has been
     observed yet, which is true on a fresh center and is not a dangerous belief."""
-    path = path or LEDGER_PATH
+    path = path or acc_mod.LEDGER_PATH
     try:
         raw = yaml.safe_load(path.read_text()) or {}
     except (OSError, yaml.YAMLError):
@@ -58,7 +63,7 @@ def load_ledger(path: Path | None = None) -> dict[str, EdgeState]:
 
 
 def save_ledger(ledger: dict[str, EdgeState], path: Path | None = None) -> None:
-    path = path or LEDGER_PATH
+    path = path or acc_mod.LEDGER_PATH
     path.parent.mkdir(parents=True, exist_ok=True)
     tmp = path.with_suffix(".tmp")
     tmp.write_text(yaml.safe_dump(
@@ -77,6 +82,9 @@ def plan(acc: Access, ledger: dict[str, EdgeState]) -> dict[str, EdgeState]:
         st = out.setdefault(_key(edge), EdgeState(pending_since=now))
         if st.desired != "present":
             st.desired, st.pending_since = "present", now
+        # refreshed while we still know it, so a later revoke does not need the pin
+        if device := (acc.keys.get(edge[1]) or {}).get("device_id"):
+            st.dst_device = device
     for k, st in out.items():
         if tuple(k.split(">")) not in wanted and st.desired != "absent":
             st.desired, st.pending_since = "absent", now

@@ -12,6 +12,7 @@ import time
 from pathlib import Path
 
 from contextlib import suppress
+from dataclasses import replace
 
 import typer
 import yaml
@@ -613,7 +614,7 @@ def cmd_sync(serve: bool = typer.Option(False, "--serve",
                   "[bold]fleet edit NAME --role center[/bold]")
         raise typer.Exit(2)
     if center.id and center.id == local_device_id():
-        console.print("[dim]· this machine is the center; nothing to sync to.[/dim]")
+        _sweep(devices)
         return
     eps = inv.endpoints_of(center)
     if not eps:
@@ -683,6 +684,95 @@ def _live_tick(conn, devices, schedule: Schedule, cfg, detail: Detail) -> list[d
         st, sn = store.latest(conn, d.id)
         rows.append(device_view(d, st, sn, detail, self_id=me))
     return rows
+
+
+def _endpoint_for(dev, user: str):
+    """The device's best route, dialled as the user this edge is about.
+
+    The edge names whose authorized_keys we are editing, which is not always the user the
+    endpoint happens to record -- a box answers as both root@ and ubuntu@, and writing
+    the wrong one's file is a grant that appears to work and never does.
+    """
+    eps = sorted(inv.endpoints_of(dev), key=lambda e: e.preference)
+    if not eps:
+        return None
+    ep = eps[0]
+    return replace(ep, user=user or ep.user)
+
+
+def _sweep(devices) -> None:
+    """The center's pass over the fleet: make authorized_keys match the access list.
+
+    Only the center reaches here, and only when `fleet sync` is run deliberately -- this
+    installs and removes credentials on every machine, which is not something to do from
+    a background timer nobody is watching.
+    """
+    from . import access as acl
+    from . import reconcile as rec
+
+    try:
+        acc = acl.load()
+    except acl.AccessError as exc:
+        console.print(f"[dim]· {exc}[/dim]")
+        return
+
+    ledger = rec.plan(acc, rec.load_ledger())
+    if why := rec.refuses_to_run(acc, ledger):
+        err.print(f"[red]{why}[/red]")
+        raise typer.Exit(2)
+
+    by_id = {d.id: d for d in inv.live(devices)}
+    pending = [(k, st) for k, st in ledger.items() if not st.converged]
+    if not pending:
+        console.print("[dim]· access is up to date[/dim]")
+        return
+
+    conn = store.connect()
+    done = failed = 0
+    try:
+        for key, st in pending:
+            src, dst, user = key.split(">")
+            # the ledger's copy first: a revoke usually runs *because* the machine was
+            # dropped from the list, so the pin is often already gone
+            dev = by_id.get(st.dst_device or (acc.keys.get(dst) or {}).get("device_id", ""))
+            install = st.desired == "present"
+            st.attempts += 1
+            st.last_attempt_at = int(time.time())
+            if dev is None:
+                st.last_error = "no device record for this machine"
+                failed += 1
+                continue
+            ep = _endpoint_for(dev, user)
+            if ep is None:
+                st.last_error = "no endpoint recorded"
+                failed += 1
+                continue
+            ok, out = rec.apply_edge(acc, (src, dst, user), ep, install=install,
+                                     windows=(dev.ssh_auth == "windows"))
+            if ok:
+                st.observed, st.last_error = st.desired, ""
+                done += 1
+                verb = "installed on" if install else "removed from"
+                console.print(f"[green]✓[/green] {acc.name_of(src)}'s key {verb} {dev.name}")
+                # While we are connected anyway: a machine that cannot reach this one
+                # will otherwise have no telemetry for it at all.
+                with suppress(Exception):
+                    store.record(conn, dev.id,
+                                 run_probe(ep, mode=dev.probe_mode,
+                                           disk_paths=dev.disk_paths))
+            else:
+                st.last_error = out
+                failed += 1
+                # Not an error: a device that is off is an edge that has not converged.
+                console.print(f"[yellow]·[/yellow] {dev.name} not reached "
+                              f"[dim]({out[:60]})[/dim]")
+    finally:
+        conn.close()
+        rec.save_ledger(ledger)
+
+    console.print(f"\n[dim]{done} applied, {failed} still pending[/dim]"
+                  + ("  [dim]-- `fleet access` shows what is outstanding[/dim]"
+                     if failed else ""))
 
 
 @app.command("top")
