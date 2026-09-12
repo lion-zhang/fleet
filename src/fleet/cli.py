@@ -570,6 +570,77 @@ def _before_any_command(
     """
 
 
+@app.command("update")
+def cmd_update(name: str = typer.Argument(None, help="defaults to this machine"),
+               everywhere: bool = typer.Option(False, "--all",
+                                               help="every device that can be reached"),
+               repo: str = typer.Option(None, "--repo", metavar="URL"),
+               ref: str = typer.Option("main", "--ref", help="branch or tag")):
+    """Deploy the newest fleet from git.
+
+    `fleet install` already re-runs as an update, but only one device at a time and only
+    over ssh. This adds the two things you actually reach for: updating everything at
+    once, and updating the machine you are standing on without connecting to it.
+
+    [dim]Example:[/dim]  fleet update --all
+    """
+    devices = inv.load()
+    url = repo or configured_repo()
+    if not url:
+        err.print("[red]No repo to update from.[/red]  Pass [bold]--repo "
+                  "git@github.com:you/fleet.git[/bold], or set [bold]repo:[/bold] in "
+                  f"{INVENTORY_PATH.parent / 'config.yaml'}")
+        raise typer.Exit(2)
+
+    if everywhere:
+        targets = [d for d in inv.live(devices) if inv.endpoints_of(d)]
+    elif name:
+        one = inv.find(devices, name)
+        if one is None:
+            err.print(f"[red]No device named {name!r}[/red]")
+            raise typer.Exit(1)
+        targets = [one]
+    else:
+        targets = []
+
+    me = local_device_id()
+    script = install_script(url, ref=ref)
+    ok = failed = 0
+
+    # This machine first and without ssh. The center is never an ssh target, so
+    # connecting to ourselves would fail on exactly the machine most likely to be
+    # running the command.
+    if not name or (targets and any(d.id == me for d in targets)):
+        console.print(f"[dim]updating this machine from {url} ({ref})[/dim]")
+        p = subprocess.run(["sh", "-c", script], capture_output=True, text=True)
+        if p.returncode == 0:
+            console.print("[green]✓[/green] this machine")
+            ok += 1
+        else:
+            err.print(f"[red]✗[/red] this machine\n{(p.stderr or p.stdout)[-400:]}")
+            failed += 1
+        targets = [d for d in targets if d.id != me]
+
+    for dev in targets:
+        eps = sorted(inv.endpoints_of(dev), key=lambda e: e.preference)
+        console.print(f"[dim]updating {dev.name}[/dim]")
+        code, output = run_installer(eps[0], script)
+        if code == 0:
+            console.print(f"[green]✓[/green] {dev.name}")
+            ok += 1
+        else:
+            # One unreachable device must not stop the rest: a fleet half-updated on
+            # purpose is better than a fleet half-updated by an exception.
+            err.print(f"[red]✗[/red] {dev.name} (exit {code}) "
+                      f"[dim]{output.strip()[-120:]}[/dim]")
+            failed += 1
+
+    if ok + failed > 1 or failed:
+        console.print(f"\n[dim]{ok} updated, {failed} failed[/dim]")
+    if failed:
+        raise typer.Exit(1)
+
+
 @app.command("sync")
 def cmd_sync(serve: bool = typer.Option(False, "--serve",
                                         help="run on the center: merge stdin, print the result"),
