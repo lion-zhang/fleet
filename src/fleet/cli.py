@@ -415,6 +415,14 @@ def cmd_edit(name: str,
     result = apply_edits(dev, endpoint=endpoint, disk_paths=paths,
                          role=None if role == "center" else role)
     if role == "center":
+        # Flipping the role alone strands the fleet: spokes verify the list against the
+        # key they have pinned, so a center nobody installed keys for and nobody signed
+        # a handover from is a center no machine will accept.
+        err.print("[red]Use [bold]fleet center NAME[/bold] to move the role.[/red]")
+        err.print("  [dim]it installs the successor's key everywhere and verifies it "
+                  "first; this flag only changed a label[/dim]")
+        raise typer.Exit(2)
+    if False:
         # fleet-wide invariant, so it cannot live in apply_edits, which sees one device
         result.changes += inv.promote_center(devices, dev)
 
@@ -470,8 +478,8 @@ def cmd_install(name: str,
                                          help="git URL to clone; defaults to config or this checkout"),
                 ref: str = typer.Option("main", "--ref", help="branch or tag to install"),
                 role: str = typer.Option(None, "--role",
-                                         help="none | center | backup "
-                                              "(default: keep, or backup if unset)"),
+                                         help="none (the only role a device takes here; "
+                                              "move the center with `fleet center`)"),
                 forward_agent: bool = typer.Option(True, "--forward-agent/--no-forward-agent",
                                                    help="authenticate the clone as you, "
                                                         "leaving no credential on the device")):
@@ -515,11 +523,18 @@ def cmd_install(name: str,
     # This command doubles as the updater, so it must not change a role nobody asked
     # it to change: silently demoting the center on every update leaves `fleet sync`
     # with nowhere to go.
-    if role is None:
-        role = dev.role if dev.role != "none" else "backup"
+    # Only an explicit --role center is refused. `fleet install` doubles as `fleet
+    # update`, so reinstalling on the existing center must leave it alone rather than
+    # tripping over its own role.
     if role == "center":
-        inv.promote_center(devices, dev)    # one center, enforced in one place
-    elif role != dev.role:
+        # The same unguarded promotion `fleet edit --role center` used to offer: no key
+        # installed on the successor, no handover signed, nothing verified. It defaulted
+        # every installed device to `backup` too, a role that no longer exists.
+        err.print("[red]Use [bold]fleet center NAME[/bold] to move the role.[/red]")
+        raise typer.Exit(2)
+    if role is None:
+        role = dev.role
+    if role != dev.role:
         dev.role = role
         inv.touch(dev)
     inv.save(devices)
@@ -1117,6 +1132,120 @@ def _file_request(current, target: str, allow: str, user: str) -> None:
         out.append(entry)
     acl.OUTBOX_PATH.parent.mkdir(parents=True, exist_ok=True)
     acl.OUTBOX_PATH.write_text(yaml.safe_dump({"requests": out}, sort_keys=False))
+
+
+@app.command("center")
+def cmd_center(name: str = typer.Argument(None, help="hand the role to this machine"),
+               init: bool = typer.Option(False, "--init",
+                                         help="start a fleet with this machine as center"),
+               pubkey: bool = typer.Option(False, "--pubkey",
+                                           help="print the key to pre-place on a host"),
+               export: bool = typer.Option(False, "--export",
+                                           help="print the access list and pins"),
+               leave: bool = typer.Option(False, "--leave",
+                                          help="remove this fleet's keys from this machine"),
+               force: bool = typer.Option(False, "--force")):
+    """Who decides, and handing that over.
+
+    Only the current center can name the next one. No machine may promote itself, so an
+    unplanned loss of the center means re-configuring by hand -- which is the price of
+    there being exactly one machine that can open every door.
+
+    [dim]Example:[/dim]  fleet center lin-xps
+    """
+    from . import access as acl
+    from .keys import ensure_keypair
+
+    if pubkey:
+        # Deliberately works with nothing reachable and no inventory: the moment you
+        # want this is before the machine exists, writing a cloud-init file.
+        _, pub = ensure_keypair()
+        print(pub)
+        return
+
+    if init:
+        key_path, pub = ensure_keypair()
+        dev, _ = onboard_self()
+        try:
+            acc = acl.bootstrap(dev.name, pub, dev.id)
+        except acl.AccessError as exc:
+            err.print(f"[red]{exc}[/red]")
+            raise typer.Exit(2)
+        console.print(f"[green]✓[/green] fleet {acc.fleet_id} started; "
+                      f"{dev.name} is the center.")
+        console.print(f"  [dim]key to pre-place on locked-down hosts: "
+                      f"[bold]fleet center --pubkey[/bold][/dim]")
+        return
+
+    try:
+        acc = acl.load()
+    except acl.AccessError as exc:
+        err.print(f"[red]{exc}[/red]")
+        err.print("  [dim]start one with [bold]fleet center --init[/bold][/dim]")
+        raise typer.Exit(2)
+
+    if leave:
+        _leave_fleet(acc)
+        return
+    if export:
+        print(acl.dumps(acc))
+        return
+    if name:
+        _handover(acc, name, force=force)
+        return
+
+    # bare: status
+    centre = acl.is_center(acc)
+    console.print(f"center   [bold]{acc.name_of(acc.center)}[/bold]"
+                  + ("  [dim]← this machine[/dim]" if centre else ""))
+    console.print(f"fleet    {acc.fleet_id}")
+    console.print(f"machines {len(acc.keys)}   edges {len(acc.edges())}")
+    if note := acl.staleness_note():
+        console.print(f"[yellow]![/yellow] {note}")
+    if not centre:
+        console.print("\n[dim]Changes are made on the center. Losing it means "
+                      "re-configuring by hand -- keep a copy: [bold]fleet center "
+                      "--export[/bold][/dim]")
+
+
+def _leave_fleet(acc) -> None:
+    """Strip this fleet's keys from this machine. No permission required.
+
+    You own your machines; the center does not get a veto. It cannot reliably tell
+    'left' from 'down' either -- both look like an auth failure -- so this is a courtesy
+    to the center as much as a right of the machine.
+    """
+    from .authkeys import posix_sync_command
+
+    import subprocess
+    for fp in acc.keys:
+        script = posix_sync_command(acc.fleet_id, fp, pubkey=None)
+        subprocess.run(["sh", "-c", script], capture_output=True, text=True)
+    console.print(f"[green]✓[/green] removed fleet {acc.fleet_id}'s keys from this machine.")
+    console.print("  [dim]the center will see this as unreachable until you tell it[/dim]")
+
+
+def _handover(acc, name: str, *, force: bool) -> None:
+    """Give the role away. The one irreversible command in the tool."""
+    from . import access as acl
+
+    if not acl.is_center(acc):
+        err.print("[red]Only the center can hand the role over.[/red]")
+        err.print(f"  [dim]the center is {acc.name_of(acc.center)}[/dim]")
+        raise typer.Exit(2)
+    try:
+        successor = acl.resolve(acc, name)
+    except acl.AccessError as exc:
+        err.print(f"[red]{exc}[/red]")
+        raise typer.Exit(2)
+    if successor == acc.center:
+        console.print(f"[dim]{name} is already the center.[/dim]")
+        return
+    err.print("[yellow]Handover is not implemented yet.[/yellow] It must first install "
+              f"{name}'s key on every machine, verify {name} can *write* each "
+              "authorized_keys -- probing only proves the key is there, and on Windows "
+              "both failure modes are silent -- and only then retire this one.")
+    raise typer.Exit(2)
 
 
 @app.command("setup")

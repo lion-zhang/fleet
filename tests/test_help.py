@@ -22,7 +22,7 @@ COMMANDS = [
     ("ls",), ("show",), ("add",), ("edit",), ("rm",), ("refresh",), ("probe",),
     ("ssh",), ("setup",), ("paths",), ("top",), ("install",), ("sync",), ("identity",),
     ("key", "install"), ("secret", "set"), ("secret", "ls"), ("secret", "rm"),
-    ("access",),
+    ("access",), ("center",),
 ]
 
 

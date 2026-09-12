@@ -194,7 +194,7 @@ def test_a_successful_install_records_the_new_role(tmp_path, monkeypatch):
     monkeypatch.setattr(cli, "run_installer", lambda *a, **k: (0, "fleet 0.2.0"))
     result = runner.invoke(app, ["install", "oracle"])
     assert result.exit_code == 0, result.output
-    assert inv.load(path)[0].role == "backup"
+    assert inv.load(path)[0].role == "none", "installing does not confer a role"
 
 
 def test_a_failed_install_does_not_claim_the_device_is_a_backup(tmp_path, monkeypatch):
@@ -303,7 +303,10 @@ def test_updating_an_existing_center_does_not_demote_it(tmp_path, monkeypatch):
     assert inv.load(path)[0].role == "center"
 
 
-def test_a_device_with_no_role_still_becomes_a_backup(tmp_path, monkeypatch):
+def test_installing_does_not_make_a_device_a_second_root(tmp_path, monkeypatch):
+    """It used to default to `backup`, which meant a second machine holding a key on
+    every device forever. There is one fleet-root now, and it is not conferred by
+    installing software."""
     from fleet import cli, inventory as inv
     from fleet.cli import app
 
@@ -311,7 +314,7 @@ def test_a_device_with_no_role_still_becomes_a_backup(tmp_path, monkeypatch):
     monkeypatch.setattr(cli, "configured_repo", lambda: "git@github.com:me/fleet.git")
     monkeypatch.setattr(cli, "run_installer", lambda *a, **k: (0, "fleet 0.1.0"))
     runner.invoke(app, ["install", "oracle"])
-    assert inv.load(path)[0].role == "backup"
+    assert inv.load(path)[0].role == "none"
 
 
 def test_an_explicit_role_is_still_obeyed(tmp_path, monkeypatch):
@@ -330,23 +333,16 @@ def test_an_explicit_role_is_still_obeyed(tmp_path, monkeypatch):
     assert inv.load(path)[0].role == "backup"
 
 
-def test_installing_as_center_enforces_the_one_center_rule(tmp_path, monkeypatch):
-    """`--role center` bypassed promote_center, so it could create a second centre and
-    leave `fleet sync` picking one arbitrarily."""
-    from fleet import cli, inventory as inv
+def test_installing_cannot_promote_a_center(tmp_path, monkeypatch):
+    """It called promote_center directly: no key installed on the successor, no
+    handover signed, nothing verified. A center nobody installed keys for is one no
+    machine will accept."""
+    from fleet import cli
     from fleet.cli import app
-    from fleet.models import Device, Kind
 
     runner, path = _cli(tmp_path, monkeypatch)
-    devices = inv.load(path)
-    devices.append(Device(id="linux:machine-id:hub", name="hub", kind=Kind.PERMANENT,
-                          role="center",
-                          endpoints=[{"target": "hub", "user": "root", "port": 22}]))
-    inv.save(devices, path)
-
     monkeypatch.setattr(cli, "configured_repo", lambda: "git@github.com:me/fleet.git")
     monkeypatch.setattr(cli, "run_installer", lambda *a, **k: (0, "fleet 0.1.0"))
-    runner.invoke(app, ["install", "oracle", "--role", "center"])
-    roles = {d.name: d.role for d in inv.load(path)}
-    assert roles["oracle"] == "center"
-    assert roles["hub"] == "backup", roles
+    result = runner.invoke(app, ["install", "oracle", "--role", "center"])
+    assert result.exit_code == 2
+    assert "fleet center" in result.output

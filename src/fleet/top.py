@@ -254,7 +254,13 @@ def name_cell(row: dict[str, Any]) -> str:
     repeats the noise per column, and a rule between devices spends a whole row per
     machine in a view whose point is fitting the fleet on one screen.
     """
-    name = f"[bold]{row['name']}[/bold]" + (" [dim]\u2190[/dim]" if row.get("is_self") else "")
+    name = f"[bold]{row['name']}[/bold]"
+    # The center was invisible outside --json, which stops being tenable once "is the
+    # center reachable" decides whether a grant happens now or waits.
+    if row.get("role") == "center":
+        name += " [dim]\u25c6[/dim]"
+    if row.get("is_self"):
+        name += " [dim]\u2190[/dim]"
     return name + "\n[dim]\u2502[/dim]" * (device_lines(row) - 1)
 
 

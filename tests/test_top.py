@@ -400,3 +400,14 @@ def test_a_relayed_row_says_where_it_came_from():
 def test_the_table_attributes_a_relayed_row():
     out = _rendered([_row(name="far", source="broadcast", probed_by="macbook")])
     assert "via macbook" in out
+
+
+def test_the_center_is_marked_in_the_table():
+    """It only appeared in --json, which stops being tenable once "is the center
+    reachable" decides whether a grant happens now or waits."""
+    from fleet.top import name_cell
+
+    assert "◆" in name_cell(_row(name="macbook", role="center"))
+    assert "◆" not in name_cell(_row(name="oracle"))
+    both = name_cell(_row(name="macbook", role="center", is_self=True))
+    assert "◆" in both and "←" in both

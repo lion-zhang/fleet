@@ -418,3 +418,41 @@ def staleness_note(cache_path: Path | None = None) -> str:
     days = age // 86400
     return (f"the center has not swept this machine for {days}d -- grants and revokes "
             "are queued until it does")
+
+
+def bootstrap(name: str, pubkey: str, device_id: str = "", *,
+              fleet_id: str = "", path: Path | None = None) -> Access:
+    """Start a fleet, with this machine as its center. Refuses to overwrite one."""
+    import uuid
+
+    path = path or ACCESS_PATH
+    if path.exists():
+        raise AccessError(f"{path} already exists -- this fleet has a center already")
+    fp = fingerprint(pubkey)
+    acc = Access(fleet_id=fleet_id or uuid.uuid4().hex[:6], center=fp,
+                 keys={fp: {"name": name, "pubkey": pubkey.strip(),
+                            "device_id": device_id, "pinned_at": int(time.time())}})
+    save(acc, path)
+    return acc
+
+
+def enroll(acc: Access, name: str, pubkey: str, device_id: str = "") -> str:
+    """Pin a machine's key, learned over the center's own connection.
+
+    Pinned rather than taken from `Device.pubkey`, which rides `inventory.merge` and can
+    therefore be overwritten by a peer with a fast clock -- after which the center would
+    install that peer's key wherever this machine's belonged. A changed pin is never
+    accepted silently.
+    """
+    fp = fingerprint(pubkey)
+    known = acc.keys.get(fp)
+    for other, meta in list(acc.keys.items()):
+        if meta.get("name") == name and other != fp:
+            raise AccessError(
+                f"{name} already has a different key pinned ({other[:20]}...). "
+                "That is either a rebuilt machine or an impersonation; re-pin it "
+                "deliberately if you know which.")
+    if known is None:
+        acc.keys[fp] = {"name": name, "pubkey": pubkey.strip(), "device_id": device_id,
+                        "pinned_at": int(time.time())}
+    return fp

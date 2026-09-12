@@ -206,9 +206,11 @@ def _union_endpoints(primary: list[dict], other: list[dict]) -> list[dict]:
 
 
 def promote_center(devices: list[Device], new_center: Device) -> list[str]:
-    """Make one device the center, demoting whoever held it.
+    """Make one device the center, demoting whoever held it to none.
 
-    A demoted center becomes a *backup*, never "none": it still has fleet installed and
+    A demoted center becomes "none". It used to become a backup, which meant a
+    second machine holding a key on every device forever -- a standing
+    total-compromise target, to save an occasional manual recovery.
     still holds a full copy of your state, and dropping it to none would silently
     discard a replica. The demotion is stamped, or it would lose the next merge to the
     other machine's stale "center" record and you would be back to two centers.
