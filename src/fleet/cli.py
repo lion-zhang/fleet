@@ -26,7 +26,7 @@ from .edit import apply_edits
 from .install import build_install_argv, install_script
 from .keys import install_key, public_key
 from .models import Device, Kind, Status
-from .onboard import onboard
+from .onboard import onboard, onboard_self
 from .probe.runner import (probe_env, probe_many, run_probe, run_probe_local,
                            run_probe_with_password)
 from . import secrets as sec
@@ -249,7 +249,9 @@ def cmd_show(name: str, json_out: bool = typer.Option(False, "--json"),
 
 
 @app.command("add")
-def cmd_add(ssh_command: str = typer.Argument(..., help='e.g. "ssh -p 58418 root@1.2.3.4"'),
+def cmd_add(ssh_command: str = typer.Argument(None, help='e.g. "ssh -p 58418 root@1.2.3.4"'),
+            this_machine: bool = typer.Option(False, "--self",
+                                              help="record the machine you are on, with no ssh"),
             name: str = typer.Option(None, "--name"),
             kind: str = typer.Option(None, "--kind", help="permanent|rental|shared|appliance|mobile"),
             json_out: bool = typer.Option(False, "--json"),
@@ -260,9 +262,19 @@ def cmd_add(ssh_command: str = typer.Argument(..., help='e.g. "ssh -p 58418 root
 
     [dim]Example:[/dim]  fleet add "ssh -p 58418 root@1.2.3.4"
     """
+    if this_machine == bool(ssh_command):
+        err.print("[red]Give an ssh command, or --self -- not both, not neither.[/red]")
+        raise typer.Exit(2)
     devices = inv.load()
-    dev, res = onboard(ssh_command, name=name, kind=kind,
-                       taken_names={d.name for d in devices})
+    if this_machine:
+        # No ssh at all: `fleet add "ssh localhost"` would need inbound sshd on a laptop,
+        # which is the thing run_probe_local exists to avoid, and the center is never an
+        # ssh target by design. It still has to be in its own inventory.
+        dev, res = onboard_self(name=name, kind=kind,
+                                taken_names={d.name for d in devices})
+    else:
+        dev, res = onboard(ssh_command, name=name, kind=kind,
+                           taken_names={d.name for d in devices})
     if dry_run:
         _emit({"device": dev.name, "id": dev.id, "kind": dev.kind.value,
                "status": res.status.value}, True)

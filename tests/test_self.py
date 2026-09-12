@@ -110,3 +110,39 @@ def test_the_current_machine_is_not_probed_over_ssh(tmp_path, monkeypatch):
 def ProbeResultOK():
     from fleet.models import ProbeResult, Snapshot
     return ProbeResult(status=Status.OK, snapshot=Snapshot(hostname="me"))
+
+
+# ------------------------------------------------- putting this machine in the inventory
+
+def test_the_machine_can_record_itself_without_ssh():
+    """The center is never an ssh target, so it cannot add itself the way it adds
+    everything else -- and `fleet add "ssh localhost"` would need inbound sshd on a
+    laptop, which is the thing run_probe_local exists to avoid."""
+    from fleet.onboard import onboard_self
+
+    dev, res = onboard_self()
+    assert res.ok
+    assert dev.id, "a self record with no id could never be recognised as self"
+    assert dev.endpoints == [], "an address for the machine you are on is not a route"
+
+
+def test_the_self_id_matches_what_the_cli_calls_this_machine():
+    """These are derived by different code -- ioreg here, the probe payload there -- and
+    if they disagree the center never recognises its own record."""
+    from fleet.cli import local_device_id
+    from fleet.onboard import onboard_self
+
+    assert onboard_self()[0].id == local_device_id()
+
+
+def test_add_refuses_an_ssh_command_together_with_self(tmp_path, monkeypatch):
+    from typer.testing import CliRunner
+
+    from fleet import cli
+
+    monkeypatch.setenv("FLEET_CONFIG_DIR", str(tmp_path))
+    monkeypatch.setenv("FLEET_STATE_DIR", str(tmp_path))
+    r = CliRunner().invoke(cli.app, ["add", "ssh box", "--self"])
+    assert r.exit_code == 2
+    r = CliRunner().invoke(cli.app, ["add"])
+    assert r.exit_code == 2

@@ -7,7 +7,7 @@ import re
 import unicodedata
 
 from .models import Device, Kind, ProbeResult, Snapshot, Status
-from .probe.runner import run_probe
+from .probe.runner import run_probe, run_probe_local
 from .sshauth import classify, probe_server
 from .sshcmd import Endpoint, parse_ssh_command, resolve
 
@@ -71,6 +71,34 @@ def endpoint_dict(ep: Endpoint, *, name: str = "primary", preference: int = 10,
     if via or ep.via:
         d["via"] = via or ep.via
     return d
+
+
+def onboard_self(*, name: str | None = None, kind: str | None = None,
+                 taken_names: set[str] | None = None,
+                 timeout: float = 20.0) -> tuple[Device, ProbeResult]:
+    """Record the machine fleet is running on, without going through SSH.
+
+    The center is never an SSH target, so it cannot add itself the way it adds everything
+    else -- `fleet add "ssh localhost"` needs inbound sshd on a laptop, which is exactly
+    what `run_probe_local` exists to avoid. But the center must be in its own inventory:
+    it is what `is_self` marks, what the handover names, and what the access list treats
+    as holding an edge to everything.
+
+    The record deliberately has no endpoint. An address for a machine you are already on
+    is not useful, and inventing one would publish a route into the fleet that the design
+    says must not exist.
+    """
+    res = run_probe_local(timeout=timeout)
+    snap = res.snapshot
+    ep = Endpoint(target="localhost", user="", port=22)
+    dev = Device(
+        id=derive_id(snap, ep),
+        name=name or suggest_name(snap, ep, taken_names or set()),
+        kind=classify_kind(snap, ep, override=kind),
+        endpoints=[],
+        needs_review=not res.ok,
+    )
+    return dev, res
 
 
 def onboard(ssh_command: str, *, name: str | None = None, kind: str | None = None,
