@@ -163,7 +163,12 @@ class Device:
     id: str
     name: str
     kind: Kind = Kind.PERMANENT
-    label: str = ""
+    # A short handle you can type instead of the name: `fleet ssh x` for `lin-xps`.
+    # Optional, and unique across the fleet in the same namespace as names -- an alias
+    # that collided with another machine's name would make the shorter form ambiguous
+    # exactly where it is most used. Replaces `label`, which was declared, emitted in
+    # --json, and never set by anything.
+    alias: str = ""
     probe_policy: str = "auto"             # auto | on_demand | never
     role: str = "none"                     # none | center | backup
     tags: list[str] = field(default_factory=list)

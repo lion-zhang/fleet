@@ -13,7 +13,7 @@ who may reach what, and the only one that installs or removes keys.
 
 ```bash
 fleet center --init                         # this machine is now the center
-fleet add "ssh -p 58418 root@1.2.3.4"       # probe, enrol, pin, record -- one step
+fleet add "ssh -p 58418 root@1.2.3.4" --alias a   # probe, enrol, pin, record -- one step
 fleet setup                                 # teach your coding agents to use it
 ```
 

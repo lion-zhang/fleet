@@ -285,7 +285,7 @@ def test_a_device_can_be_renamed():
 
 def test_renaming_to_a_taken_name_is_refused():
     dev = _dev()
-    with pytest.raises(ValueError, match="already called"):
+    with pytest.raises(ValueError, match="already answers to"):
         apply_edits(dev, name="oracle", taken={"oracle"})
 
 

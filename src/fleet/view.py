@@ -134,6 +134,7 @@ def device_view(dev: Device, state: dict | None, snap: dict | None,
     out: dict[str, Any] = {
         "name": dev.name,
         "id": dev.id,
+        "alias": dev.alias,
         "kind": dev.kind.value,
         "role": dev.role,
         "status": status,
@@ -187,7 +188,7 @@ def device_view(dev: Device, state: dict | None, snap: dict | None,
         display_mib = sum(p.get("vram_mib", 0)
                           for p in procs if p.get("klass") == "display")
         out |= {
-            "label": dev.label,
+            "alias": dev.alias,
             "notes": dev.notes,
             "hostname": (snap or {}).get("hostname"),
             "os": (snap or {}).get("os"),

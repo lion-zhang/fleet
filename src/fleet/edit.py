@@ -85,7 +85,8 @@ def _migrate_identity(dev: Device, ep: Endpoint, out: Edits) -> None:
 
 def apply_edits(dev: Device, *, endpoint: Endpoint | None = None,
                 disk_paths: list[str] | None = None, role: str | None = None,
-                name: str | None = None, taken: set[str] | None = None) -> Edits:
+                name: str | None = None, alias: str | None = None,
+                taken: set[str] | None = None) -> Edits:
     out = Edits()
     if name is not None and name != dev.name:
         # The name is a label, not an identity -- the id is what merge and the access
@@ -93,9 +94,19 @@ def apply_edits(dev: Device, *, endpoint: Endpoint | None = None,
         # way to fix a bad one: `fleet add` restores a tombstoned record under its old
         # name, so a device that was named wrongly once stays that way otherwise.
         if name in (taken or set()):
-            raise ValueError(f"another device is already called {name!r}")
+            raise ValueError(f"another machine already answers to {name!r}")
         out.changes.append(f"name {dev.name} -> {name}")
         dev.name = name
+    if alias is not None and alias != dev.alias:
+        # Empty clears it. Checked against names as well as aliases: the whole point of
+        # an alias is that you can type it where a name goes, so one that shadowed
+        # another machine's name would be ambiguous exactly where it is most used.
+        if alias and alias in (taken or set()):
+            raise ValueError(f"another machine already answers to {alias!r}")
+        if alias and alias == dev.name:
+            raise ValueError("an alias the same as the name is not an alias")
+        out.changes.append(f"alias {dev.alias or 'none'} -> {alias or 'none'}")
+        dev.alias = alias
     if role is not None and role != dev.role:
         out.changes.append(f"role {dev.role} -> {role}")
         dev.role = role

@@ -60,9 +60,15 @@ One pasted SSH command each — whatever you already use to reach them.
 
 ```bash
 fleet add "ssh username@host.example.com"
-fleet add "ssh -p 58418 root@1.2.3.4"       # a rental
+fleet add "ssh -p 58418 root@1.2.3.4" --name machine_A --alias a
 fleet ls
 ```
+
+Names are guessed from the host; `--name` overrides that, and `--alias` gives the machine
+a short handle you can type anywhere a name goes — `fleet ssh a`, `fleet show a`, `fleet
+access a --allow b`. Both are optional, and `fleet edit NAME --alias SHORT` sets one later
+(`--alias ""` removes it). An alias cannot be another machine's name or alias: the point
+is that the short form is never ambiguous.
 
 Adding is enrolling. In one step fleet probes the machine, puts its key there, reads back
 a key of the machine's own and pins it, and records the lot. There is no second command.
@@ -232,7 +238,9 @@ fleet ssh machine_A -- nvidia-smi      # run one command there
 
 ```bash
 fleet add "ssh user@host"              # add and enrol a machine
+fleet add "ssh user@host" --name machine_A --alias a     # naming it yourself
 fleet edit machine_A --ssh "ssh -p 40001 root@1.2.3.4"   # it moved
+fleet edit machine_A --alias a                           # a short handle to type
 fleet edit machine_A --disk-path /workspace              # watch this volume
 fleet access machine_A --allow machine_B                 # grant
 fleet access machine_A --deny machine_B                  # revoke

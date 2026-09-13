@@ -79,7 +79,11 @@ def _rows(names: list[str] | None = None, *, refresh: bool = False,
     cfg = load_config()
     devices = inv.live(inv.load())
     if names:
-        devices = [d for d in devices if d.name in names or d.id in names]
+        # By handle, not by name: `ls`, `show` and `top` all filter through here, so an
+        # alias that worked for `ssh` and `edit` but not for looking at the machine would
+        # be a handle you cannot use for the thing you do most.
+        wanted = {d.id for d in (inv.find(devices, n) for n in names) if d}
+        devices = [d for d in devices if d.id in wanted]
     conn = store.connect()
 
     stale = []
@@ -239,6 +243,19 @@ def cmd_show(name: str = typer.Argument(None, help="defaults to this machine"),
         console.print(f"  [dim]{r['notes'].strip()}[/dim]")
 
 
+def _canonical(token: str) -> str:
+    """Translate an alias into the name the access list knows. Anything else passes.
+
+    The list is keyed on key fingerprints and carries a name only to render them, so it
+    has no idea aliases exist. Translating here, at the edge, is cheaper than teaching it
+    a second naming scheme it would then have to keep in step through every rename.
+    """
+    if not token:
+        return token
+    dev = inv.find_exact(inv.load(), token)
+    return dev.name if dev else token
+
+
 def _fleet_membership() -> str:
     """Is this machine in a fleet, and does it decide? `center`, `member`, or `""`.
 
@@ -266,6 +283,8 @@ def cmd_add(ssh_command: str = typer.Argument(None, help='e.g. "ssh -p 58418 roo
             this_machine: bool = typer.Option(False, "--self",
                                               help="record the machine you are on, with no ssh"),
             name: str = typer.Option(None, "--name"),
+            alias: str = typer.Option("", "--alias", metavar="SHORT",
+                                      help="a short handle to type instead of the name"),
             kind: str = typer.Option(None, "--kind", help="permanent|rental|shared|appliance|mobile"),
             json_out: bool = typer.Option(False, "--json"),
             dry_run: bool = typer.Option(False, "--dry-run")):
@@ -283,15 +302,20 @@ def cmd_add(ssh_command: str = typer.Argument(None, help='e.g. "ssh -p 58418 roo
                   "a machine is added to a fleet, so the fleet comes first[/dim]")
         raise typer.Exit(2)
     devices = inv.load()
+    taken = inv.handles(devices)
+    if alias and alias in taken:
+        err.print(f"[red]Another machine already answers to {alias!r}.[/red]")
+        err.print("  [dim]aliases share the namespace with names, so the short form is "
+                  "never ambiguous[/dim]")
+        raise typer.Exit(2)
     if this_machine:
         # No ssh at all: `fleet add "ssh localhost"` would need inbound sshd on a laptop,
         # which is the thing run_probe_local exists to avoid, and the center is never an
         # ssh target by design. It still has to be in its own inventory.
-        dev, res = onboard_self(name=name, kind=kind,
-                                taken_names={d.name for d in devices})
+        dev, res = onboard_self(name=name, kind=kind, alias=alias, taken_names=taken)
     else:
-        dev, res = onboard(ssh_command, name=name, kind=kind,
-                           taken_names={d.name for d in devices})
+        dev, res = onboard(ssh_command, name=name, kind=kind, alias=alias,
+                           taken_names=taken)
     if res.status in _DID_NOT_ANSWER:
         err.print(f"[red]{dev.name} did not answer[/red] — "
                   f"{res.status.value}: {res.error_detail}")
@@ -469,6 +493,9 @@ def cmd_edit(name: str = typer.Argument(None, help="defaults to this machine"),
                                                    help="go back to autodetecting mounts"),
              new_name: str = typer.Option(None, "--name", metavar="NEW",
                                           help="rename it; the id and its history stay"),
+             new_alias: str = typer.Option(None, "--alias", metavar="SHORT",
+                                           help="a short handle to type instead of the "
+                                                'name; --alias "" removes it'),
              role: str = typer.Option(None, "--role", help="none | center | backup"),
              json_out: bool = typer.Option(False, "--json")):
     """Change a device's address or settings after it was added.
@@ -486,8 +513,8 @@ def cmd_edit(name: str = typer.Argument(None, help="defaults to this machine"),
 
     endpoint = resolve_command(ssh_command) if ssh_command else None
     paths = [] if clear_disk_paths else (list(disk_path) if disk_path else None)
-    result = apply_edits(dev, name=new_name,
-                         taken={d.name for d in inv.live(devices) if d is not dev},
+    result = apply_edits(dev, name=new_name, alias=new_alias,
+                         taken=inv.handles(devices, excluding=dev.id),
                          endpoint=endpoint, disk_paths=paths,
                          role=None if role == "center" else role)
     if role == "center":
@@ -1332,8 +1359,8 @@ def cmd_access(target: str = typer.Argument(None, help="one machine, instead of 
 
     if allow or deny:
         try:
-            dst = acl.resolve(current, target)
-            src = acl.resolve(current, allow or deny)
+            dst = acl.resolve(current, _canonical(target))
+            src = acl.resolve(current, _canonical(allow or deny))
             changed = (acl.grant(current, src, dst, user=user) if allow
                        else acl.revoke(current, src, dst, user=user))
         except acl.AccessError as exc:
@@ -1351,7 +1378,7 @@ def cmd_access(target: str = typer.Argument(None, help="one machine, instead of 
     rows = []
     for edge in sorted(current.edges()):
         src, dst, who = edge
-        if target and dst != acl.resolve(current, target):
+        if target and dst != acl.resolve(current, _canonical(target)):
             continue
         st = ledger.get(">".join(edge), rec.EdgeState())
         rows.append({"from": current.name_of(src), "to": current.name_of(dst),
@@ -1795,7 +1822,7 @@ def _handover(acc, name: str, *, force: bool) -> None:
         err.print(f"  [dim]the center is {acc.name_of(acc.center)}[/dim]")
         raise typer.Exit(2)
     try:
-        successor = acl.resolve(acc, name)
+        successor = acl.resolve(acc, _canonical(name))
     except acl.AccessError as exc:
         err.print(f"[red]{exc}[/red]")
         raise typer.Exit(2)

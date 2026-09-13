@@ -100,10 +100,12 @@ Anywhere. A name may be omitted where the obvious subject is the machine you are
   not recorded at all: a machine the center cannot reach cannot be managed. Run on the
   center this also enrols it; run anywhere else it is recorded and the center enrols it
   on the next `{cmd} sync`, and it can be granted nothing until then. `--name` and
-  `--kind` override what is guessed
+  `--kind` override what is guessed, and `--alias SHORT` gives it a short handle you
+  can type anywhere a name goes
 - `{cmd} add --self` -- record the machine you are on, without ssh
 - `{cmd} edit [NAME] --ssh "ssh ..."` -- a rental moved; point the record at the new
-  address. `--disk-path /workspace` to watch the volume that matters, `--name` to rename
+  address. `--disk-path /workspace` to watch the volume that matters, `--name` to
+  rename, `--alias` to set or clear the short handle
 - `{cmd} install NAME` -- put fleet on a machine that has none
 - `{cmd} paths` -- where the inventory, keys and access list live on this machine
 

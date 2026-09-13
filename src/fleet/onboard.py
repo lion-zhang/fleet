@@ -84,7 +84,7 @@ def endpoint_dict(ep: Endpoint, *, name: str = "primary", preference: int = 10,
 
 
 def onboard_self(*, name: str | None = None, kind: str | None = None,
-                 taken_names: set[str] | None = None,
+                 alias: str = "", taken_names: set[str] | None = None,
                  timeout: float = 20.0) -> tuple[Device, ProbeResult]:
     """Record the machine fleet is running on, without going through SSH.
 
@@ -105,6 +105,7 @@ def onboard_self(*, name: str | None = None, kind: str | None = None,
         id=derive_id(snap, ep),
         name=name or suggest_name(snap, ep, taken_names or set()),
         kind=classify_kind(snap, ep, override=kind),
+        alias=alias,
         endpoints=[],
         needs_review=not res.ok,
     )
@@ -112,7 +113,7 @@ def onboard_self(*, name: str | None = None, kind: str | None = None,
 
 
 def onboard(ssh_command: str, *, name: str | None = None, kind: str | None = None,
-            taken_names: set[str] | None = None, timeout: float = 20.0,
+            alias: str = "", taken_names: set[str] | None = None, timeout: float = 20.0,
             probe: bool = True) -> tuple[Device, ProbeResult]:
     """Resolve and fingerprint a host. An unreachable host is still recorded -- with a
     reason and needs_review -- because silently dropping it is worse than listing it."""
@@ -134,6 +135,7 @@ def onboard(ssh_command: str, *, name: str | None = None, kind: str | None = Non
         id=derive_id(snap, ep),
         name=name or suggest_name(snap, ep, taken),
         kind=classify_kind(snap, ep, override=kind),
+        alias=alias,
         endpoints=[endpoint_dict(ep, via=ep.via)],
         ssh_auth=ssh_auth,
         needs_review=not res.ok,

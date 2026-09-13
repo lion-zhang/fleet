@@ -150,33 +150,47 @@ def _as_dict(d: Device) -> dict:
     return {f: getattr(d, f) for f in Device.__slots__}
 
 
-def find(devices: list[Device], name_or_id: str) -> Device | None:
-    """Exact name or id, else a unique prefix. Convenience for everyday commands."""
-    if exact := find_exact(devices, name_or_id):
+def find(devices: list[Device], token: str) -> Device | None:
+    """Exact name, alias or id, else a unique name prefix. For everyday commands."""
+    if exact := find_exact(devices, token):
         return exact
-    matches = [d for d in live(devices) if d.name.startswith(name_or_id)]
+    matches = [d for d in live(devices) if d.name.startswith(token)]
     return matches[0] if len(matches) == 1 else None
 
 
-def find_exact(devices: list[Device], name_or_id: str) -> Device | None:
+def find_exact(devices: list[Device], token: str) -> Device | None:
     """No prefix fallback. For commands whose mistake cannot be undone.
 
-    `find` resolving a unique prefix is right for `show`, `ssh` and `top`, where a wrong
-    guess costs you one re-run. It is wrong for `rm`: `fleet rm lin` would remove
-    `lin-xps` on the strength of three letters, and an agent filling in a half-heard name
-    is exactly the case that produces those three letters.
+    An alias counts as exact: it is a name the user chose for this machine and typed in
+    full, not a fragment guessed at. What this rules out is the prefix, which `find`
+    still resolves -- right for `show`, `ssh` and `top`, where a wrong guess costs one
+    re-run, and wrong for `rm`, where `fleet rm lin` would remove `lin-xps` on the
+    strength of three letters.
     """
     for d in live(devices):
-        if d.name == name_or_id or d.id == name_or_id:
+        if token in (d.name, d.id) or (d.alias and d.alias == token):
             return d
     return None
 
 
+def handles(devices: list[Device], *, excluding: str = "") -> set[str]:
+    """Every string that already names a machine. Aliases share the namespace with
+    names, so `--alias` cannot shadow another machine's name and vice versa."""
+    taken: set[str] = set()
+    for d in live(devices):
+        if excluding and d.id == excluding:
+            continue
+        taken.add(d.name)
+        if d.alias:
+            taken.add(d.alias)
+    return taken
+
+
 def near_matches(devices: list[Device], name: str, limit: int = 5) -> list[str]:
-    """Names worth suggesting after `find_exact` came back empty."""
+    """Handles worth suggesting after `find_exact` came back empty."""
     lowered = name.lower()
-    return sorted(d.name for d in live(devices)
-                  if lowered in d.name.lower() or d.name.lower().startswith(lowered))[:limit]
+    return sorted(h for h in handles(devices)
+                  if lowered in h.lower() or h.lower().startswith(lowered))[:limit]
 
 
 TOMBSTONE_TTL_S = 60 * 60 * 24 * 30      # long enough for every machine to have synced

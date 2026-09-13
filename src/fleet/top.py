@@ -255,6 +255,11 @@ def name_cell(row: dict[str, Any]) -> str:
     machine in a view whose point is fitting the fleet on one screen.
     """
     name = f"[bold]{row['name']}[/bold]"
+    # Shown inline rather than in a column of its own: it is set on a minority of
+    # machines, and an empty column costs width on every row in a view whose point is
+    # fitting the fleet on one screen.
+    if row.get("alias"):
+        name += f" [dim]({row['alias']})[/dim]"
     # The center was invisible outside --json, which stops being tenable once "is the
     # center reachable" decides whether a grant happens now or waits.
     if row.get("role") == "center":
