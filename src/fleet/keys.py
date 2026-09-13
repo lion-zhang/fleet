@@ -177,6 +177,40 @@ def _scrub(raw: bytes, password: str) -> str:
     return text.replace(password, "***") if password else text
 
 
+def ensure_remote_keypair_command(*, platform: str = "posix") -> str:
+    """Give a machine its own fleet keypair, if it has none, and print the public half.
+
+    A machine needs an identity of its own, not just our key in its authorized_keys: the
+    fingerprint of *its* key is what the access list is keyed on, what a grant installs
+    elsewhere, and what `is_center` checks. Without this, enrolment produced a host we
+    could reach and could never grant anything to.
+
+    Never regenerates, for the same reason `ensure_keypair` does not: a new key orphans
+    every authorized_keys entry already placed for that machine, everywhere, with
+    nothing left to match them by.
+    """
+    if platform == "windows":
+        # platformdirs puts a non-roaming user config under LOCALAPPDATA, which is where
+        # fleet on that machine will look for it.
+        return (
+            "$d=Join-Path $env:LOCALAPPDATA 'fleet';"
+            "if(!(Test-Path $d)){New-Item -ItemType Directory -Path $d|Out-Null};"
+            "$k=Join-Path $d 'id_ed25519';"
+            "if(!(Test-Path \"$k.pub\")){"
+            "if(Test-Path $k){Remove-Item -LiteralPath $k -Force};"
+            "ssh-keygen -t ed25519 -N '\"\"' -q -C \"fleet:$env:COMPUTERNAME\" -f $k|Out-Null};"
+            "Get-Content -LiteralPath \"$k.pub\""
+        )
+    return (
+        'd="$HOME/.config/fleet"; mkdir -p "$d"; k="$d/id_ed25519"; '
+        # the .pub is the test, not the private half: an interrupted keygen leaves the
+        # private key alone and ssh-keygen then refuses to overwrite it, forever
+        'if [ ! -f "$k.pub" ]; then rm -f "$k"; '
+        'ssh-keygen -t ed25519 -N "" -q -C "fleet:$(hostname)" -f "$k" >/dev/null 2>&1; fi; '
+        'cat "$k.pub"'
+    )
+
+
 def windows_authorized_keys_command(pubkey: str) -> str:
     """The first-contact twin for Windows, as a single PowerShell -Command string.
 

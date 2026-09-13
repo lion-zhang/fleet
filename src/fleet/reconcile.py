@@ -92,7 +92,7 @@ def plan(acc: Access, ledger: dict[str, EdgeState]) -> dict[str, EdgeState]:
 
 
 def _remote(ep: Endpoint, script: str, *, platform: str = "posix",
-            timeout: int = 30):
+            timeout: int = 30, capture: bool = False):
     """Run one authorized_keys edit.
 
     `multiplex=False` is not an optimisation, it is a correctness requirement:
@@ -110,6 +110,9 @@ def _remote(ep: Endpoint, script: str, *, platform: str = "posix",
         return False, "timed out"
     except OSError as exc:
         return False, str(exc)
+    if capture:
+        # Callers that need what the far side *said*, not just whether it worked.
+        return p.returncode == 0, (p.stdout or p.stderr or "")
     return p.returncode == 0, (p.stderr or p.stdout or "").strip()[-300:]
 
 

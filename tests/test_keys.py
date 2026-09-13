@@ -276,3 +276,63 @@ def test_add_does_not_prompt_for_a_password_without_a_terminal(tmp_path, monkeyp
     assert result.exit_code == 0, result.output
     assert not called, "must never prompt when stdin is not a terminal"
     assert "fleet center --enroll" in result.output, "but must say how to fix it"
+
+
+# -------------------------------------------- giving a machine an identity of its own
+
+def test_a_machine_with_no_keypair_gets_one(tmp_path):
+    """Run the POSIX script for real against a temp HOME. A machine needs its own key,
+    not just ours in its authorized_keys: the access list is keyed on the fingerprint of
+    *its* key, so without one it can be reached and granted nothing."""
+    import subprocess
+
+    from fleet.keys import ensure_remote_keypair_command
+
+    cmd = ensure_remote_keypair_command()
+    env = {"HOME": str(tmp_path), "PATH": "/usr/bin:/bin:/usr/local/bin"}
+    p = subprocess.run(["sh", "-c", cmd], env=env, capture_output=True, text=True)
+    assert p.returncode == 0, p.stderr
+    assert p.stdout.strip().startswith("ssh-ed25519 ")
+    assert "fleet:" in p.stdout, "the comment says what put it there"
+    assert (tmp_path / ".config" / "fleet" / "id_ed25519").exists()
+
+
+def test_it_never_replaces_a_key_the_machine_already_has(tmp_path):
+    """A new key orphans every authorized_keys entry already placed for that machine,
+    everywhere, with nothing left to match them by."""
+    import subprocess
+
+    from fleet.keys import ensure_remote_keypair_command
+
+    cmd = ensure_remote_keypair_command()
+    env = {"HOME": str(tmp_path), "PATH": "/usr/bin:/bin:/usr/local/bin"}
+    first = subprocess.run(["sh", "-c", cmd], env=env, capture_output=True, text=True).stdout
+    again = subprocess.run(["sh", "-c", cmd], env=env, capture_output=True, text=True).stdout
+    assert first.strip() == again.strip()
+
+
+def test_an_interrupted_keygen_does_not_wedge_it_forever(tmp_path):
+    """ssh-keygen refuses to overwrite a private key, so testing for the private half
+    would leave a half-made pair that can never be completed. The .pub is the test."""
+    import subprocess
+
+    from fleet.keys import ensure_remote_keypair_command
+
+    d = tmp_path / ".config" / "fleet"
+    d.mkdir(parents=True)
+    (d / "id_ed25519").write_text("truncated, from an interrupted run")
+    env = {"HOME": str(tmp_path), "PATH": "/usr/bin:/bin:/usr/local/bin"}
+    out = subprocess.run(["sh", "-c", ensure_remote_keypair_command()], env=env,
+                         capture_output=True, text=True).stdout
+    assert out.strip().startswith("ssh-ed25519 ")
+
+
+def test_the_windows_twin_uses_the_config_dir_fleet_will_look_in():
+    """platformdirs puts a non-roaming user config under LOCALAPPDATA, which is where
+    fleet on that machine looks -- a key written anywhere else is invisible to it."""
+    from fleet.keys import ensure_remote_keypair_command
+
+    cmd = ensure_remote_keypair_command(platform="windows")
+    assert "$env:LOCALAPPDATA" in cmd and "'fleet'" in cmd
+    assert "ssh-keygen" in cmd and "ed25519" in cmd
+    assert "$k.pub" in cmd, "the .pub is the test, not the private half"

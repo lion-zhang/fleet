@@ -1361,8 +1361,10 @@ def cmd_center(name: str = typer.Argument(None, help="hand the role to this mach
             raise typer.Exit(1)
         if not _install_key(dev):
             raise typer.Exit(2)
-        console.print(f"  [dim]now grant it something: [bold]fleet access {dev.name} "
-                      f"--allow <machine>[/bold][/dim]")
+        fp = _register_identity(dev)
+        if fp:
+            console.print(f"  [dim]now grant it something: [bold]fleet access {dev.name} "
+                          f"--allow <machine>[/bold][/dim]")
         return
 
     if init:
@@ -1420,6 +1422,55 @@ def cmd_center(name: str = typer.Argument(None, help="hand the role to this mach
         console.print("\n[dim]Changes are made on the center. Losing it means "
                       "re-configuring by hand -- keep a copy: [bold]fleet center "
                       "--export[/bold][/dim]")
+
+
+def _register_identity(dev) -> str:
+    """Give the machine its own fleet keypair and pin it. Returns the fingerprint.
+
+    Enrolment used to stop at "our key is on it", which makes a host reachable and
+    nothing else: the access list is keyed on the fingerprint of *its* key, so without
+    this the very next step it tells you to run -- granting it something -- could not
+    find it. `access.enroll` existed and was never called.
+
+    The key is read back over our own connection rather than taken from anything the
+    machine published, so what gets pinned is what we saw on the host itself.
+    """
+    from . import access as acl
+    from . import reconcile as rec
+    from .keys import ensure_remote_keypair_command
+
+    try:
+        acc = acl.load()
+    except acl.AccessError:
+        console.print("  [dim]no fleet here yet -- run [bold]fleet center --init[/bold] "
+                      "and enrol again to register its key[/dim]")
+        return ""
+
+    eps = sorted(inv.endpoints_of(dev), key=lambda e: e.preference)
+    conn = store.connect()
+    try:
+        _, snap = store.latest(conn, dev.id)
+    finally:
+        conn.close()
+    plat = remote_platform(snap)
+    ok, out = rec._remote(eps[0], ensure_remote_keypair_command(platform=plat),
+                          platform=plat, capture=True)
+    pub = next((ln.strip() for ln in (out or "").splitlines()
+                if ln.strip().startswith("ssh-")), "")
+    if not ok or not pub:
+        err.print(f"  [yellow]could not read a key from {dev.name}[/yellow] "
+                  f"[dim]{(out or '')[:80]}[/dim]")
+        err.print("  [dim]it is reachable, but cannot be granted access to anything "
+                  "until it has one[/dim]")
+        return ""
+    try:
+        fp = acl.enroll(acc, dev.name, pub, dev.id)
+    except acl.AccessError as exc:
+        err.print(f"  [red]{exc}[/red]")
+        return ""
+    acl.save(acc)
+    console.print(f"[green]✓[/green] {dev.name} registered as {fp[:24]}...")
+    return fp
 
 
 def _dissolve(acc, *, force: bool) -> None:
