@@ -103,6 +103,9 @@ these either refuse or file a request for the center to act on later.
 - `{cmd} sync` -- the sweep: install and remove keys, and collect telemetry
 - `{cmd} center --enroll NAME` -- first key onto a host, needs a password typed by a human
 - `{cmd} center NAME` -- hand the role over
+- `{cmd} center --init` / `--dissolve` -- create a fleet, or take it down. Dissolving
+  removes every key from every machine first; never delete the access list by hand,
+  which orphans those keys instead of removing them
 - `{cmd} rm NAME` -- remove another machine. Any machine may remove *itself*
 
 ## Rules

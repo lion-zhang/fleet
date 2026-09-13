@@ -130,7 +130,8 @@ def apply_edge(acc: Access, edge: tuple[str, str, str], ep: Endpoint, *,
     return _remote(ep, script, platform=platform)
 
 
-def refuses_to_run(acc: Access, ledger: dict[str, EdgeState]) -> str:
+def refuses_to_run(acc: Access, ledger: dict[str, EdgeState], *,
+                   dissolving: bool = False) -> str:
     """A guard against the one shape that is always a bug.
 
     Wanting no edges at all, while having observed some, means something upstream
@@ -138,6 +139,11 @@ def refuses_to_run(acc: Access, ledger: dict[str, EdgeState]) -> str:
     strip every key fleet placed, everywhere, in one pass. There is no legitimate reason
     to reach that state in a single step: revoking is done edge by edge.
     """
+    if dissolving:
+        # Dissolving is the one time "remove everything" is the intent rather than a
+        # symptom. It is asked for explicitly, by name, on the center, after a prompt --
+        # which is precisely what this guard cannot distinguish on its own.
+        return ""
     if acc.edges():
         return ""
     if any(st.observed == "present" for st in ledger.values()):

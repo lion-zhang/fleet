@@ -32,6 +32,7 @@ from pathlib import Path
 
 import yaml
 
+from . import config
 from .config import CONFIG_DIR, FLEET_KEY, STATE_DIR
 
 # CONFIG_DIR and STATE_DIR are the *same directory* on macOS (platformdirs gives both as
@@ -217,7 +218,10 @@ def is_center(acc: Access | None = None, *, key_path: Path | None = None) -> boo
     Holding the key is both necessary and sufficient, because a machine that cannot sign
     cannot produce a list any other machine will accept.
     """
-    key_path = key_path or FLEET_KEY
+    # config.FLEET_KEY at call time, not the name bound at import: redirecting the key
+    # path -- which every test does, and any future per-fleet layout would -- otherwise
+    # reads the real one instead. The same coupling already bit the ledger path.
+    key_path = key_path or config.FLEET_KEY
     pub = key_path.with_suffix(".pub")
     if not key_path.exists() or not pub.exists():
         return False
@@ -243,7 +247,7 @@ def sign(payload: str, key_path: Path | None = None) -> str:
     authenticates *a* peer, not *the* center. The signature is what makes the claim
     checkable, and it keeps being checkable if the transport ever changes.
     """
-    key_path = key_path or FLEET_KEY
+    key_path = key_path or config.FLEET_KEY
     try:
         p = subprocess.run(
             ["ssh-keygen", "-Y", "sign", "-f", str(key_path), "-n", SIGN_NAMESPACE, "-"],
