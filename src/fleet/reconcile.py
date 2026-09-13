@@ -22,7 +22,7 @@ import yaml
 
 from . import access as acc_mod
 from .access import Access, AccessError
-from .authkeys import posix_sync_command, powershell_sync_command
+from .authkeys import sync_command
 from .sshcmd import Endpoint, build_argv
 
 
@@ -91,7 +91,8 @@ def plan(acc: Access, ledger: dict[str, EdgeState]) -> dict[str, EdgeState]:
     return out
 
 
-def _remote(ep: Endpoint, script: str, *, windows: bool, timeout: int = 30):
+def _remote(ep: Endpoint, script: str, *, platform: str = "posix",
+            timeout: int = 30):
     """Run one authorized_keys edit.
 
     `multiplex=False` is not an optimisation, it is a correctness requirement:
@@ -99,7 +100,8 @@ def _remote(ep: Endpoint, script: str, *, windows: bool, timeout: int = 30):
     share one master -- and `runner._kill` kills the whole process group on a probe
     timeout, which could tear the connection down mid-write.
     """
-    remote = "powershell -NoProfile -Command -" if windows else "sh -s"
+    remote = ("powershell -NoProfile -Command -" if platform == "windows"
+              else "sh -s")
     argv = build_argv(ep, remote=remote, multiplex=False, connect_timeout=10)
     try:
         p = subprocess.run(argv, input=script, capture_output=True, text=True,
@@ -112,7 +114,7 @@ def _remote(ep: Endpoint, script: str, *, windows: bool, timeout: int = 30):
 
 
 def apply_edge(acc: Access, edge: tuple[str, str, str], ep: Endpoint, *,
-               install: bool, windows: bool = False) -> tuple[bool, str]:
+               install: bool, platform: str = "posix") -> tuple[bool, str]:
     """Put one machine's key on another, or take it off.
 
     Only ever a *pinned* key: `Device.pubkey` rides the ordinary merge, so a peer with a
@@ -123,9 +125,9 @@ def apply_edge(acc: Access, edge: tuple[str, str, str], ep: Endpoint, *,
     pinned = (acc.keys.get(src) or {}).get("pubkey", "")
     if install and not pinned:
         return False, f"no pinned key for {acc.name_of(src)} -- enroll it first"
-    maker = powershell_sync_command if windows else posix_sync_command
-    script = maker(acc.fleet_id, src, user=user, pubkey=pinned if install else None)
-    return _remote(ep, script, windows=windows)
+    script = sync_command(acc.fleet_id, src, user=user,
+                          pubkey=pinned if install else None, platform=platform)
+    return _remote(ep, script, platform=platform)
 
 
 def refuses_to_run(acc: Access, ledger: dict[str, EdgeState]) -> str:

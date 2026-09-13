@@ -167,6 +167,27 @@ def control_dir() -> str | None:
     return d
 
 
+POSIX, WINDOWS = "posix", "windows"
+
+
+def remote_platform(snapshot: dict | None) -> str:
+    """Which shell the far side speaks, from the last probe.
+
+    One function, one answer. Before this there were four places deciding it and they
+    disagreed: `fleet ssh` read the snapshot, the reconciler compared `ssh_auth` against
+    a value it never holds -- so every grant on a Windows host silently ran the POSIX
+    script -- and handover and `--leave` simply assumed POSIX.
+
+    Read from the probe rather than stored on the Device on purpose. A field would ride
+    `inventory.merge`, where a peer with a fast clock could flip a host's platform and
+    so choose which shell we hand it a command in. A machine nobody has probed reads
+    POSIX, which is both the common case and the safe way to be wrong: a POSIX command
+    on Windows fails loudly, where the reverse can appear to succeed.
+    """
+    os_name = str((snapshot or {}).get("os") or "")
+    return WINDOWS if os_name.lower().startswith(("windows", "microsoft windows")) else POSIX
+
+
 def remote_command(args: list[str], *, windows: bool = False) -> str:
     """What to hand ssh when the caller asked to run something, rather than get a shell.
 

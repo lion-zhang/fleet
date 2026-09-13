@@ -139,3 +139,16 @@ def powershell_sync_command(fleet_id: str, from_id: str, *, user: str = "",
         + ("" if path else
            "icacls $f /inheritance:r /grant 'SYSTEM:F' 'Administrators:F' | Out-Null\n")
     )
+
+
+def sync_command(fleet_id: str, from_id: str, *, user: str = "",
+                 pubkey: str | None = None, path: str = "",
+                 platform: str = "posix") -> str:
+    """The right twin for the far side, so no caller picks one itself.
+
+    Every caller that chose between them got it wrong at least once, and the wrong
+    choice is not a loud failure: a POSIX script on Windows returns cmd.exe's complaint,
+    and the grant is simply never installed.
+    """
+    maker = powershell_sync_command if platform == "windows" else posix_sync_command
+    return maker(fleet_id, from_id, user=user, pubkey=pubkey, path=path)

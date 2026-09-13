@@ -177,9 +177,47 @@ def _scrub(raw: bytes, password: str) -> str:
     return text.replace(password, "***") if password else text
 
 
+def windows_authorized_keys_command(pubkey: str) -> str:
+    """The first-contact twin for Windows, as a single PowerShell -Command string.
+
+    Not the full marker-block machinery: this runs before the host is in any fleet, with
+    one password and one connection, and all it has to do is get a key in. The reconciler
+    takes over from there.
+
+    Same two traps as everywhere else on Windows -- an admin's keys live in ProgramData,
+    and sshd refuses a file with inherited ACEs -- and both fail silently, so getting
+    them wrong here means an enrolment that reports success and never works.
+    """
+    quoted = pubkey.strip().replace("'", "''")
+    return (
+        "powershell -NoProfile -Command "
+        "\"$id=[Security.Principal.WindowsIdentity]::GetCurrent();"
+        "$a=(New-Object Security.Principal.WindowsPrincipal($id)).IsInRole("
+        "[Security.Principal.WindowsBuiltInRole]::Administrator);"
+        "if($a){$f=Join-Path $env:ProgramData 'ssh\\administrators_authorized_keys'}"
+        "else{$f=Join-Path $env:USERPROFILE '.ssh\\authorized_keys'};"
+        "$d=Split-Path $f;if(!(Test-Path $d)){New-Item -ItemType Directory -Path $d|Out-Null};"
+        f"Add-Content -LiteralPath $f -Value '{quoted}';"
+        "icacls $f /inheritance:r /grant 'SYSTEM:F' 'Administrators:F' | Out-Null\""
+    )
+
+
 def install_key(ep: Endpoint, password: str, pubkey: str, *,
                 timeout: float = 20.0) -> tuple[bool, str]:
-    """Append pubkey to the host's authorized_keys. Returns (ok, output-safe-to-print)."""
+    """Append pubkey to the host's authorized_keys. Returns (ok, output-safe-to-print).
+
+    Tries POSIX, then PowerShell. The platform cannot be known in advance here: this is
+    first contact, so there is no probe to read, and asking the user to declare it would
+    be asking them to know something fleet can find out. Same shape as the probe's own
+    fallback, and the cost is one extra connection on Windows only.
+    """
     argv = build_password_argv(ep) + [authorized_keys_command(pubkey)]
     code, output = run_with_password(argv, password, timeout=timeout)
+    if code == 0:
+        return True, output
+    if any(sig in output.lower() for sig in
+           ("is not recognized as an internal or external command",
+            "operable program or batch file")):
+        argv = build_password_argv(ep) + [windows_authorized_keys_command(pubkey)]
+        code, output = run_with_password(argv, password, timeout=timeout)
     return code == 0, output

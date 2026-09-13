@@ -33,7 +33,7 @@ from .models import Device, Kind, Status
 from .onboard import onboard, onboard_self
 from .probe.runner import (probe_env, probe_many, run_probe, run_probe_local)
 from .setup import TARGETS, detect_targets, fleet_command, install, uninstall
-from .sshcmd import build_argv, remote_command, resolve_command
+from .sshcmd import remote_platform, build_argv, remote_command, resolve_command
 from .top import (Schedule, device_lines, disk_cell, gpu_cells_compact,
                   name_cell, render_device, render_fleet)
 from .view import Detail, auth_of, device_view, fleet_view
@@ -877,8 +877,9 @@ def _sweep(devices) -> None:
                 st.last_error = "no endpoint recorded"
                 failed += 1
                 continue
+            _, snap = store.latest(conn, dev.id)
             ok, out = rec.apply_edge(acc, (src, dst, user), ep, install=install,
-                                     windows=(dev.ssh_auth == "windows"))
+                                     platform=remote_platform(snap))
             if ok:
                 st.observed, st.last_error = st.desired, ""
                 done += 1
@@ -1116,11 +1117,7 @@ def cmd_ssh(ctx: typer.Context, name: str):
         cached, snap = store.latest(conn, dev.id)
     finally:
         conn.close()
-    # Read from the last probe rather than a field on the device: a stored OS would ride
-    # inventory.merge, where a peer with a fast clock could flip a host's platform and
-    # change which shell we hand it a command in.
-    windows = str((snap or {}).get("os", "")).lower().startswith(("microsoft windows",
-                                                                 "windows"))
+    platform = remote_platform(snap)
     if auth_of(dev, cached) == "needs_key":
         err.print(f"[yellow]{dev.name} rejected our key.[/yellow] Install one:")
         err.print(f"  [bold]fleet center --enroll {dev.name}[/bold]")
@@ -1139,7 +1136,7 @@ def cmd_ssh(ctx: typer.Context, name: str):
     argv.append(f"{ep.user}@{ep.target}" if ep.user else ep.target)
     extra = [a for a in ctx.args if a != "--"]
     if extra:
-        argv.append(remote_command(extra, windows=windows))
+        argv.append(remote_command(extra, windows=platform == "windows"))
 
     os.execvp("ssh", argv)      # replace this process; ssh owns the tty from here
 
@@ -1430,7 +1427,7 @@ def _accept_handover(acc) -> None:
     """
     from . import access as acl
     from . import reconcile as rec
-    from .authkeys import posix_sync_command
+    from .authkeys import sync_command
     from .keys import ensure_keypair
 
     _, pub = ensure_keypair()
@@ -1454,8 +1451,15 @@ def _accept_handover(acc) -> None:
             continue
         # drop-then-append of our own block: idempotent, and it changes nothing if it
         # works, which is what makes it safe to run as a test
-        script = posix_sync_command(acc.fleet_id, mine, user=eps[0].user, pubkey=pub)
-        ok, out = rec._remote(eps[0], script, windows=False)
+        conn = store.connect()
+        try:
+            _, snap = store.latest(conn, dev.id)
+        finally:
+            conn.close()
+        plat = remote_platform(snap)
+        script = sync_command(acc.fleet_id, mine, user=eps[0].user, pubkey=pub,
+                              platform=plat)
+        ok, out = rec._remote(eps[0], script, platform=plat)
         name = meta.get("name", fp[:18])
         if ok:
             console.print(f"[green]✓[/green] can write {name}")
@@ -1487,12 +1491,17 @@ def _leave_fleet(acc) -> None:
     'left' from 'down' either -- both look like an auth failure -- so this is a courtesy
     to the center as much as a right of the machine.
     """
-    from .authkeys import posix_sync_command
-
     import subprocess
+
+    # Local, not remote: this edits the file on the machine you are standing on. So the
+    # platform is ours, not a probed host's -- and on Windows there is no `sh` at all,
+    # which made leaving a fleet impossible from the very machines most likely to want to.
+    windows = sys.platform == "win32"
+    shell = (["powershell", "-NoProfile", "-Command", "-"] if windows else ["sh", "-s"])
     for fp in acc.keys:
-        script = posix_sync_command(acc.fleet_id, fp, pubkey=None)
-        subprocess.run(["sh", "-c", script], capture_output=True, text=True)
+        script = sync_command(acc.fleet_id, fp, pubkey=None,
+                              platform="windows" if windows else "posix")
+        subprocess.run(shell, input=script, capture_output=True, text=True)
     console.print(f"[green]✓[/green] removed fleet {acc.fleet_id}'s keys from this machine.")
     console.print("  [dim]the center will see this as unreachable until you tell it[/dim]")
 
