@@ -202,7 +202,9 @@ def test_nothing_still_offers_an_enrol_command():
     import pathlib
 
     root = pathlib.Path(__file__).resolve().parent.parent
-    for path in list((root / "src").rglob("*.py")) + [root / "README.md"]:
+    targets = (list((root / "src").rglob("*.py"))
+               + list((root / "docs").rglob("*.md")) + [root / "README.md"])
+    for path in targets:
         text = path.read_text()
         assert "--enroll" not in text, f"{path} still names a deleted flag"
         assert "--no-key-prompt" not in text, f"{path} still names a deleted flag"
