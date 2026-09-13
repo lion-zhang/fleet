@@ -79,30 +79,42 @@ def _usage(cmd: str) -> str:
 Anywhere. A name may be omitted where the obvious subject is the machine you are on.
 
 - `{cmd} ls --json` -- every machine, with what is free right now
-- `{cmd} ls NAME... --json` -- only those, `-r` to force a fresh probe
+- `{cmd} ls NAME... --json` -- only those, `-r` to force a fresh probe,
+  `--online` for reachable ones only
 - `{cmd} show [NAME] --json` -- full detail; no name means this machine
 - `{cmd} ssh NAME -- COMMAND` -- run a command there
 - `{cmd} ssh NAME` -- an interactive shell, exactly as plain ssh
 - `{cmd} access [NAME]` -- who may reach what, and what is still pending
 - `{cmd} center --json` -- `is_center`, who decides, and when it was last heard from
+- `{cmd} center --pubkey` -- the key to pre-place on a host that takes no password;
+  works with nothing reachable, which is the point
+- `{cmd} center --export` -- the access list and pins, worth keeping off the machine
+- `{cmd} center --leave` -- take this machine out of the fleet. Needs nobody's
+  permission: you own the machine you are on
 - `{cmd} top` -- live view; needs a terminal, so not for an agent
 - `{cmd} update [NAME]` / `--all` -- deploy the newest fleet from git
-- `{cmd} add "ssh user@host"` -- record a new machine. It is reachable but not yet
-  managed: only the center can put a key on it
+- Windows hosts work as targets: they are probed and keyed over PowerShell, and
+  `{cmd} ssh box -- cmd` passes the command through rather than wrapping it in a
+  POSIX shell. Nothing to configure -- it is read from the last probe
+- `{cmd} add "ssh user@host"` -- record a new machine, `--name` and `--kind` to
+  override what is guessed. It is reachable but not yet managed: only the center can
+  put a key on it
 - `{cmd} add --self` -- record the machine you are on, without ssh
 - `{cmd} edit [NAME] --ssh "ssh ..."` -- a rental moved; point the record at the new
-  address. `--disk-path /workspace` to watch the volume that matters
+  address. `--disk-path /workspace` to watch the volume that matters, `--name` to rename
 - `{cmd} install NAME` -- put fleet on a machine that has none
 - `{cmd} paths` -- where the inventory, keys and access list live on this machine
 
 Only on the center. `{cmd} center --json` has `is_center`; if it is false,
 these either refuse or file a request for the center to act on later.
 
-- `{cmd} access NAME --allow MACHINE` -- grant, then `{cmd} sync` to apply it
+- `{cmd} access NAME --allow MACHINE` -- grant, then `{cmd} sync` to apply it.
+  `--user` names whose authorized_keys, since a box answers as both root@ and ubuntu@
 - `{cmd} access NAME --deny MACHINE` -- revoke
 - `{cmd} sync` -- the sweep: install and remove keys, and collect telemetry
 - `{cmd} center --enroll NAME` -- first key onto a host, needs a password typed by a human
-- `{cmd} center NAME` -- hand the role over
+- `{cmd} center NAME` -- hand the role over; the successor then runs
+  `{cmd} center --accept`, which verifies it can write before taking it
 - `{cmd} center --init` / `--dissolve` -- create a fleet, or take it down. Dissolving
   removes every key from every machine first; never delete the access list by hand,
   which orphans those keys instead of removing them

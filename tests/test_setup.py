@@ -395,6 +395,28 @@ NOT_FOR_AGENTS = {
     "setup": "circular -- an agent reading these instructions is the result of it",
 }
 
+# Flags deliberately left out, each with the reason. The command guard below forces a
+# decision about new commands; without this one, flags defaulted to silence -- and they
+# did: twenty-nine of them, including several added the same day the guard was written.
+FLAGS_NOT_FOR_AGENTS = {
+    "--dry-run": "conventional, and an agent should not be rehearsing",
+    "--yes": "skips a confirmation, which is the opposite of what an agent should do",
+    "--serve": "the center's own transport, never invoked by hand",
+    "--migrate": "a one-off move off stored passwords, run once by a human",
+    "--raw": "captures parser fixtures; belongs to whoever maintains the parser",
+    "--repo": "install plumbing", "--ref": "install plumbing",
+    "--role": "the only role a device takes is none; moving the center is `fleet center`",
+    "--forward-agent": "install plumbing", "--no-forward-agent": "install plumbing",
+    "--no-key-prompt": "suppresses a prompt an agent cannot answer anyway",
+    "--clear-disk-paths": "the inverse of --disk-path, which is documented",
+    "--interval": "top needs a terminal, so no agent reaches this",
+    "--target": "setup's own", "--project": "setup's own", "--uninstall": "setup's own",
+    "--dissolve": "documented in prose as the counterpart to --init",
+    "--init": "documented in prose",
+    "--force": "overrides a refusal; an agent must report the refusal, not override it",
+    "--enroll": "documented in prose",
+}
+
 
 def test_every_command_is_either_listed_or_deliberately_excluded():
     """The earlier version of this test compared the listed commands against a hardcoded
@@ -446,3 +468,54 @@ def test_the_agent_is_told_relayed_telemetry_is_second_hand():
 
     text = skill_text("fleet")
     assert "broadcast" in text and "do not present it as live" in text
+
+
+def test_every_flag_is_either_listed_or_deliberately_excluded():
+    """The command guard forced a decision about new commands and said nothing about
+    flags, so flags defaulted to silence -- which is how twenty-nine went undocumented,
+    several of them added the same day that guard was written.
+
+    A capability an agent is not told about is not a broken feature, it is an unused
+    one, and nothing fails to announce it.
+    """
+    import os
+    import re
+    import subprocess
+
+    from fleet.cli import app
+    from fleet.setup import skill_text
+
+    text = skill_text("fleet")
+    env = {"COLUMNS": "200", "PATH": os.environ["PATH"], "HOME": os.environ["HOME"]}
+    missing = []
+    for name in sorted(c.name for c in app.registered_commands):
+        if name in NOT_FOR_AGENTS:
+            continue
+        out = subprocess.run(["fleet", name, "--help"], capture_output=True, text=True,
+                             env=env).stdout
+        for flag in sorted(set(re.findall(r"(--[a-z][a-z-]+)", out))):
+            if flag in ("--help", "--json", "--refresh", "--no-refresh"):
+                continue
+            if flag in FLAGS_NOT_FOR_AGENTS or flag in text:
+                continue
+            missing.append(f"{name} {flag}")
+    assert not missing, (
+        f"agents are not told about: {missing}. Document them in setup._usage, or add "
+        "them to FLAGS_NOT_FOR_AGENTS with a reason.")
+
+
+def test_the_flag_exclusions_do_not_outlive_their_flags():
+    """A stale exclusion silently re-opens the hole it was written to close."""
+    import os
+    import re
+    import subprocess
+
+    from fleet.cli import app
+
+    env = {"COLUMNS": "200", "PATH": os.environ["PATH"], "HOME": os.environ["HOME"]}
+    seen = set()
+    for name in (c.name for c in app.registered_commands):
+        out = subprocess.run(["fleet", name, "--help"], capture_output=True, text=True,
+                             env=env).stdout
+        seen |= set(re.findall(r"(--[a-z][a-z-]+)", out))
+    assert set(FLAGS_NOT_FOR_AGENTS) <= seen, f"stale: {set(FLAGS_NOT_FOR_AGENTS) - seen}"
