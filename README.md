@@ -6,6 +6,8 @@ Answers, for you and for any coding agent: what machines do I have, which are on
 what are their resources, what is free right now, what is running on them, what services
 do they serve, what is costing money, and how do I connect?
 
+**New here? Start with [docs/getting-started.md](docs/getting-started.md).**
+
 Onboarding a machine costs one pasted SSH command:
 
 ```bash
