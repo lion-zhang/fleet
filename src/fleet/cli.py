@@ -185,7 +185,7 @@ def cmd_show(name: str = typer.Argument(None, help="defaults to this machine"),
              refresh: bool = typer.Option(True, "--refresh/--no-refresh")):
     """Full detail for one device.
 
-    [dim]Example:[/dim]  fleet show lin-xps
+    [dim]Example:[/dim]  fleet show machine_A
     """
     if name is None:
         name = _this_machine(inv.load(), "show").name
@@ -370,7 +370,7 @@ def cmd_edit(name: str = typer.Argument(None, help="defaults to this machine"),
     Rentals recycle IPs and ports, so `--ssh` re-points a device without losing its
     name, tags, cost or history.
 
-    [dim]Example:[/dim]  fleet edit blackwell --ssh "ssh -p 40001 root@5.6.7.8"
+    [dim]Example:[/dim]  fleet edit machine_A --ssh "ssh -p 40001 root@5.6.7.8"
     """
     devices = inv.load()
     dev = _this_machine(devices, "edit") if name is None else inv.find(devices, name)
@@ -456,7 +456,7 @@ def cmd_install(name: str = typer.Argument(None,
     Every other device needs nothing installed. This is the exception: a backup node has
     to run fleet, so fleet has to be there. Re-running updates an existing install.
 
-    [dim]Example:[/dim]  fleet install oracle
+    [dim]Example:[/dim]  fleet install machine_A
     """
     if role == "center":
         # Checked before anything reaches the network. It used to be validated after the
@@ -916,7 +916,7 @@ def cmd_top(name: str = typer.Argument(None, help="one device, instead of the wh
     ageing rather than live, and anything unreachable backs off instead of being
     redialled every couple of seconds.
 
-    [dim]Example:[/dim]  fleet top lin-xps -i 1
+    [dim]Example:[/dim]  fleet top machine_A -i 1
     """
     cfg = load_config()
     devices = inv.live(inv.load())
@@ -1002,7 +1002,7 @@ def _key_pressed(timeout: float) -> str | None:
 def cmd_rm(name: str, yes: bool = typer.Option(False, "--yes", "-y")):
     """Remove a device from the inventory.
 
-    [dim]Example:[/dim]  fleet rm blackwell
+    [dim]Example:[/dim]  fleet rm machine_A
     """
     devices = inv.load()
     dev = inv.find(devices, name)
@@ -1061,7 +1061,7 @@ def cmd_probe(name: str = typer.Argument(None, help="defaults to this machine"),
     Hidden: its real job is capturing fixtures for the parser tests, and without --raw it
     says what `fleet show --json` already says.
 
-    [dim]Example:[/dim]  fleet probe lin-xps --raw
+    [dim]Example:[/dim]  fleet probe machine_A --raw
     """
     if name is None:
         # No ssh at all for our own machine: requiring sshd, a key and a network path to
@@ -1095,12 +1095,12 @@ def cmd_probe(name: str = typer.Argument(None, help="defaults to this machine"),
 
 @app.command("ssh", context_settings={"allow_extra_args": True, "ignore_unknown_options": True})
 def cmd_ssh(ctx: typer.Context, name: str):
-    """Open a shell on a device, or run a command: `fleet ssh lin-xps -- nvidia-smi`.
+    """Open a shell on a device, or run a command: `fleet ssh machine_A -- nvidia-smi`.
 
     This exists so credentials never have to reach an agent: the wrapper resolves the
     endpoint and connects, rather than handing out a connection string plus a password.
 
-    [dim]Example:[/dim]  fleet ssh lin-xps -- nvidia-smi
+    [dim]Example:[/dim]  fleet ssh machine_A -- nvidia-smi
     """
     import os
     dev = inv.find(inv.load(), name)
@@ -1157,7 +1157,7 @@ def cmd_access(target: str = typer.Argument(None, help="one machine, instead of 
     machine over ssh, so both can be pending -- and a revoke that has not reached its
     target is reported as not in effect, never as done.
 
-    [dim]Example:[/dim]  fleet access oracle --allow lin-xps
+    [dim]Example:[/dim]  fleet access machine_A --allow machine_B
     """
     from . import access as acl
     from . import reconcile as rec
@@ -1338,7 +1338,7 @@ def cmd_center(name: str = typer.Argument(None, help="hand the role to this mach
     unplanned loss of the center means re-configuring by hand -- which is the price of
     there being exactly one machine that can open every door.
 
-    [dim]Example:[/dim]  fleet center lin-xps
+    [dim]Example:[/dim]  fleet center machine_B
     """
     from . import access as acl
     from .keys import ensure_keypair

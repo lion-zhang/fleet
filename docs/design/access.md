@@ -80,7 +80,7 @@ belonged.
 
 ```
 # fleet:7f3a9c:begin from=SHA256:... user=root
-ssh-ed25519 AAAA... fleet:7f3a9c:lin-xps
+ssh-ed25519 AAAA... fleet:7f3a9c:machine_B
 # fleet:7f3a9c:end from=SHA256:...
 ```
 

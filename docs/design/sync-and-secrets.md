@@ -96,7 +96,7 @@ special case in the merge:
 
 ```yaml
 devices:
-  - name: lin-xps
+  - name: machine_B
     recipient: age1ql3z7hjy...
 ```
 

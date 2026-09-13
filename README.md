@@ -19,11 +19,11 @@ Probe targets need **nothing installed** -- the probe is a POSIX `sh` script pip
 one SSH connection.
 
 ```bash
-fleet edit blackwell --ssh "ssh -p 40001 root@1.2.3.4"   # rentals recycle addresses
-fleet edit lin-xps --disk-path /workspace                # watch the volume that matters
+fleet edit machine_A --ssh "ssh -p 40001 root@1.2.3.4"   # rentals recycle addresses
+fleet edit machine_B --disk-path /workspace                # watch the volume that matters
 fleet center --init                                      # this machine decides who reaches what
-fleet center --enroll ds720                              # password typed once, then key auth
-fleet access oracle --allow lin-xps                      # the center installs the key
+fleet center --enroll machine_A                              # password typed once, then key auth
+fleet access machine_A --allow machine_B                      # the center installs the key
 fleet update --all                                       # deploy the newest fleet everywhere
 fleet top                                                # live view, like htop for the fleet
 fleet setup                                              # teach your coding agents to use it

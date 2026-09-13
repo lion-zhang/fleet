@@ -40,7 +40,7 @@ Later, `fleet update` re-runs exactly this on any machine that already has it.
 One pasted SSH command each — whatever you already use to reach them.
 
 ```bash
-fleet add "ssh lin@box.example.ts.net"
+fleet add "ssh username@host.example.com"
 fleet add "ssh -p 58418 root@1.2.3.4"       # a rental
 fleet add --self                            # the machine you are on, no SSH needed
 fleet ls
@@ -68,7 +68,7 @@ Enrolling puts the center's key on a machine and gives that machine a key of its
 Run it from the center, once per machine:
 
 ```bash
-fleet center --enroll oracle
+fleet center --enroll machine_A
 ```
 
 Three ways it gets in, and it works out which:
@@ -86,9 +86,9 @@ Three ways it gets in, and it works out which:
 By default machines cannot reach each other; only the center can reach everything.
 
 ```bash
-fleet access oracle --allow lin-xps    # let lin-xps reach oracle
-fleet sync                             # apply it
-fleet access                           # who may reach what, and what is still pending
+fleet access machine_A --allow machine_B   # let machine_B reach machine_A
+fleet sync                                 # apply it
+fleet access                               # who may reach what, and what is still pending
 ```
 
 `fleet access` records the decision; `fleet sync` installs the key. Until the sweep
@@ -97,7 +97,7 @@ reaches a machine the grant shows as pending, with an age — never as done.
 Revoking is the same shape and the same honesty:
 
 ```bash
-fleet access oracle --deny lin-xps
+fleet access machine_A --deny machine_B
 fleet sync
 ```
 
@@ -126,8 +126,8 @@ fleet ls                     # what is free right now
 fleet ls --online            # only what is reachable
 fleet show                   # this machine in detail; `fleet show NAME` for another
 fleet top                    # live view, like htop for the fleet
-fleet ssh oracle             # a shell, exactly as plain ssh
-fleet ssh oracle -- nvidia-smi
+fleet ssh machine_A          # a shell, exactly as plain ssh
+fleet ssh machine_A -- nvidia-smi
 fleet update --all           # deploy the newest fleet everywhere
 ```
 
@@ -178,7 +178,7 @@ what fleet *does*, not what SSH *allows*.
 ## Windows
 
 Windows machines work as targets with nothing to configure. They are probed and keyed
-over PowerShell, and `fleet ssh box -- cmd` passes the command through rather than
+over PowerShell, and `fleet ssh machine_A -- cmd` passes the command through rather than
 wrapping it in a shell that does not exist there. fleet works this out from the last
 probe; you never declare it.
 
