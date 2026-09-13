@@ -205,6 +205,7 @@ def test_public_key_reports_absence_rather_than_inventing_one(tmp_path):
 def _cli(tmp_path, monkeypatch, **devkw):
     from typer.testing import CliRunner
 
+    from fleet import access as acl
     from fleet import inventory as inv, store
     from fleet.models import Device, Kind
 
@@ -214,16 +215,41 @@ def _cli(tmp_path, monkeypatch, **devkw):
     inv.save([dev], path)
     monkeypatch.setattr(inv, "INVENTORY_PATH", path)
     monkeypatch.setattr(store, "DB_PATH", tmp_path / "cache.db")
+    # Sandbox the fleet state, and stand a fleet up: `fleet add` refuses on a machine
+    # that is in none, so without this these tests would exercise that guard instead of
+    # the password handling they are about.
+    for n in ("ACCESS_PATH", "LEDGER_PATH", "CACHE_PATH", "OUTBOX_PATH"):
+        monkeypatch.setattr(acl, n, tmp_path / getattr(acl, n).name)
+    key = tmp_path / "center_ed25519"
+    subprocess.run(["ssh-keygen", "-t", "ed25519", "-N", "", "-q", "-f", str(key)],
+                   check=True)
+    pub = key.with_suffix(".pub").read_text().strip()
+    import fleet.config
+    monkeypatch.setattr(fleet.config, "FLEET_KEY", key)
+    acl.save(acl.bootstrap("macbook", pub, "id:me"), acl.ACCESS_PATH)
     return CliRunner(), path
 
 
 def test_enrolling_refuses_to_prompt_without_a_terminal(tmp_path, monkeypatch):
     """An agent running this in a subprocess must get a clean error, not a hung prompt
-    and not a password captured into its context."""
-    from fleet.cli import app
+    and not a password captured into its context.
+
+    Enrolment lives inside `fleet add` now, so this guards the path an agent actually
+    takes rather than a command that no longer exists."""
+    import fleet.cli as cli
+    from fleet.models import Device, Kind, ProbeResult, Status
 
     runner, _ = _cli(tmp_path, monkeypatch)
-    result = runner.invoke(app, ["center", "--enroll", "box"])
+    dev = Device(id="net:5.6.7.8:2222", name="box", kind=Kind.RENTAL,
+                 endpoints=[{"target": "5.6.7.8", "user": "root", "port": 2222}])
+    monkeypatch.setattr(cli, "onboard", lambda *a, **k: (
+        dev, ProbeResult(status=Status.AUTH_FAILED, error_detail="key rejected")))
+    # No key of ours works either, so the only way left is a password -- which is what
+    # must be refused rather than prompted for.
+    monkeypatch.setattr(cli, "install_key_over_existing_access",
+                        lambda *a, **k: (False, "Permission denied (publickey)."))
+
+    result = runner.invoke(cli.app, ["add", "ssh -p 2222 root@5.6.7.8"])
     assert result.exit_code != 0
     assert "terminal" in result.output.lower() or "tty" in result.output.lower()
 
@@ -246,6 +272,9 @@ def test_key_install_uses_the_fleet_key_not_a_personal_one(tmp_path, monkeypatch
                         lambda *a, **k: (tmp_path / "id_ed25519", "ssh-ed25519 AAAA fleet:me"))
     monkeypatch.setattr(cli, "install_key",
                         lambda ep, pw, pub, **k: seen.update(pub=pub) or (True, ""))
+    # Force the password path: without this the test dials 5.6.7.8 for real.
+    monkeypatch.setattr(cli, "install_key_over_existing_access",
+                        lambda *a, **k: (False, "Permission denied (publickey)."))
     monkeypatch.setattr(cli.getpass, "getpass", lambda *a: "hunter2")
     monkeypatch.setattr(cli.sys.stdin, "isatty", lambda: True, raising=False)
 
@@ -268,14 +297,16 @@ def test_add_does_not_prompt_for_a_password_without_a_terminal(tmp_path, monkeyp
     monkeypatch.setattr(cli, "onboard", lambda *a, **k: (
         dev, ProbeResult(status=Status.AUTH_FAILED, error_detail="key rejected")))
 
+    monkeypatch.setattr(cli, "install_key_over_existing_access",
+                        lambda *a, **k: (False, "Permission denied (publickey)."))
     called = []
     monkeypatch.setattr(cli, "getpass", type("g", (), {
         "getpass": staticmethod(lambda *a, **k: called.append(1) or "x")})())
 
     result = runner.invoke(app, ["add", "ssh root@5.6.7.8"])
-    assert result.exit_code == 0, result.output
     assert not called, "must never prompt when stdin is not a terminal"
-    assert "fleet center --enroll" in result.output, "but must say how to fix it"
+    assert result.exit_code != 0, "recorded, but not usable -- say so with the exit code"
+    assert "fleet center --pubkey" in result.output, "but must say how to fix it"
 
 
 # -------------------------------------------- giving a machine an identity of its own

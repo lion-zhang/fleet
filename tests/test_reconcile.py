@@ -62,7 +62,7 @@ def test_only_a_pinned_key_is_ever_installed(tmp_path):
                                    __import__("fleet.sshcmd", fromlist=["Endpoint"])
                                    .Endpoint(target="nowhere.invalid"), install=True)
     assert ok is False
-    assert "enroll" in msg
+    assert "no pinned key" in msg and "fleet sync" in msg
 
 
 def test_the_ledger_survives_a_round_trip(tmp_path):

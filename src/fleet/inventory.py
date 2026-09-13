@@ -151,12 +151,32 @@ def _as_dict(d: Device) -> dict:
 
 
 def find(devices: list[Device], name_or_id: str) -> Device | None:
-    devices = live(devices)
-    for d in devices:
+    """Exact name or id, else a unique prefix. Convenience for everyday commands."""
+    if exact := find_exact(devices, name_or_id):
+        return exact
+    matches = [d for d in live(devices) if d.name.startswith(name_or_id)]
+    return matches[0] if len(matches) == 1 else None
+
+
+def find_exact(devices: list[Device], name_or_id: str) -> Device | None:
+    """No prefix fallback. For commands whose mistake cannot be undone.
+
+    `find` resolving a unique prefix is right for `show`, `ssh` and `top`, where a wrong
+    guess costs you one re-run. It is wrong for `rm`: `fleet rm lin` would remove
+    `lin-xps` on the strength of three letters, and an agent filling in a half-heard name
+    is exactly the case that produces those three letters.
+    """
+    for d in live(devices):
         if d.name == name_or_id or d.id == name_or_id:
             return d
-    matches = [d for d in devices if d.name.startswith(name_or_id)]
-    return matches[0] if len(matches) == 1 else None
+    return None
+
+
+def near_matches(devices: list[Device], name: str, limit: int = 5) -> list[str]:
+    """Names worth suggesting after `find_exact` came back empty."""
+    lowered = name.lower()
+    return sorted(d.name for d in live(devices)
+                  if lowered in d.name.lower() or d.name.lower().startswith(lowered))[:limit]
 
 
 TOMBSTONE_TTL_S = 60 * 60 * 24 * 30      # long enough for every machine to have synced

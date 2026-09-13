@@ -1,24 +1,24 @@
 # Getting started
 
-You do the setup once. After that your coding agents can use the fleet on their own, and
-you only come back to grant or revoke access.
+You do the setup once. After that you talk to your coding agents, and they run fleet for
+you — you come back only to grant access, or when something needs a password.
 
-Budget about ten minutes for a handful of machines.
+Three commands, about ten minutes.
 
 ---
 
 ## Before you start
 
-**fleet must be able to reach every machine it manages.** Installing or removing a key
-means opening an SSH connection to it, so a machine fleet cannot dial cannot be managed
-at all. Each one needs a public address, membership of an overlay network, or a shared
-LAN with the machine you make the center.
+**The center must be able to reach every machine it manages.** Installing or removing a
+key means opening an SSH connection to it, so a machine the center cannot dial cannot be
+managed at all. Each one needs a public address, membership of an overlay network, or a
+shared LAN with the center.
 
 fleet does not care which overlay — Tailscale, ZeroTier, Nebula, Netbird, WireGuard all
 work. It wants a routable address and nothing more. If your machines are already on one,
 use it; that removes this whole class of problem.
 
-**Machines you only connect *to* need nothing installed.** The probe is a script piped
+**Machines you only connect *to* need nothing installed.** The probe is one script piped
 over one SSH connection. Only machines that run fleet commands themselves need fleet.
 
 ---
@@ -35,123 +35,145 @@ fleet --version
 
 Later, `fleet update` re-runs exactly this on any machine that already has it.
 
-## 2. Add your machines
+## 2. Create the fleet
+
+Do this **first**. A machine is added *to* a fleet, so the fleet has to exist — `fleet
+add` refuses on a machine that is in none, and says so.
+
+```bash
+fleet center --init
+```
+
+The machine you run this on is now **the center**: the one that decides who may reach
+what, and the only one that can install or remove a key. Pick the machine you actually
+work from. A laptop is fine, and being closed half the day is expected.
+
+**The center stays the center.** There is no self-promotion and no election — the only
+way the role moves is `fleet center machine_B`, run on the current center, which installs
+the successor's key everywhere and verifies it can write before retiring the old one. If
+the center is lost outright, you rebuild the fleet by hand; `fleet center --export` is
+worth keeping somewhere for that day.
+
+## 3. Add your machines
 
 One pasted SSH command each — whatever you already use to reach them.
 
 ```bash
 fleet add "ssh username@host.example.com"
 fleet add "ssh -p 58418 root@1.2.3.4"       # a rental
-fleet add --self                            # the machine you are on, no SSH needed
 fleet ls
 ```
 
-`fleet add` probes immediately and records the machine either way. A host that does not
-answer is still listed, with the reason — silently dropping it would be worse.
+Adding is enrolling. In one step fleet probes the machine, puts its key there, reads back
+a key of the machine's own and pins it, and records the lot. There is no second command.
 
-Names are guessed from the host and can be changed: `fleet edit oldname --name newname`.
+**The machine has to answer.** One that does not is not recorded at all, and fleet says
+why. That is deliberate: a machine the center cannot reach cannot be granted or revoked
+anything, so recording it would only produce an entry that fails the first time anyone
+uses it.
 
-## 3. Make one machine the center
+Three ways fleet gets in, and it works out which:
 
-The center is the machine that decides who may reach what. It is the only one that can
-install or remove keys, so pick the one you actually work from — a laptop is fine, and
-being closed half the day is expected.
-
-```bash
-fleet center --init
-fleet center                 # who decides, and how the fleet looks
-```
-
-## 4. Enrol each machine
-
-Enrolling puts the center's key on a machine and gives that machine a key of its own.
-Run it from the center, once per machine:
-
-```bash
-fleet center --enroll machine_A
-```
-
-Three ways it gets in, and it works out which:
-
+- **A key you already hold works** — the usual case on a cloud VM, where password auth is
+  off and the provider injected a key at creation. Nothing is asked of you.
 - **The host takes a password** — you type it once. It is spent on one connection and
-  never stored anywhere.
-- **Password auth is off but a key you already hold works** — the usual case on a cloud
-  VM. Nothing is asked of you.
-- **Neither** — the key has to be placed in advance. `fleet center --pubkey` prints it,
-  and works with nothing reachable, which is the point: you want it when writing a
-  cloud-init file or a provisioning template, before the machine exists.
+  stored nowhere.
+- **Neither** — put the center's key on the machine yourself. `fleet center --pubkey`
+  prints it, and works with nothing reachable and before the machine exists, which is the
+  point: it is what you paste into a provisioning template, a cloud-init file, or the
+  provider's console. Then add the machine, and no password is needed at all.
 
-## 5. Grant access
+`fleet add` is **not** center-only. Run it anywhere, and on a machine that is not the
+center it records the machine and says so — the center picks it up and enrols it on its
+next `fleet sync`, because only the center can write the access list.
+
+## 4. Hand it to your agents
+
+```bash
+fleet setup
+```
+
+Writes instructions for whichever of Claude Code, Codex and Hermes are actually installed
+— a skill file where the agent owns the directory, and a marked region in `AGENTS.md`
+where you own the file, which leaves the rest of it alone. It will not create a config
+directory for an agent you do not use. Re-run it after upgrading fleet.
+
+---
+
+## Talking to your agents
+
+This is the point the setup hands over. You ask in words; the agent picks the command.
+
+| You say | The agent runs |
+|---|---|
+| "what's free right now?" | `fleet ls --json` |
+| "train this on whatever has a spare GPU" | `fleet ls --json`, then `fleet ssh NAME -- ...` |
+| "add my new rental, ssh -p 40001 root@1.2.3.4" | `fleet add "ssh -p 40001 root@1.2.3.4"` |
+| "let machine_B reach machine_A" | `fleet access machine_A --allow machine_B`, then `fleet sync` |
+| "is machine_A usable yet?" | `fleet access` — reads the pending rows rather than guessing |
+| "what's costing me money?" | `fleet ls --json` and reads the alerts |
+
+**Expect to be asked back.** Agents are told to ask rather than guess when a request does
+not carry everything a command needs — which machine, whose `authorized_keys`, the whole
+ssh command. That is deliberate: `fleet rm`, `fleet access --deny` and `fleet center
+--dissolve` are not undone by running them again, and a machine name resolved from a
+half-heard fragment is how the wrong one gets removed.
+
+> **You:** give machine_B access
+> **Agent:** To which machine, and as which user? A host often answers as both `root@`
+> and `ubuntu@`, and the grant is per-user.
+
+**What does not go through an agent.** Typing a password — only `fleet add` on the center
+ever asks, and a human has to run it. And the irreversible ones: `fleet rm`, handing the
+center over, `fleet center --dissolve`. Agents are told to report a refusal rather than
+work around it.
+
+## Granting access
 
 By default machines cannot reach each other; only the center can reach everything.
 
 ```bash
 fleet access machine_A --allow machine_B   # let machine_B reach machine_A
 fleet sync                                 # apply it
-fleet access                               # who may reach what, and what is still pending
+fleet access                               # who may reach what, and what is pending
 ```
 
 `fleet access` records the decision; `fleet sync` installs the key. Until the sweep
-reaches a machine the grant shows as pending, with an age — never as done.
-
-Revoking is the same shape and the same honesty:
+reaches the machine the grant shows as pending, with an age — never as done. Revoking is
+the same shape and the same honesty:
 
 ```bash
 fleet access machine_A --deny machine_B
 fleet sync
 ```
 
-If the machine is switched off, the key is still on it, and fleet says so rather than
+If the machine is switched off, its key is still on it, and fleet says so rather than
 reporting success. It retries on the next sync.
 
-## 6. Hand it to your agents
+## What needs the center
 
-```bash
-fleet setup
-```
+Most things do not. The split matters because it decides whether something happens now or
+waits.
 
-Writes instructions for whichever of Claude Code, Codex and Hermes are actually
-installed — a skill file where the agent owns the directory, and a marked region in
-`AGENTS.md` where you own the file, which leaves the rest of it alone. It will not create
-a config directory for an agent you do not use. Re-run it after upgrading fleet.
+**Anywhere:** `ls`, `show`, `top`, `ssh`, `add`, `edit`, `install`, `update`, `paths`,
+`setup`, `center --pubkey`, and reading `access`. Also `fleet center --leave`, which takes
+this machine out of a fleet and needs nobody's permission — you own the machine you are
+standing on.
 
----
+**Only on the center:** `access --allow` and `--deny`, `sync`, `rm`, handing the role
+over, and `center --init` / `--dissolve`. On any other machine these refuse and say which
+machine to run them on.
 
-## Day to day
-
-Mostly you will not touch fleet at all; the agent will. When you do:
-
-```bash
-fleet ls                     # what is free right now
-fleet ls --online            # only what is reachable
-fleet show                   # this machine in detail; `fleet show NAME` for another
-fleet top                    # live view, like htop for the fleet
-fleet ssh machine_A          # a shell, exactly as plain ssh
-fleet ssh machine_A -- nvidia-smi
-fleet update --all           # deploy the newest fleet everywhere
-```
-
-Where a machine name is the obvious subject, it can be left out: `fleet show`, `fleet
-edit`, `fleet update` and `fleet probe` all default to the machine you are on. `fleet rm`
-deliberately does not — a command that deletes something should never guess what.
-
-## What agents do, and what stays yours
-
-Agents can read the fleet and use what they have been granted: list machines, inspect
-one, run work over `fleet ssh`, see who may reach what. On the center they can also grant
-and sync.
-
-They are told never to type a password — the only command that asks needs a human — and
-to report a refusal rather than work around it.
-
-Four things stay with you because they are irreversible or need a credential:
-`--enroll`, handing the center over, `fleet rm`, and `fleet center --dissolve`.
+Nothing already granted stops working when the center is off. Access is enforced by sshd
+reading `authorized_keys`, and fleet is not in the connection path — which is also why a
+machine holding a key can bypass fleet and use plain `ssh`. The list governs what fleet
+*does*, not what SSH *allows*.
 
 ## Ending things
 
 ```bash
-fleet center --leave         # take this machine out of a fleet. Needs nobody's permission
-fleet rm NAME                # the center removes a machine, revoking its keys
+fleet center --leave         # take this machine out of a fleet
+fleet rm machine_A           # the center removes a machine, revoking its keys
 fleet center --dissolve      # take the whole fleet down: every key off every machine
 ```
 
@@ -164,16 +186,13 @@ fleet.
 
 | What you see | What it means |
 |---|---|
+| `This machine is not in a fleet` | Run `fleet center --init` first. The fleet comes before the machines. |
+| `<name> did not answer` | Nothing was recorded. Fix reachability and add it again. |
 | `auth_failed` | The host is up and refused our key. Only the center can install one. |
-| `host is Windows: no POSIX shell` | fleet retried in PowerShell and that failed too — check OpenSSH's `DefaultShell` on the host. |
 | A grant that stays `pending` | The sweep has not reached that machine. Not a failure. |
 | `the center has not swept this machine for N days` | Normal. Everything already granted keeps working; only *changes* wait. |
 | `no access list ... not a center` | You are on a spoke. Run the command on the center. |
-
-Nothing already granted stops working when the center is off. Access is enforced by sshd
-from `authorized_keys`, and fleet is not in the connection path — which is also why a
-machine holding a key can always bypass fleet and use `ssh` directly. The list governs
-what fleet *does*, not what SSH *allows*.
+| `No machine named exactly ...` | `fleet rm` will not act on a prefix. Give the full name. |
 
 ## Windows
 
@@ -184,6 +203,62 @@ probe; you never declare it.
 
 Install OpenSSH Server yourself first — fleet does not set it up. Running fleet *on*
 Windows is not supported yet.
+
+---
+
+## Appendix: the commands worth knowing
+
+You will not need most of these; the agent will. `fleet <command> --help` carries an
+example for every one.
+
+**Looking around**
+
+```bash
+fleet ls                       # every machine, with what is free right now
+fleet ls --online              # only the reachable ones
+fleet ls machine_A -r          # just this one, freshly probed
+fleet show                     # this machine in detail; `fleet show NAME` for another
+fleet top                      # live view; needs a terminal
+```
+
+**Connecting**
+
+```bash
+fleet ssh machine_A                    # a shell, exactly as plain ssh
+fleet ssh machine_A -- nvidia-smi      # run one command there
+```
+
+**Changing the fleet** — the first two anywhere, the rest on the center
+
+```bash
+fleet add "ssh user@host"              # add and enrol a machine
+fleet edit machine_A --ssh "ssh -p 40001 root@1.2.3.4"   # it moved
+fleet edit machine_A --disk-path /workspace              # watch this volume
+fleet access machine_A --allow machine_B                 # grant
+fleet access machine_A --deny machine_B                  # revoke
+fleet sync                             # apply everything, and enrol anything pending
+fleet rm machine_A                     # remove, revoking its keys. Exact name only
+```
+
+**The center itself**
+
+```bash
+fleet center                   # who decides, and when it was last heard from
+fleet center --pubkey          # the key to pre-place on a host
+fleet center --export          # the access list and pins, worth keeping off the machine
+fleet center machine_B         # hand the role over; then `fleet center --accept` there
+fleet center --leave           # take this machine out of the fleet
+fleet center --dissolve        # take the whole fleet down
+```
+
+**Housekeeping**
+
+```bash
+fleet install machine_A        # put fleet on a machine that has none
+fleet update --all             # deploy the newest fleet everywhere
+fleet setup                    # re-teach your agents after an upgrade
+fleet paths                    # where the inventory, keys and access list live
+```
 
 ---
 

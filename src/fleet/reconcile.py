@@ -127,7 +127,8 @@ def apply_edge(acc: Access, edge: tuple[str, str, str], ep: Endpoint, *,
     src, _dst, user = edge
     pinned = (acc.keys.get(src) or {}).get("pubkey", "")
     if install and not pinned:
-        return False, f"no pinned key for {acc.name_of(src)} -- enroll it first"
+        return False, (f"no pinned key for {acc.name_of(src)} -- `fleet sync` enrols it, "
+                       "or `fleet center --pubkey` if the center cannot get in")
     script = sync_command(acc.fleet_id, src, user=user,
                           pubkey=pinned if install else None, platform=platform)
     return _remote(ep, script, platform=platform)

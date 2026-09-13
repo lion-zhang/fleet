@@ -4,6 +4,7 @@ universal interface: cron jobs, Makefiles, and non-MCP agents can all use it."""
 from __future__ import annotations
 
 import getpass
+import contextlib
 import json as jsonlib
 import re
 import subprocess
@@ -28,7 +29,8 @@ from . import store
 from .config import DB_PATH, FLEET_KEY, INVENTORY_PATH, load_config
 from .edit import apply_edits
 from .install import build_install_argv, install_script
-from .keys import ensure_keypair, install_key
+from .keys import (ensure_keypair, install_key,
+                   install_key_over_existing_access)
 from .models import Device, Kind, Status
 from .onboard import onboard, onboard_self
 from .probe.runner import (probe_env, probe_many, run_probe, run_probe_local)
@@ -237,6 +239,28 @@ def cmd_show(name: str = typer.Argument(None, help="defaults to this machine"),
         console.print(f"  [dim]{r['notes'].strip()}[/dim]")
 
 
+def _fleet_membership() -> str:
+    """Is this machine in a fleet, and does it decide? `center`, `member`, or `""`.
+
+    A spoke holds no access list -- only the center does -- so membership there is the
+    signed cache the sweep leaves behind. Checking for either is what lets `fleet add`
+    run anywhere while still refusing on a machine that is in no fleet at all.
+    """
+    from . import access as acl
+    try:
+        acc = acl.load()
+    except acl.AccessError:
+        return "member" if acl.CACHE_PATH.exists() else ""
+    return "center" if acl.is_center(acc) else "member"
+
+
+# A host that never answered. Adding it would record an address nobody can reach and a
+# name that means nothing, and the first thing anyone did with it would fail. A host key
+# that changed belongs here too: it answered, but not as itself.
+_DID_NOT_ANSWER = (Status.TIMEOUT, Status.UNREACHABLE, Status.REFUSED, Status.CLOSED,
+                   Status.HOST_KEY_MISMATCH)
+
+
 @app.command("add")
 def cmd_add(ssh_command: str = typer.Argument(None, help='e.g. "ssh -p 58418 root@1.2.3.4"'),
             this_machine: bool = typer.Option(False, "--self",
@@ -244,15 +268,19 @@ def cmd_add(ssh_command: str = typer.Argument(None, help='e.g. "ssh -p 58418 roo
             name: str = typer.Option(None, "--name"),
             kind: str = typer.Option(None, "--kind", help="permanent|rental|shared|appliance|mobile"),
             json_out: bool = typer.Option(False, "--json"),
-            no_key_prompt: bool = typer.Option(False, "--no-key-prompt",
-                                               help="never offer to install a key"),
             dry_run: bool = typer.Option(False, "--dry-run")):
-    """Add a device from a pasted ssh command.
+    """Add a machine to the fleet, enrolling it.
 
     [dim]Example:[/dim]  fleet add "ssh -p 58418 root@1.2.3.4"
     """
     if this_machine == bool(ssh_command):
         err.print("[red]Give an ssh command, or --self -- not both, not neither.[/red]")
+        raise typer.Exit(2)
+    where = _fleet_membership()
+    if not where:
+        err.print("[red]This machine is not in a fleet.[/red]")
+        err.print("  [dim]start one with [bold]fleet center --init[/bold] — "
+                  "a machine is added to a fleet, so the fleet comes first[/dim]")
         raise typer.Exit(2)
     devices = inv.load()
     if this_machine:
@@ -264,6 +292,13 @@ def cmd_add(ssh_command: str = typer.Argument(None, help='e.g. "ssh -p 58418 roo
     else:
         dev, res = onboard(ssh_command, name=name, kind=kind,
                            taken_names={d.name for d in devices})
+    if res.status in _DID_NOT_ANSWER:
+        err.print(f"[red]{dev.name} did not answer[/red] — "
+                  f"{res.status.value}: {res.error_detail}")
+        err.print("  [dim]nothing recorded. A machine has to be reachable to be "
+                  "managed at all: the center installs and removes keys over ssh, so "
+                  "one it cannot dial cannot be granted or revoked anything.[/dim]")
+        raise typer.Exit(1)
     if dry_run:
         _emit({"device": dev.name, "id": dev.id, "kind": dev.kind.value,
                "status": res.status.value}, True)
@@ -274,39 +309,108 @@ def cmd_add(ssh_command: str = typer.Argument(None, help='e.g. "ssh -p 58418 roo
         conn = store.connect()
         store.record(conn, dev.id, res)
         conn.close()
-    if _emit({"action": action, "name": dev.name, "id": dev.id,
-              "kind": dev.kind.value, "status": res.status.value}, json_out):
+    if not json_out:
+        if action == "restored":
+            console.print(f"[green]✓[/green] restored [bold]{dev.name}[/bold] — it had been "
+                          "removed, and everything recorded about it is back.")
+        elif action == "endpoint_added":
+            console.print(f"[green]✓[/green] {dev.name} was already known — added another endpoint "
+                          "(same machine-id, so this is one device, not two).")
+        elif action == "unchanged":
+            console.print(f"[dim]· {dev.name} already recorded with this endpoint.[/dim]")
+        else:
+            console.print(f"[green]✓[/green] added [bold]{dev.name}[/bold] "
+                          f"({dev.kind.value}, {res.status.value})")
+        if not res.ok:
+            console.print(f"  [yellow]{res.status.value}[/yellow]: {res.error_detail}")
+
+    # --json still enrols. An agent uses --json, and a flag that quietly did half the
+    # command would be the worst kind of difference -- but enrolment talks, and that talk
+    # must not land in the middle of the document.
+    with _chatter_to_stderr(json_out):
+        outcome = _enrol_after_add(dev, res, where=where, this_machine=this_machine)
+    _emit({"action": action, "name": dev.name, "id": dev.id, "kind": dev.kind.value,
+           "status": res.status.value, "enrolment": outcome}, json_out)
+    if outcome == "failed":
+        raise typer.Exit(1)
+
+
+@contextlib.contextmanager
+def _chatter_to_stderr(active: bool):
+    """Keep stdout to one JSON document while side-effectful work reports progress.
+
+    Redirects the stream rather than reassigning `console.file`: rich resolves an unset
+    `file` to `sys.stdout` at print time, so saving and restoring it *pins* the console
+    to whichever stdout happened to be current -- under a test runner, a captured buffer
+    that is dead by the next test. That fails nothing here and 46 tests elsewhere.
+    """
+    if not active:
+        yield
         return
-    if action == "restored":
-        console.print(f"[green]✓[/green] restored [bold]{dev.name}[/bold] — it had been "
-                      "removed, and everything recorded about it is back.")
-    elif action == "endpoint_added":
-        console.print(f"[green]✓[/green] {dev.name} was already known — added another endpoint "
-                      "(same machine-id, so this is one device, not two).")
-    elif action == "unchanged":
-        console.print(f"[dim]· {dev.name} already recorded with this endpoint.[/dim]")
-    else:
-        console.print(f"[green]✓[/green] added [bold]{dev.name}[/bold] "
-                      f"({dev.kind.value}, {res.status.value})")
-    if not res.ok:
-        console.print(f"  [yellow]{res.status.value}[/yellow]: {res.error_detail}")
-        console.print("  [dim]Recorded anyway and flagged needs_review.[/dim]")
-        # "host is up but rejected our key" is the one failure a password can fix.
-        if res.status is Status.AUTH_FAILED and not no_key_prompt:
-            if not sys.stdin.isatty():
-                console.print(f"  [dim]run [bold]fleet center --enroll {dev.name}[/bold] from a "
-                              "terminal to install your key.[/dim]")
-            elif typer.confirm(f"  Install your public key on {dev.name} now?", default=True):
-                if _install_key(dev):
-                    inv.save(devices)
+    with contextlib.redirect_stdout(sys.stderr):
+        yield
+
+
+def _enrol_after_add(dev, res, *, where: str, this_machine: bool) -> str:
+    """Finish the half of adding that only the center can do. Returns what happened.
+
+    `enrolled` means ready to use. Anything else means the machine is recorded and
+    cannot yet be granted access to anything, which is a different thing to tell someone
+    than "added" -- and is why the outcome is reported rather than implied.
+    """
+    if this_machine:
+        return "self"                      # we are already ourselves; nothing to enrol
+    if where != "center":
+        # Only the center can write the access list, so that half waits for it.
+        console.print(f"  [dim]recorded. The center enrols {dev.name} on its next "
+                      "sweep — it is not grantable until then.[/dim]")
+        return "pending-center"
+    if dev.ssh_auth == "external":
+        # Tailscale SSH, Netbird SSH and the like terminate ssh themselves and authorize
+        # from their own ACL, so authorized_keys is not consulted. Writing one would
+        # report success and grant nothing.
+        console.print(f"  [dim]{dev.name} authorizes ssh upstream, not from "
+                      "authorized_keys — there is nothing here for the center to "
+                      "install[/dim]")
+        return "external"
+    # A host that already accepts our key needs no install, only an identity.
+    if res.status is Status.AUTH_FAILED and not _install_key(dev):
+        console.print(f"  [dim]{dev.name} is recorded, but cannot be granted anything "
+                      "until it accepts a key from here[/dim]")
+        return "failed"
+    return "enrolled" if _register_identity(dev) else "failed"
+
+
+def _confirm_key(dev, ep) -> None:
+    """Re-probe after an install, rather than recording a verdict.
+
+    Auth state is derived from the last probe, so without this the device keeps
+    reporting needs_key. It also proves the key actually works -- an append that exits 0
+    is not the same as a key sshd will accept, and on Windows the two differ routinely.
+    """
+    conn = store.connect()
+    try:
+        store.record(conn, dev.id, run_probe(ep, mode=dev.probe_mode,
+                                             disk_paths=dev.disk_paths))
+    finally:
+        conn.close()
 
 
 def _install_key(dev, *, quiet: bool = False) -> bool:
-    """Prompt once for a password and use it only to install a public key.
+    """Get this machine's fleet key into a host's authorized_keys, cheapest way first.
 
-    The password is never stored, never logged and never passed as an argument. It buys
-    exactly one thing -- key auth -- after which every other path in fleet works as it
-    already does.
+    The three ways in, in the order that asks least of the user:
+
+    1. **Access we already hold** -- a key in your agent, the one the provider injected
+       at creation, or this fleet's own key pre-placed by hand. Costs one connection to
+       find out, never prompts, and is the normal case on a cloud VM. Trying it first is
+       what lets an agent enrol a machine unattended.
+    2. **A password**, typed once and spent on a single connection. Needs a human, so it
+       needs a terminal.
+    3. **Neither** -- say so, and name the way out: put the key on the host out of band.
+
+    Only ever called for a host that rejected us, so step 1 cannot append a key the host
+    already has.
     """
     eps = inv.endpoints_of(dev)
     if not eps:
@@ -320,15 +424,24 @@ def _install_key(dev, *, quiet: bool = False) -> bool:
     except KeyError as exc:
         err.print(f"[red]{exc}[/red]")
         return False
+    ep = sorted(eps, key=lambda e: e.preference)[0]
+
+    ok, output = install_key_over_existing_access(ep, pubkey)
+    if ok:
+        _confirm_key(dev, ep)
+        console.print(f"[green]✓[/green] key installed on {dev.name}, "
+                      "over access it already accepted.")
+        return True
+
     if not sys.stdin.isatty():
         # Hanging on a prompt would be bad; capturing the password into whatever called
-        # us would be worse. Refuse, and say exactly what to run instead.
-        msg = ("  [dim]no terminal here — run [bold]fleet center --enroll "
-               f"{dev.name}[/bold] yourself to install your key.[/dim]")
+        # us would be worse. Refuse, and say exactly what to do instead.
+        msg = (f"  [dim]{dev.name} accepts no key of ours and there is no terminal to "
+               "type a password. Put [bold]fleet center --pubkey[/bold] on it, or run "
+               "[bold]fleet add[/bold] yourself from a terminal.[/dim]")
         (console if quiet else err).print(msg)
         return False
 
-    ep = sorted(eps, key=lambda e: e.preference)[0]
     console.print(f"[dim]installing {path} on {ep.user}@{ep.target}[/dim]")
     password = getpass.getpass(f"Password for {ep.user}@{ep.target}: ")
     try:
@@ -336,20 +449,13 @@ def _install_key(dev, *, quiet: bool = False) -> bool:
     finally:
         password = ""                      # not security, just hygiene: drop it promptly
     if ok:
-        # Re-probe rather than recording a verdict: auth is derived from the last probe
-        # now, so without this the device keeps reporting needs_key until someone runs
-        # `fleet refresh`. It also proves the key actually works -- an append that
-        # succeeds is not the same as a key sshd will accept.
-        conn = store.connect()
-        try:
-            store.record(conn, dev.id, run_probe(ep, mode=dev.probe_mode,
-                                                 disk_paths=dev.disk_paths))
-        finally:
-            conn.close()
+        _confirm_key(dev, ep)
         console.print(f"[green]✓[/green] key installed on {dev.name}; password discarded.")
-    else:
-        err.print(f"[red]Could not install the key.[/red]\n{output.strip()[-400:]}")
-    return ok
+        return True
+    err.print(f"[red]Could not install the key.[/red]\n{output.strip()[-400:]}")
+    err.print(f"  [dim]put [bold]fleet center --pubkey[/bold] on {dev.name} "
+              "and add it again[/dim]")
+    return False
 
 
 @app.command("edit")
@@ -830,6 +936,32 @@ def _record_relayed(rows: list) -> None:
         conn.close()
 
 
+def _enrol_unpinned(acc, devices) -> bool:
+    """Register every machine the access list has no key for. Returns whether any were.
+
+    This is what replaces a separate enrol command. A machine added from a spoke, or one
+    whose enrolment was interrupted, is reachable and ungrantable: the list is keyed on
+    the fingerprint of *its* key, so an edge from it cannot even be expressed. Only the
+    center can fix that, and a sweep is the moment it is already dialling everything.
+
+    Never prompts. A sweep is unattended, so a host that accepts no key from here is
+    reported, not asked about -- the way out is to put the center's key on it, which
+    `fleet center --pubkey` prints, rather than to find someone to type a password.
+    """
+    pinned = {v.get("device_id") for v in acc.keys.values()}
+    named = {v.get("name") for v in acc.keys.values()}
+    done = False
+    for dev in inv.live(devices):
+        if dev.id in pinned or dev.name in named:
+            continue
+        if dev.ssh_auth == "external":
+            continue                       # authorized upstream; nothing to pin here
+        if not inv.endpoints_of(dev):
+            continue                       # the center itself has no endpoint to dial
+        done = bool(_register_identity(dev)) or done
+    return done
+
+
 def _sweep(devices) -> None:
     """The center's pass over the fleet: make authorized_keys match the access list.
 
@@ -850,6 +982,13 @@ def _sweep(devices) -> None:
     if why := rec.refuses_to_run(acc, ledger):
         err.print(f"[red]{why}[/red]")
         raise typer.Exit(2)
+
+    # After the wipe guard, never before it: a sweep that is about to be refused must not
+    # first go and put keys on things. Re-plan afterwards, because an enrolment is what
+    # makes an edge from that machine expressible at all.
+    if _enrol_unpinned(acc, devices):
+        acc = acl.load()                   # each enrolment saved a new generation
+        ledger = rec.plan(acc, rec.load_ledger())
 
     by_id = {d.id: d for d in inv.live(devices)}
     pending = [(k, st) for k, st in ledger.items() if not st.converged]
@@ -1005,9 +1144,13 @@ def cmd_rm(name: str, yes: bool = typer.Option(False, "--yes", "-y")):
     [dim]Example:[/dim]  fleet rm machine_A
     """
     devices = inv.load()
-    dev = inv.find(devices, name)
+    # Exact only. Removing revokes keys everywhere and cannot be undone by re-running,
+    # so it must never act on a prefix someone half-remembered.
+    dev = inv.find_exact(devices, name)
     if dev is None:
-        err.print(f"[red]No device named {name!r}[/red]")
+        err.print(f"[red]No machine named exactly {name!r}[/red]")
+        if near := inv.near_matches(devices, name):
+            err.print(f"  [dim]did you mean: {', '.join(near)}[/dim]")
         raise typer.Exit(1)
     from . import access as acl
 
@@ -1119,8 +1262,10 @@ def cmd_ssh(ctx: typer.Context, name: str):
         conn.close()
     platform = remote_platform(snap)
     if auth_of(dev, cached) == "needs_key":
-        err.print(f"[yellow]{dev.name} rejected our key.[/yellow] Install one:")
-        err.print(f"  [bold]fleet center --enroll {dev.name}[/bold]")
+        err.print(f"[yellow]{dev.name} rejected our key.[/yellow] Only the center can "
+                  "install one:")
+        err.print(f"  [bold]fleet add \"ssh ...\"[/bold] on the center, or "
+                  "[bold]fleet sync[/bold] if it is already recorded")
         raise typer.Exit(2)
     argv = ["ssh"]
     # The fleet key, or `fleet ssh` connects with a personal key that fleet no longer
@@ -1320,9 +1465,6 @@ def cmd_center(name: str = typer.Argument(None, help="hand the role to this mach
                                            help="print the key to pre-place on a host"),
                export: bool = typer.Option(False, "--export",
                                            help="print the access list and pins"),
-               enroll: str = typer.Option(None, "--enroll", metavar="MACHINE",
-                                          help="put this fleet's key on a host for the "
-                                               "first time, using a password typed once"),
                accept: bool = typer.Option(False, "--accept",
                                            help="take the role a handover offered"),
                dissolve: bool = typer.Option(False, "--dissolve",
@@ -1350,31 +1492,25 @@ def cmd_center(name: str = typer.Argument(None, help="hand the role to this mach
         print(pub)
         return
 
-    if enroll:
-        # The bootstrap the sweep cannot do: the sweep writes with a key the host already
-        # accepts, so a host the center has never reached needs one put there some other
-        # way. Deliberately before the access list is loaded -- this is how a fleet gets
-        # its first machine, and requiring the fleet to exist first would be circular.
-        dev = inv.find(inv.load(), enroll)
-        if dev is None:
-            err.print(f"[red]No device named {enroll!r}[/red]")
-            raise typer.Exit(1)
-        if not _install_key(dev):
-            raise typer.Exit(2)
-        fp = _register_identity(dev)
-        if fp:
-            console.print(f"  [dim]now grant it something: [bold]fleet access {dev.name} "
-                          f"--allow <machine>[/bold][/dim]")
-        return
-
     if init:
         key_path, pub = ensure_keypair()
-        dev, _ = onboard_self()
+        devices = inv.load()
+        dev, res = onboard_self(taken_names={d.name for d in devices})
         try:
             acc = acl.bootstrap(dev.name, pub, dev.id)
         except acl.AccessError as exc:
             err.print(f"[red]{exc}[/red]")
             raise typer.Exit(2)
+        # Seed the inventory from the same object the access list was pinned from. Done
+        # separately the two derive a name each, and nothing reconciles them: the access
+        # list would keep answering to one name while `fleet show` knew the other. It
+        # also spares the user a `fleet add --self` they have no way to know they need.
+        devices, _ = inv.upsert(devices, dev)
+        inv.save(devices)
+        if res.snapshot is not None:
+            conn = store.connect()
+            store.record(conn, dev.id, res)
+            conn.close()
         console.print(f"[green]✓[/green] fleet {acc.fleet_id} started; "
                       f"{dev.name} is the center.")
         console.print(f"  [dim]key to pre-place on locked-down hosts: "
@@ -1674,7 +1810,7 @@ def _handover(acc, name: str, *, force: bool) -> None:
     pub = (acc.keys.get(fp) or {}).get("pubkey", "")
     if not pub:
         err.print(f"[red]No pinned key for {name}.[/red]  Enrol it first:  "
-                  f"[bold]fleet center --enroll {name}[/bold]")
+                  f"[bold]fleet sync[/bold]")
         raise typer.Exit(2)
 
     added = 0

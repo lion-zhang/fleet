@@ -8,26 +8,28 @@ do they serve, what is costing money, and how do I connect?
 
 **New here? Start with [docs/getting-started.md](docs/getting-started.md).**
 
-Onboarding a machine costs one pasted SSH command:
+A fleet is created by one machine, and that machine is the center: the one that decides
+who may reach what, and the only one that installs or removes keys.
 
 ```bash
-fleet add "ssh -p 58418 root@1.2.3.4"
-fleet ls
+fleet center --init                         # this machine is now the center
+fleet add "ssh -p 58418 root@1.2.3.4"       # probe, enrol, pin, record -- one step
+fleet setup                                 # teach your coding agents to use it
 ```
 
-Probe targets need **nothing installed** -- the probe is a POSIX `sh` script piped over
-one SSH connection.
+After that you mostly talk to your agents, not to fleet.
 
 ```bash
+fleet access machine_A --allow machine_B    # who may reach what; then `fleet sync`
+fleet ls                                    # what is free right now
+fleet top                                   # live view, like htop for the fleet
 fleet edit machine_A --ssh "ssh -p 40001 root@1.2.3.4"   # rentals recycle addresses
-fleet edit machine_B --disk-path /workspace                # watch the volume that matters
-fleet center --init                                      # this machine decides who reaches what
-fleet center --enroll machine_A                              # password typed once, then key auth
-fleet access machine_A --allow machine_B                      # the center installs the key
-fleet update --all                                       # deploy the newest fleet everywhere
-fleet top                                                # live view, like htop for the fleet
-fleet setup                                              # teach your coding agents to use it
+fleet edit machine_B --disk-path /workspace              # watch the volume that matters
+fleet update --all                          # deploy the newest fleet everywhere
 ```
+
+Machines you only connect *to* need **nothing installed** -- the probe is one script
+piped over one SSH connection, POSIX `sh` or PowerShell depending on what answers.
 
 Status: v0.4 -- inventory, probe, CLI, live `top`, agent setup (Claude Code,
 Codex, Hermes), and a center that installs SSH keys rather than keeping passwords.

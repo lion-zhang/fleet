@@ -35,14 +35,22 @@ center would need a second guarantee on top.
 
 ## Three ways in
 
-Fleet installs **its own** key. What gets it in the first time is a separate question.
+Fleet installs **its own** key. What gets it in the first time is a separate question,
+and `_install_key` tries these in the order that asks least of the user:
 
-1. **Password auth available** — typed once, spent on one connection, discarded.
-2. **Password auth off, but a key you already hold works** — the normal case on a cloud
-   VM. `build_enroll_argv` omits `IdentitiesOnly=yes` for that first dial so the agent
-   can answer; `build_argv` keeps it for everything after.
+1. **A key you already hold works** — the normal case on a cloud VM, where password auth
+   is off and the provider injected a key at creation. `build_enroll_argv` omits
+   `IdentitiesOnly=yes` for that first dial so the agent can answer, and carries
+   `BatchMode=yes` so it can never block on a prompt; `build_argv` keeps IdentitiesOnly
+   for everything after. Trying this first is what lets an agent enrol unattended.
+2. **Password auth available** — typed once, spent on one connection, discarded. Needs a
+   human, so it needs a terminal.
 3. **Neither** — the key must be pre-placed. `fleet center --pubkey` prints it and needs
    nothing reachable, because the moment you want it is before the machine exists.
+
+Enrolment is not a command. `fleet add` does it on the center, and the sweep does it for
+anything still unpinned — a machine added from a spoke, or one whose enrolment was
+interrupted. Neither ever prompts outside case 2, and the sweep never prompts at all.
 
 ## What lives where
 

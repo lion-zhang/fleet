@@ -96,9 +96,11 @@ Anywhere. A name may be omitted where the obvious subject is the machine you are
 - Windows hosts work as targets: they are probed and keyed over PowerShell, and
   `{cmd} ssh box -- cmd` passes the command through rather than wrapping it in a
   POSIX shell. Nothing to configure -- it is read from the last probe
-- `{cmd} add "ssh user@host"` -- record a new machine, `--name` and `--kind` to
-  override what is guessed. It is reachable but not yet managed: only the center can
-  put a key on it
+- `{cmd} add "ssh user@host"` -- add a machine to the fleet. It must answer, or it is
+  not recorded at all: a machine the center cannot reach cannot be managed. Run on the
+  center this also enrols it; run anywhere else it is recorded and the center enrols it
+  on the next `{cmd} sync`, and it can be granted nothing until then. `--name` and
+  `--kind` override what is guessed
 - `{cmd} add --self` -- record the machine you are on, without ssh
 - `{cmd} edit [NAME] --ssh "ssh ..."` -- a rental moved; point the record at the new
   address. `--disk-path /workspace` to watch the volume that matters, `--name` to rename
@@ -111,8 +113,8 @@ these either refuse or file a request for the center to act on later.
 - `{cmd} access NAME --allow MACHINE` -- grant, then `{cmd} sync` to apply it.
   `--user` names whose authorized_keys, since a box answers as both root@ and ubuntu@
 - `{cmd} access NAME --deny MACHINE` -- revoke
-- `{cmd} sync` -- the sweep: install and remove keys, and collect telemetry
-- `{cmd} center --enroll NAME` -- first key onto a host, needs a password typed by a human
+- `{cmd} sync` -- the sweep: enrol anything not yet enrolled, install and remove keys,
+  and collect telemetry
 - `{cmd} center NAME` -- hand the role over; the successor then runs
   `{cmd} center --accept`, which verifies it can write before taking it
 - `{cmd} center --init` / `--dissolve` -- create a fleet, or take it down. Dissolving
@@ -131,7 +133,15 @@ these either refuse or file a request for the center to act on later.
 - `status` is not a boolean. `auth_failed` means the host is UP but rejected our key.
   Report it; do not try to fix it -- only the center can, and it may be offline.
 - **Never type a password or accept one from the user.** The only command that asks for
-  one is `{cmd} center --enroll`, and a human must run it themselves.
+  one is `{cmd} add` on the center, for a host that accepts no key yet, and a human must
+  run that themselves. You are not stuck, though: `{cmd} center --pubkey` prints the key
+  to put on the host instead, after which enrolment needs no password at all. Say that
+  rather than giving up.
+- **Ask rather than guess.** These commands need a machine name, sometimes a user,
+  sometimes a whole ssh command. If the request does not say, ask -- do not infer a
+  machine from a partial name or from whatever was being discussed. `{cmd} rm`,
+  `{cmd} access --deny`, `{cmd} center --dissolve` and `{cmd} update --all` are not
+  undone by running them again.
 - A row in `{cmd} access` that is not `present` is a grant that has not reached its
   target yet, not one that failed. Say so rather than retrying.
 - The center is expected to be offline -- it is usually a laptop. Everything already

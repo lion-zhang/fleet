@@ -17,7 +17,7 @@ from fleet import cli
 from fleet import inventory as inv
 from fleet import reconcile as rec
 from fleet import store
-from fleet.models import Device, Kind
+from fleet.models import Device, Kind, ProbeResult, Status
 
 
 @pytest.fixture
@@ -118,7 +118,27 @@ def test_a_fleet_can_be_created_again_afterwards(a_fleet, monkeypatch):
     runner.invoke(cli.app, ["center", "--dissolve"], input="y\n")
     monkeypatch.setattr(cli, "onboard_self",
                         lambda **k: (Device(id="id:me", name="macbook",
-                                            kind=Kind.PERMANENT), None))
+                                            kind=Kind.PERMANENT),
+                                     ProbeResult(status=Status.OK)))
     r = runner.invoke(cli.app, ["center", "--init"])
     assert r.exit_code == 0, r.output
     assert acl.load(acl.ACCESS_PATH).fleet_id != "7f3a9c", "a new fleet, not the old one"
+
+
+def test_creating_a_fleet_puts_the_center_in_its_own_inventory(a_fleet, monkeypatch):
+    """Seeded from the same object the access list was pinned from, or the two derive a
+    name each and nothing reconciles them -- the access list answering to one name while
+    `fleet show` knows the other. It also spares the user a `fleet add --self` they have
+    no way to know they need."""
+    runner, _ = a_fleet
+    monkeypatch.setattr(rec, "apply_edge", lambda *a, **k: (True, ""))
+    runner.invoke(cli.app, ["center", "--dissolve"], input="y\n")
+    monkeypatch.setattr(cli, "onboard_self",
+                        lambda **k: (Device(id="id:me", name="macbook",
+                                            kind=Kind.PERMANENT),
+                                     ProbeResult(status=Status.OK)))
+    assert runner.invoke(cli.app, ["center", "--init"]).exit_code == 0
+
+    assert "macbook" in {d.name for d in inv.load(inv.INVENTORY_PATH)}
+    acc = acl.load(acl.ACCESS_PATH)
+    assert acc.name_of(acc.center) == "macbook", "one name, not two"

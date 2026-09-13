@@ -383,7 +383,7 @@ def test_the_instructions_separate_what_needs_the_center():
     text = skill_text("fleet")
     assert "Only on the center" in text
     assert "is_center" in text, "and says how to find out, rather than guessing"
-    for center_only in ("--allow", "--deny", "--enroll", "fleet sync"):
+    for center_only in ("--allow", "--deny", "fleet sync"):
         assert center_only in text
 
 
@@ -407,14 +407,12 @@ FLAGS_NOT_FOR_AGENTS = {
     "--repo": "install plumbing", "--ref": "install plumbing",
     "--role": "the only role a device takes is none; moving the center is `fleet center`",
     "--forward-agent": "install plumbing", "--no-forward-agent": "install plumbing",
-    "--no-key-prompt": "suppresses a prompt an agent cannot answer anyway",
     "--clear-disk-paths": "the inverse of --disk-path, which is documented",
     "--interval": "top needs a terminal, so no agent reaches this",
     "--target": "setup's own", "--project": "setup's own", "--uninstall": "setup's own",
     "--dissolve": "documented in prose as the counterpart to --init",
     "--init": "documented in prose",
     "--force": "overrides a refusal; an agent must report the refusal, not override it",
-    "--enroll": "documented in prose",
 }
 
 
@@ -451,7 +449,18 @@ def test_the_agent_is_told_never_to_handle_a_password():
 
     text = skill_text("fleet")
     assert "Never type a password" in text
-    assert "human must run it" in text
+    assert "a human must" in text
+    assert "--pubkey" in text, "and the way round it, or the agent just gives up"
+
+
+def test_the_agent_is_told_to_ask_rather_than_guess_a_name():
+    """`inventory.find` resolves a unique prefix, and `fleet rm` is not undone by running
+    it again. An agent filling in a half-heard name is exactly how that goes wrong."""
+    from fleet.setup import skill_text
+
+    text = skill_text("fleet")
+    assert "Ask rather than guess" in text
+    assert "partial name" in text
 
 
 def test_the_agent_is_told_an_absent_center_is_normal():

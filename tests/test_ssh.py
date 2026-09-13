@@ -90,5 +90,5 @@ def test_a_host_that_rejected_our_key_says_how_to_fix_it(box, monkeypatch):
     monkeypatch.setattr(cli, "auth_of", lambda *a, **k: "needs_key")
     r = CliRunner().invoke(cli.app, ["ssh", "lin-xps"])
     assert r.exit_code == 2
-    assert "fleet center --enroll" in r.output
+    assert "Only the center can install one" in r.output
     assert not box, "and it does not try to connect anyway"

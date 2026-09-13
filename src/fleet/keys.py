@@ -18,12 +18,13 @@ import re
 import select
 import shlex
 import signal
+import subprocess
 import time
 from contextlib import suppress
 from pathlib import Path
 
 from .config import FLEET_KEY
-from .sshcmd import Endpoint
+from .sshcmd import Endpoint, build_enroll_argv
 
 # sshd's prompt varies ("Password:", "root@host's password:", a PAM phrasing), so match
 # the one word they reliably share, case-insensitively.
@@ -236,22 +237,58 @@ def windows_authorized_keys_command(pubkey: str) -> str:
     )
 
 
-def install_key(ep: Endpoint, password: str, pubkey: str, *,
-                timeout: float = 20.0) -> tuple[bool, str]:
-    """Append pubkey to the host's authorized_keys. Returns (ok, output-safe-to-print).
+# cmd.exe's answer to a POSIX one-liner. The host is up and we are in; it simply has no
+# `sh`, so the same append is retried in PowerShell.
+_NO_POSIX_SHELL = ("is not recognized as an internal or external command",
+                   "operable program or batch file")
 
-    Tries POSIX, then PowerShell. The platform cannot be known in advance here: this is
-    first contact, so there is no probe to read, and asking the user to declare it would
-    be asking them to know something fleet can find out. Same shape as the probe's own
-    fallback, and the cost is one extra connection on Windows only.
+
+def _append_pubkey(run, pubkey: str) -> tuple[bool, str]:
+    """POSIX first, PowerShell on the characteristic failure. `run` is the transport.
+
+    The platform cannot be known in advance here: this is first contact, so there is no
+    probe to read, and asking the user to declare it would be asking them to know
+    something fleet can find out. Same shape as the probe's own fallback, and the cost is
+    one extra connection on Windows only.
+
+    Split out from `install_key` so the same two commands can go over a password pty or
+    over access we already hold, without either transport knowing about the other.
     """
-    argv = build_password_argv(ep) + [authorized_keys_command(pubkey)]
-    code, output = run_with_password(argv, password, timeout=timeout)
+    code, output = run(authorized_keys_command(pubkey))
     if code == 0:
         return True, output
-    if any(sig in output.lower() for sig in
-           ("is not recognized as an internal or external command",
-            "operable program or batch file")):
-        argv = build_password_argv(ep) + [windows_authorized_keys_command(pubkey)]
-        code, output = run_with_password(argv, password, timeout=timeout)
+    if any(sig in output.lower() for sig in _NO_POSIX_SHELL):
+        code, output = run(windows_authorized_keys_command(pubkey))
     return code == 0, output
+
+
+def install_key(ep: Endpoint, password: str, pubkey: str, *,
+                timeout: float = 20.0) -> tuple[bool, str]:
+    """Append pubkey to the host's authorized_keys, paying with a password typed once.
+
+    Returns (ok, output-safe-to-print) -- the password is scrubbed from the output.
+    """
+    def run(command: str) -> tuple[int, str]:
+        return run_with_password(build_password_argv(ep) + [command], password,
+                                 timeout=timeout)
+    return _append_pubkey(run, pubkey)
+
+
+def install_key_over_existing_access(ep: Endpoint, pubkey: str, *,
+                                     timeout: float = 20.0) -> tuple[bool, str]:
+    """The same append, over access we already have. No password, and never a prompt.
+
+    This is the common case and the one that used to be missing: a cloud VM with
+    `PasswordAuthentication no` and a key that lives in your agent. `build_enroll_argv`
+    omits IdentitiesOnly so the agent can answer, and carries BatchMode=yes so a host
+    that will not have us fails immediately instead of blocking on a prompt nobody is
+    there to fill in. That is what makes it safe to try first, and safe for an agent.
+    """
+    def run(command: str) -> tuple[int, str]:
+        proc = subprocess.run(build_enroll_argv(ep) + [command],
+                              capture_output=True, text=True, timeout=timeout)
+        return proc.returncode, proc.stdout + proc.stderr
+    try:
+        return _append_pubkey(run, pubkey)
+    except subprocess.TimeoutExpired:
+        return False, f"no response within {timeout:.0f}s"
