@@ -38,7 +38,8 @@ from .setup import TARGETS, detect_targets, fleet_command, install, uninstall
 from .sshcmd import remote_platform, build_argv, remote_command, resolve_command
 from .top import (Schedule, device_lines, disk_cell, gpu_cells_compact,
                   name_cell, render_device, render_fleet)
-from .view import Detail, auth_of, device_view, fleet_view
+from . import view as view_mod
+from .view import Detail, auth_of, device_view, fleet_view, matches_tag
 
 app = typer.Typer(
     add_completion=False, no_args_is_help=True, rich_markup_mode="rich",
@@ -130,7 +131,10 @@ def _rows(names: list[str] | None = None, *, refresh: bool = False,
 def cmd_ls(names: list[str] = typer.Argument(None, help="only these devices"),
            json_out: bool = typer.Option(False, "--json"),
            refresh: bool = typer.Option(False, "--refresh", "-r", help="force a live probe"),
-           online: bool = typer.Option(False, "--online", help="only reachable devices")):
+           online: bool = typer.Option(False, "--online", help="only reachable devices"),
+           tag: list[str] = typer.Option(None, "--tag", metavar="NAME",
+                                         help="only machines carrying this tag or fact; "
+                                              "repeatable, and all must match")):
     """List every device with live resource availability.
 
     [dim]Example:[/dim]  fleet ls --json
@@ -138,6 +142,18 @@ def cmd_ls(names: list[str] = typer.Argument(None, help="only these devices"),
     rows = _rows(list(names) if names else None, refresh=refresh)
     if online:
         rows = [r for r in rows if r["status"] == "ok"]
+    if tag:
+        # Say what could not be judged rather than dropping it silently. A machine with no
+        # telemetry has no facts, so it fails every filter -- and the fleet is factless
+        # right after a cache wipe or a schema bump. Shared hosts are worse: `_rows` only
+        # probes `probeable`, and SHARED is forced to on_demand at onboarding because one
+        # cluster hangs ~75s, so a bare `fleet ls --tag gpu` judges it on nothing while
+        # `fleet ls koa04 --tag gpu` probes and answers differently.
+        blind = [r["name"] for r in rows if not r["facts"] and not r["tags"]]
+        rows = [r for r in rows if all(matches_tag(r, t) for t in tag)]
+        if blind:
+            err.print(f"[dim]! {len(blind)} with no telemetry were not considered: "
+                      f"{', '.join(sorted(blind)[:6])}[/dim]")
     view = fleet_view(rows)
     if _emit(view, json_out):
         return
@@ -235,6 +251,13 @@ def cmd_show(name: str = typer.Argument(None, help="defaults to this machine"),
         console.print("  [bold]services[/bold]")
         for s in r["services_detail"]:
             console.print(f"        :{s['port']:<6} {s.get('kind','?'):<10} {s.get('comm','')}")
+    # Both lists, labelled and apart, because this is the one surface with room for them
+    # and the one a human reads when deciding. `tags` is what you said; `facts` is what
+    # the last probe measured, and the two must stay distinguishable.
+    if r.get("tags"):
+        console.print(f"  tags  {' '.join(r['tags'])}")
+    if r.get("facts"):
+        console.print(f"  facts [dim]{' '.join(r['facts'])}[/dim]")
     for a in r["alerts"]:
         console.print(f"  [yellow]![/yellow] {a}")
     c = r["connect"]
@@ -254,6 +277,18 @@ def _canonical(token: str) -> str:
         return token
     dev = inv.find_exact(inv.load(), token)
     return dev.name if dev else token
+
+
+def _tags(values) -> list[str] | None:
+    """Normalise a repeatable --tag/--untag into a clean list, or None if unmentioned.
+
+    Lowercased because the request that prompted tags said "GPU", "NAS" and "IP" while
+    every derived fact is lowercase -- `--tag GPU` matching nothing would be the first
+    thing anyone hit.
+    """
+    if not values:
+        return None
+    return [t for t in (view_mod.normalise_tag(v) for v in values) if t] or None
 
 
 def _fleet_membership() -> str:
@@ -285,6 +320,9 @@ def cmd_add(ssh_command: str = typer.Argument(None, help='e.g. "ssh -p 58418 roo
             name: str = typer.Option(None, "--name"),
             alias: str = typer.Option("", "--alias", metavar="SHORT",
                                       help="a short handle to type instead of the name"),
+            tag: list[str] = typer.Option(None, "--tag", metavar="NAME",
+                                          help="label it; repeatable. `fleet ls --tag NAME` "
+                                               "finds it again"),
             kind: str = typer.Option(None, "--kind", help="permanent|rental|shared|appliance|mobile"),
             json_out: bool = typer.Option(False, "--json"),
             dry_run: bool = typer.Option(False, "--dry-run")):
@@ -328,6 +366,17 @@ def cmd_add(ssh_command: str = typer.Argument(None, help='e.g. "ssh -p 58418 roo
                "status": res.status.value}, True)
         return
     devices, action = inv.upsert(devices, dev)
+    if tags := _tags(tag):
+        # `upsert` matches on id, merges only endpoints and discards every other field of
+        # the incoming record, so on a machine already known -- re-adding a rental whose
+        # port moved, say -- the tags would be dropped without a word. Apply them to the
+        # record that actually survived.
+        if survivor := inv.find_exact(devices, dev.id):
+            apply_edits(survivor, add_tags=tags)
+            for t in tags:
+                if view_mod.is_fact_name(t):
+                    console.print(f"  [dim]note: {t!r} is also derived from telemetry — "
+                                  "kept, since a probe cannot see everything[/dim]")
     inv.save(devices)
     if res.snapshot is not None or not res.ok:
         conn = store.connect()
@@ -496,6 +545,10 @@ def cmd_edit(name: str = typer.Argument(None, help="defaults to this machine"),
              new_alias: str = typer.Option(None, "--alias", metavar="SHORT",
                                            help="a short handle to type instead of the "
                                                 'name; --alias "" removes it'),
+             tag: list[str] = typer.Option(None, "--tag", metavar="NAME",
+                                           help="add a label; repeatable"),
+             untag: list[str] = typer.Option(None, "--untag", metavar="NAME",
+                                             help="remove a label; repeatable"),
              role: str = typer.Option(None, "--role", help="none | center | backup"),
              json_out: bool = typer.Option(False, "--json")):
     """Change a device's address or settings after it was added.
@@ -514,6 +567,7 @@ def cmd_edit(name: str = typer.Argument(None, help="defaults to this machine"),
     endpoint = resolve_command(ssh_command) if ssh_command else None
     paths = [] if clear_disk_paths else (list(disk_path) if disk_path else None)
     result = apply_edits(dev, name=new_name, alias=new_alias,
+                         add_tags=_tags(tag), drop_tags=_tags(untag),
                          taken=inv.handles(devices, excluding=dev.id),
                          endpoint=endpoint, disk_paths=paths,
                          role=None if role == "center" else role)

@@ -18,7 +18,7 @@ from filelock import FileLock, Timeout
 
 from .config import INVENTORY_PATH, ensure_dirs
 from .models import Device, Kind
-from .sshcmd import Endpoint
+from .sshcmd import Endpoint, route_of
 
 SCHEMA_VERSION = 1
 
@@ -31,14 +31,9 @@ def _lock(path: Path) -> FileLock:
     return FileLock(str(path) + ".lock", timeout=10)
 
 
-def _via(raw: str) -> str:
-    """Normalise the route kind, accepting the pre-rename spelling.
-
-    `via` used to name a vendor. Inventories written then are on disk now, and reading
-    one of those routes as direct would let `edit` overwrite the single address that
-    never moves with a public IP that does.
-    """
-    return "mesh" if (raw or "") == "tailscale" else (raw or "")
+def _via(raw: str, target: str = "") -> str:
+    """Normalise the route kind. See sshcmd.route_of for why it lives there."""
+    return route_of(raw, target)
 
 
 def endpoints_of(dev: Device) -> list[Endpoint]:
@@ -48,7 +43,8 @@ def endpoints_of(dev: Device) -> list[Endpoint]:
             target=e.get("target", ""), user=e.get("user", ""),
             port=int(e.get("port", 22) or 22), identity=os.path.expanduser(e.get("identity", "") or ""),
             jump=e.get("jump", "") or "", name=e.get("name", f"ep{i}"),
-            preference=int(e.get("preference", 10)), via=_via(e.get("via", "")),
+            preference=int(e.get("preference", 10)),
+            via=_via(e.get("via", ""), e.get("target", "")),
         ))
     return out
 
@@ -70,6 +66,11 @@ def _devices_from(raw: dict) -> list[Device]:
     for d in raw.get("devices") or []:
         d = dict(d)
         d["kind"] = Kind(d.get("kind", "permanent"))
+        # `tags: gpu` -- no brackets -- is the likeliest typo in a file whose docstring
+        # promises it stays fixable in vim, and without this it loads as the string
+        # "gpu", which every consumer then iterates into ["g", "p", "u"].
+        if isinstance(d.get("tags"), str):
+            d["tags"] = [t for t in d["tags"].replace(",", " ").split() if t]
         known = {f for f in Device.__slots__}
         devices.append(Device(**{k: v for k, v in d.items() if k in known}))
     return devices

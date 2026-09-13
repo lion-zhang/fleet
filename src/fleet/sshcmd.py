@@ -217,6 +217,69 @@ def remote_command(args: list[str], *, windows: bool = False) -> str:
     return "sh -lc " + shlex.quote(inner)
 
 
+
+# Overlay suffixes worth knowing by name. Deliberately a table, not logic: fleet is
+# neutral about which overlay you run, and adding one must not mean touching a
+# classifier. Address ranges cannot do this job -- 100.64.0.0/10 is shared by several
+# overlays and others use ranges the user picked.
+_OVERLAY_SUFFIXES = (".ts.net", ".netbird.cloud", ".zerotier.net")
+
+
+def route_of(stored: str, target: str = "") -> str:
+    """The route kind for one endpoint: what was recorded, else what the address says.
+
+    One helper because two callers need the same answer. `inventory.endpoints_of` wants
+    it to decide which address `edit` may overwrite; `view._reachability` wants it for
+    the `public-ip`/`mesh`/`lan` facts. Reading the raw record in one place and the
+    normalised value in the other is how the facts came back empty for a whole fleet
+    whose endpoints all said `tailscale`.
+
+    Classifying the target as a fallback backfills every record written before routes
+    were classified at all -- no DNS, so this stays safe on a read path: a literal
+    address or a known overlay suffix answers, anything else stays "".
+    """
+    stored = (stored or "").strip().lower()
+    if stored == "tailscale":
+        # The pre-rename spelling, still on disk. Reading one of those as direct would
+        # let `edit` overwrite the one address that never moves.
+        return "mesh"
+    return stored or classify_route(target)
+
+
+def classify_route(target: str) -> str:
+    """`mesh`, `lan`, `public`, or "" when we genuinely cannot tell.
+
+    This fills in the vocabulary `Endpoint.via` has documented all along: until now the
+    only assignment anywhere set "mesh", and only for one vendor's suffix.
+
+    "" is a real answer and must stay one. `target` here is whatever ssh config resolved
+    to, usually a hostname, and guessing `public` for every name would mark a NAS on a
+    LAN-only DNS name as reachable from the internet -- the exact claim someone would
+    act on. Resolution is the caller's job, at add time, where a probe is already
+    happening; a view must never block on DNS.
+    """
+    import ipaddress
+
+    host = (target or "").strip().rstrip(".").lower()
+    if not host:
+        return ""
+    if host.endswith(_OVERLAY_SUFFIXES):
+        return "mesh"
+    try:
+        ip = ipaddress.ip_address(host)
+    except ValueError:
+        return ""
+    if ip.is_loopback or ip.is_link_local or ip.is_unspecified:
+        return ""
+    # CGNAT is what every overlay hands out, and a home ISP behind it is not somewhere
+    # you can dial either way -- "not public" is the part that matters here.
+    if ip in ipaddress.ip_network("100.64.0.0/10"):
+        return "mesh"
+    if ip.is_private:
+        return "lan"
+    return "public" if ip.is_global else ""
+
+
 def build_enroll_argv(ep: Endpoint, *, connect_timeout: int = 8) -> list[str]:
     """The *first* dial at a host, before it knows our key. Deliberately permissive.
 

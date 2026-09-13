@@ -13,7 +13,7 @@ from dataclasses import dataclass, field
 
 from .inventory import touch
 from .models import Device
-from .sshcmd import Endpoint
+from .sshcmd import Endpoint, classify_route
 
 
 @dataclass(slots=True)
@@ -63,8 +63,13 @@ def _replace_primary(dev: Device, ep: Endpoint, out: Edits) -> None:
     after = _address(ep.user, ep.target, ep.port)
     record["name"] = old.get("name", "default")
     record["preference"] = int(old.get("preference", 10) or 10)
-    if old.get("via"):
-        record["via"] = old["via"]
+    # Reclassify, never inherit. Carrying the old route forward is wrong on the one
+    # command whose whole purpose is changing the address: move a box from a LAN address
+    # to a public one and it would keep claiming `lan` -- and `public-ip` is derived from
+    # this. Fall back to the old value only when the new target cannot be classified,
+    # so a hostname does not silently erase what we already knew.
+    if route := (classify_route(ep.target) or old.get("via", "")):
+        record["via"] = route
     eps[idx] = record
     dev.endpoints = eps
     if before != after:
@@ -86,6 +91,7 @@ def _migrate_identity(dev: Device, ep: Endpoint, out: Edits) -> None:
 def apply_edits(dev: Device, *, endpoint: Endpoint | None = None,
                 disk_paths: list[str] | None = None, role: str | None = None,
                 name: str | None = None, alias: str | None = None,
+                add_tags: list[str] | None = None, drop_tags: list[str] | None = None,
                 taken: set[str] | None = None) -> Edits:
     out = Edits()
     if name is not None and name != dev.name:
@@ -107,6 +113,16 @@ def apply_edits(dev: Device, *, endpoint: Endpoint | None = None,
             raise ValueError("an alias the same as the name is not an alias")
         out.changes.append(f"alias {dev.alias or 'none'} -> {alias or 'none'}")
         dev.alias = alias
+    if add_tags or drop_tags:
+        # Add and remove rather than replacing the whole list the way --disk-path does:
+        # having to restate every tag to add one is what stops people using a feature.
+        before = list(dev.tags)
+        after = [t for t in before if t not in (drop_tags or [])]
+        after += [t for t in (add_tags or []) if t not in after]
+        if after != before:
+            out.changes.append(f"tags {' '.join(before) or 'none'} -> "
+                               f"{' '.join(after) or 'none'}")
+            dev.tags = after
     if role is not None and role != dev.role:
         out.changes.append(f"role {dev.role} -> {role}")
         dev.role = role

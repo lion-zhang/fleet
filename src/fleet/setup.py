@@ -81,6 +81,10 @@ Anywhere. A name may be omitted where the obvious subject is the machine you are
 - `{cmd} ls --json` -- every machine, with what is free right now
 - `{cmd} ls NAME... --json` -- only those, `-r` to force a fresh probe,
   `--online` for reachable ones only
+- `{cmd} ls --tag NAME --json` -- **the right way to pick a machine.** Repeatable, and
+  all must match: `--tag cuda --tag vram-24g` finds NVIDIA boxes with a card of at
+  least 24G. Matches two things at once -- what someone declared about a machine, and
+  what the last probe measured. Never pick a machine by remembering its name
 - `{cmd} show [NAME] --json` -- full detail; no name means this machine
 - `{cmd} ssh NAME -- COMMAND` -- run a command there
 - `{cmd} ssh NAME` -- an interactive shell, exactly as plain ssh
@@ -100,12 +104,13 @@ Anywhere. A name may be omitted where the obvious subject is the machine you are
   not recorded at all: a machine the center cannot reach cannot be managed. Run on the
   center this also enrols it; run anywhere else it is recorded and the center enrols it
   on the next `{cmd} sync`, and it can be granted nothing until then. `--name` and
-  `--kind` override what is guessed, and `--alias SHORT` gives it a short handle you
-  can type anywhere a name goes
+  `--kind` override what is guessed, `--alias SHORT` gives it a short handle you can
+  type anywhere a name goes, and `--tag NAME` (repeatable) labels it
 - `{cmd} add --self` -- record the machine you are on, without ssh
 - `{cmd} edit [NAME] --ssh "ssh ..."` -- a rental moved; point the record at the new
   address. `--disk-path /workspace` to watch the volume that matters, `--name` to
-  rename, `--alias` to set or clear the short handle
+  rename, `--alias` to set or clear the short handle, `--tag`/`--untag` to add and
+  remove labels (both repeatable)
 - `{cmd} install NAME` -- put fleet on a machine that has none
 - `{cmd} paths` -- where the inventory, keys and access list live on this machine
 
@@ -151,6 +156,19 @@ these either refuse or file a request for the center to act on later.
   ago" is a normal state to report, not an error.
 - A relayed row (`via <machine>` in `{cmd} top`, `source: broadcast` in JSON) was
   measured by the center, not here. Quote its age; do not present it as live.
+- **Facts are measured; tags are declared.** `facts` in the JSON is recomputed from the
+  last probe, so it is current by construction -- `gpu`, `cuda`, `metal`, `multi-gpu`,
+  `vram-NNg`, `linux`/`macos`/`windows`, `x86_64`/`arm64`, `cores-NN`, `ram-NNg`,
+  `storage-NNt`, `public-ip`/`mesh`/`lan`, `rental`/`shared`/`appliance`. `tags` is
+  whatever a human wrote. `--tag` searches both.
+- Size facts mean **at least**: a machine with `vram-48g` also reports `vram-24g`, so
+  `--tag vram-24g` is how you ask for "24G or more". `cores-NN` counts logical CPUs,
+  so a 16-core part with hyperthreading reports `cores-32`.
+- `gpu` without `cuda` means the card is there and the driver is not answering -- do not
+  send CUDA work to it. `metal` is an Apple GPU, which reports no VRAM figure.
+- A machine with no telemetry has no facts and matches no `--tag`. `{cmd} ls --tag`
+  says on stderr how many it could not judge; report that rather than concluding the
+  fleet has nothing suitable.
 - `{cmd} update --all` touches every machine. Ask first.
 """
 

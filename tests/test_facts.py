@@ -1,0 +1,325 @@
+"""Tags you declare, facts fleet measures.
+
+The split is the whole design. A hand-written `gpu` tag survives the card being pulled,
+and the agent that trusted it sends a job to a machine with no GPU -- the same drift that
+killed `Device.auth_state` and produced the rule in `view.auth_of`: a value with two
+sources that disagree is worse than one that is recomputed.
+
+So facts are recomputed from the last probe and never stored, and the asserts below are
+mostly against the four real probe fixtures, which is what makes the macOS case a test
+rather than a claim.
+"""
+
+from __future__ import annotations
+
+import pathlib
+
+import pytest
+
+from fleet import view
+from fleet.models import Device, Kind
+from fleet.probe.parse import parse_payload
+from fleet.view import _CORES, _RAM_GIB, _SLACK, _STORAGE_TIB, _VRAM_GIB, facts, matches_tag
+
+FIXTURES = pathlib.Path(__file__).parent / "fixtures" / "probe"
+
+
+def _snap(name: str) -> dict:
+    return parse_payload((FIXTURES / f"{name}.txt").read_text()).to_dict()
+
+
+def _dev(**kw) -> Device:
+    kw.setdefault("kind", Kind.PERMANENT)
+    kw.setdefault("name", "box")
+    kw.setdefault("id", f"id:{kw['name']}")
+    return Device(**kw)
+
+
+def _facts(name: str, **kw) -> list[str]:
+    return facts(_dev(**kw), _snap(name), None)
+
+
+# ------------------------------------------------------------------ the ladders
+
+def test_every_ladder_gap_survives_the_slack():
+    """The safety proof for _SLACK, asserted rather than argued.
+
+    Clearing a rung falsely needs the value to reach SLACK x the rung ABOVE, i.e. a gap
+    below 1/SLACK. This fails the moment someone adds a rung too close to its neighbour.
+    """
+    for name, rungs in (("vram", _VRAM_GIB), ("ram", _RAM_GIB),
+                        ("cores", _CORES), ("storage", _STORAGE_TIB)):
+        tightest = min(b / a for a, b in zip(rungs, rungs[1:]))
+        assert tightest > 1 / _SLACK, f"{name} rungs are too close for the slack"
+
+
+def test_a_size_fact_means_at_least():
+    """The downward closure, which is what makes the filter usable at all. One exact
+    label could not answer "24G or more": --tag repeats as AND, so `--tag vram-24g
+    --tag vram-48g` would match nothing and an agent would have to OR across the ladder
+    itself."""
+    f = facts(_dev(), {"gpus": [{"vram_total_mib": 49140}]}, None)
+    assert "vram-48g" in f and "vram-24g" in f and "vram-8g" in f
+    assert "vram-64g" not in f
+
+
+def test_reported_capacity_runs_under_nominal():
+    """Measured on real machines: a 32 GiB laptop reports 28.5, a 4 GiB VM reports 3.6,
+    a 128 GiB workstation reports 122.9. Flooring to a rung tags the first `ram-16g` --
+    wrong by a factor of two on the most-read fact in the set."""
+    for reported_gib, expected in ((28.5, "ram-32g"), (3.6, "ram-4g"),
+                                   (122.9, "ram-128g"), (64.0, "ram-64g")):
+        f = facts(_dev(), {"mem_total_kb": int(reported_gib * 1048576)}, None)
+        assert expected in f, f"{reported_gib} GiB should reach {expected}: {f}"
+
+
+def test_a_genuinely_smaller_machine_is_not_promoted():
+    """The slack must not reach the rung below. A 12 GiB VM is not a 16 GiB machine."""
+    f = facts(_dev(), {"mem_total_kb": int(11.6 * 1048576)}, None)
+    assert "ram-8g" in f and "ram-16g" not in f
+
+
+# ------------------------------------------------------------------ accelerators
+
+def test_vram_comes_from_the_largest_card_not_the_total():
+    """A model fits in one card's VRAM or it does not; 4x24G is not a 96G machine. Same
+    rule `free_vram_mib` and `gpu_cells` already follow."""
+    f = facts(_dev(), {"gpus": [{"vram_total_mib": 24564}] * 4}, None)
+    assert "multi-gpu" in f
+    assert "vram-24g" in f and "vram-32g" not in f
+
+
+def test_a_wedged_driver_still_owns_a_gpu():
+    """gpu_present == "err" is nvidia-smi present but failing -- the card is almost
+    certainly there and the list is empty. Saying nothing makes an expensive machine
+    vanish from your own inventory; saying `cuda` sends a job to a box that dies at
+    torch.cuda.init."""
+    f = facts(_dev(), {"gpu_present": "err", "gpus": []}, None)
+    assert "gpu" in f
+    assert "cuda" not in f
+    assert not [x for x in f if x.startswith("vram-")]
+
+
+def test_gpu_facts_come_from_the_gpu_list_not_the_present_flag():
+    """`gpu_present` flips to "1" when the driver-version query succeeds, before the
+    per-GPU query returns, so "1" with an empty list is reachable."""
+    assert facts(_dev(), {"gpu_present": "1", "gpus": []}, None) == []
+
+
+# ------------------------------------------------------------------ the real fixtures
+
+def test_the_macbook_reports_metal_and_never_cuda():
+    """The probe only runs nvidia-smi, so a 40-core M3 Max GPU reports gpu.present=0.
+    Without the inference the one machine that can run MLX is invisible; with a naive
+    one it would claim CUDA."""
+    f = _facts("macos-laptop")
+    assert "metal" in f and "gpu" in f
+    assert "cuda" not in f
+    assert "macos" in f and "arm64" in f
+    assert not [x for x in f if x.startswith("vram-")], "unified memory: no VRAM figure"
+
+
+def test_the_gpu_box():
+    f = _facts("gpu-box")
+    assert "gpu" in f and "cuda" in f and "multi-gpu" not in f
+    # 24564 MiB is 23.99 GiB -- it must reach the 24 rung and not the 32.
+    assert "vram-24g" in f and "vram-32g" not in f
+    assert "linux" in f and "x86_64" in f
+
+
+def test_aarch64_is_normalised_to_arm64():
+    """The fixture set already contains a spelling the naive vocabulary misses."""
+    f = _facts("vm-a")
+    assert "arm64" in f and "aarch64" not in f
+    assert not [x for x in f if x in ("gpu", "cuda", "metal")]
+
+
+@pytest.mark.parametrize("name", ["gpu-box", "vm-a", "vm-b", "macos-laptop"])
+def test_every_fixture_gets_an_os_family(name):
+    assert {"linux", "macos", "windows"} & set(_facts(name)), name
+
+
+# ------------------------------------------------------------------ honesty
+
+def test_a_machine_with_no_telemetry_has_no_facts():
+    """Not a "no-data" marker: `--tag unknown` would then match it, mixing claims about
+    the machine with claims about our knowledge of it."""
+    assert facts(_dev(), None, None) == []
+
+
+def test_facts_are_ordered_not_a_set():
+    """String hashing is randomised per process, so a set would make `fleet ls --json`
+    emit different bytes each run -- and the determinism test compares two calls inside
+    one process, so it would pass while the property was broken."""
+    snap = _snap("gpu-box")
+    assert isinstance(facts(_dev(), snap, None), list)
+    assert facts(_dev(), snap, None) == facts(_dev(), snap, None)
+
+
+def test_only_unchanging_fields_are_used():
+    """THE invariant. Free memory, free disk, utilisation and load all move between
+    probes; a fact built on one would flap and poison every cached answer."""
+    steady = {"mem_total_kb": 67108864, "cpu_cores": 16, "arch": "x86_64",
+              "uname_s": "Linux", "gpus": [{"vram_total_mib": 24564}]}
+    busy = steady | {"mem_avail_kb": 1, "users": 9, "load": [9.0, 9.0, 9.0],
+                     "gpus": [{"vram_total_mib": 24564, "util_pct": 99}]}
+    assert facts(_dev(), steady, None) == facts(_dev(), busy, None)
+
+
+def test_storage_uses_writable_capacity_not_the_total():
+    """_disk_view already warns that dividing by total understates fullness, and that
+    macOS differs by tens of percent. Max over mounts, never sum: bind mounts and
+    container overlays would be counted twice."""
+    snap = {"disks": [
+        {"used_kb": 1073741824, "avail_kb": 1073741824, "total_kb": 99999999999},
+        {"used_kb": 536870912, "avail_kb": 536870912, "writable": True},
+    ]}
+    f = facts(_dev(), snap, None)
+    assert "storage-2t" in f and "storage-4t" not in f, "max of 2 TiB, not the sum"
+
+
+def test_a_read_only_mount_is_not_storage():
+    snap = {"disks": [{"used_kb": 4294967296, "avail_kb": 0, "writable": False}]}
+    assert not [x for x in facts(_dev(), snap, None) if x.startswith("storage-")]
+
+
+# ------------------------------------------------------------------ reachability
+
+def test_the_legacy_via_spelling_still_yields_mesh():
+    """Endpoints on disk right now say `tailscale`. Reading the raw record in the facts
+    while reading the normalised value everywhere else is how reachability came back
+    empty for an entire fleet."""
+    dev = _dev(endpoints=[{"target": "box.example.ts.net", "via": "tailscale"}])
+    assert "mesh" in facts(dev, {}, None)
+
+
+def test_a_route_is_backfilled_from_a_literal_address():
+    """Records written before routes were classified still answer, with no DNS on a
+    read path: a literal address or a known overlay suffix is enough."""
+    assert "public-ip" in facts(_dev(endpoints=[{"target": "1.2.3.4"}]), {}, None)
+    assert "lan" in facts(_dev(endpoints=[{"target": "192.168.1.9"}]), {}, None)
+    assert facts(_dev(endpoints=[{"target": "nas.example.com"}]), {}, None) == []
+
+
+def test_a_relayed_row_does_not_claim_a_route():
+    """`mesh` and `lan` describe *our* route, and a broadcast row exists precisely
+    because we have none. `public-ip` is a property of the machine, so it survives."""
+    dev = _dev(endpoints=[{"target": "192.168.1.9"}])
+    assert facts(dev, {}, {"source": "broadcast"}) == []
+
+    pub = _dev(endpoints=[{"target": "1.2.3.4"}])
+    assert "public-ip" in facts(pub, {}, {"source": "broadcast"})
+
+
+# ------------------------------------------------------------------ tenancy
+
+def test_tenancy_is_projected_from_kind_not_stored_again():
+    """A derived view of one stored field cannot drift out of step with it, unlike a
+    hand-typed `rental` tag."""
+    assert "rental" in facts(_dev(kind=Kind.RENTAL), {}, None)
+    assert "shared" in facts(_dev(kind=Kind.SHARED), {}, None)
+    assert facts(_dev(kind=Kind.PERMANENT), {}, None) == []
+
+
+# ------------------------------------------------------------------ the matcher
+
+def test_one_namespace_matches_either_list():
+    row = {"tags": ["prod"], "facts": ["gpu", "cuda"]}
+    assert matches_tag(row, "prod") and matches_tag(row, "cuda")
+    assert not matches_tag(row, "nas")
+
+
+def test_the_filter_is_case_insensitive():
+    """The request that prompted tags said "GPU", "NAS" and "IP"; facts are lowercase."""
+    assert matches_tag({"tags": [], "facts": ["gpu"]}, "GPU")
+    assert matches_tag({"tags": ["nas"], "facts": []}, "  NAS ")
+
+
+def test_a_declared_tag_may_shadow_a_fact():
+    """Deliberately allowed. A hand-set `gpu` on a box whose nvidia-smi is wedged, or an
+    accelerator fleet has no probe for, is the correct use of the field -- and the YAML
+    is hand-editable, so a CLI-only refusal would be a rule the file format ignores."""
+    assert matches_tag({"tags": ["gpu"], "facts": []}, "gpu")
+    assert view.is_fact_name("gpu") and view.is_fact_name("vram-24g")
+    assert not view.is_fact_name("prod")
+
+
+# ------------------------------------------------------------------ the commands
+
+def _cli(tmp_path, monkeypatch, devices):
+    from typer.testing import CliRunner
+
+    from fleet import cli, inventory as inv, store
+
+    path = tmp_path / "inventory.yaml"
+    inv.save(devices, path)
+    monkeypatch.setattr(inv, "INVENTORY_PATH", path)
+    monkeypatch.setattr(store, "DB_PATH", tmp_path / "cache.db")
+    monkeypatch.setattr(cli, "local_device_id", lambda: "")
+    return CliRunner(), cli
+
+
+def test_edit_adds_and_removes_tags(tmp_path, monkeypatch):
+    from fleet import inventory as inv
+
+    runner, cli = _cli(tmp_path, monkeypatch, [_dev(name="box")])
+    assert runner.invoke(cli.app, ["edit", "box", "--tag", "prod", "--tag", "nas"]).exit_code == 0
+    assert inv.load(inv.INVENTORY_PATH)[0].tags == ["prod", "nas"]
+
+    assert runner.invoke(cli.app, ["edit", "box", "--untag", "prod"]).exit_code == 0
+    assert inv.load(inv.INVENTORY_PATH)[0].tags == ["nas"]
+
+
+def test_tags_are_lowercased_on_write(tmp_path, monkeypatch):
+    """The request said "GPU", "NAS", "IP". Storing those verbatim beside lowercase
+    facts would make `--tag nas` miss the machine the user just tagged."""
+    from fleet import inventory as inv
+
+    runner, cli = _cli(tmp_path, monkeypatch, [_dev(name="box")])
+    runner.invoke(cli.app, ["edit", "box", "--tag", "NAS"])
+    assert inv.load(inv.INVENTORY_PATH)[0].tags == ["nas"]
+
+
+def test_adding_the_same_tag_twice_is_not_a_change(tmp_path, monkeypatch):
+    from fleet import inventory as inv
+
+    runner, cli = _cli(tmp_path, monkeypatch, [_dev(name="box", tags=["prod"])])
+    before = inv.load(inv.INVENTORY_PATH)[0].updated_at
+    runner.invoke(cli.app, ["edit", "box", "--tag", "prod"])
+    after = inv.load(inv.INVENTORY_PATH)[0]
+    assert after.tags == ["prod"]
+    assert after.updated_at == before, "a no-op must not win the next merge"
+
+
+def test_ls_filters_on_tags_and_facts(tmp_path, monkeypatch):
+    from fleet import cli as cli_mod
+
+    devices = [_dev(name="a", tags=["prod"]), _dev(name="b", tags=["nas"])]
+    runner, cli = _cli(tmp_path, monkeypatch, devices)
+    monkeypatch.setattr(cli_mod, "_rows", lambda *a, **k: [
+        {"name": "a", "tags": ["prod"], "facts": ["gpu", "cuda"], "status": "ok"},
+        {"name": "b", "tags": ["nas"], "facts": ["linux"], "status": "ok"},
+    ])
+    monkeypatch.setattr(cli_mod, "fleet_view", lambda rows: {"devices": rows, "summary": {}})
+
+    out = runner.invoke(cli.app, ["ls", "--tag", "cuda", "--json"]).stdout
+    assert '"a"' in out and '"b"' not in out
+    out = runner.invoke(cli.app, ["ls", "--tag", "nas", "--json"]).stdout
+    assert '"b"' in out and '"a"' not in out
+    # repeats are AND
+    out = runner.invoke(cli.app, ["ls", "--tag", "cuda", "--tag", "nas", "--json"]).stdout
+    assert '"a"' not in out and '"b"' not in out
+
+
+def test_ls_says_what_it_could_not_judge(tmp_path, monkeypatch):
+    """A machine with no telemetry fails every filter, and the whole fleet is factless
+    right after a cache wipe. Silence would read as "nothing suitable exists"."""
+    from fleet import cli as cli_mod
+
+    runner, cli = _cli(tmp_path, monkeypatch, [_dev(name="a")])
+    monkeypatch.setattr(cli_mod, "_rows", lambda *a, **k: [
+        {"name": "a", "tags": [], "facts": [], "status": "timeout"},
+    ])
+    monkeypatch.setattr(cli_mod, "fleet_view", lambda rows: {"devices": rows, "summary": {}})
+    r = runner.invoke(cli.app, ["ls", "--tag", "gpu"])
+    assert "not considered" in r.output and "a" in r.output

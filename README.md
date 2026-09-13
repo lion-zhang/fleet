@@ -22,6 +22,7 @@ After that you mostly talk to your agents, not to fleet.
 ```bash
 fleet access machine_A --allow machine_B    # who may reach what; then `fleet sync`
 fleet ls                                    # what is free right now
+fleet ls --tag cuda --tag vram-24g          # by capability, not by remembering names
 fleet top                                   # live view, like htop for the fleet
 fleet edit machine_A --ssh "ssh -p 40001 root@1.2.3.4"   # rentals recycle addresses
 fleet edit machine_B --disk-path /workspace              # watch the volume that matters

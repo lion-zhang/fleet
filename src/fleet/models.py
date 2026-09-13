@@ -112,6 +112,11 @@ class Snapshot:
     hostname: str = ""
     machine_id: str = ""
     os: str = ""
+    # `uname -s`: Linux | Darwin | Windows. A clean token both payloads have always sent
+    # and the parser used to throw away, leaving OS family to be guessed from `os` free
+    # text ("Ubuntu 26.04 LTS", "Microsoft Windows 11 Pro") -- which classifies a BSD or
+    # OpenWrt box by elimination, i.e. wrongly. Empty on snapshots taken before this.
+    uname_s: str = ""
     kernel: str = ""
     arch: str = ""
     uptime_s: int | None = None

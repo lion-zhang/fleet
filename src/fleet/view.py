@@ -8,10 +8,12 @@ rather than a bug you find at 2am.
 
 from __future__ import annotations
 
+import time
 from enum import StrEnum
 from typing import Any
 
 from .models import Device, Kind, Status
+from .sshcmd import route_of
 from .store import age_s
 
 
@@ -38,6 +40,187 @@ def _gpu_view(g: dict) -> dict:
 
 
 DISK_ALERT_PCT = 90
+
+# ---------------------------------------------------------------- derived facts
+#
+# Facts are what fleet can measure; `Device.tags` is what you declare. Keeping them
+# apart is the point: a hand-written "gpu" tag survives the card being pulled, and the
+# agent that trusted it sends a job to a machine with no GPU. Same reasoning, and the
+# same wording, as auth_of above: a value with two sources that disagree is worse than
+# one that is recomputed.
+#
+# THE INVARIANT: a fact may only be derived from a field that does not change while the
+# machine exists. arch, core count, installed RAM, GPU model and VRAM qualify. Free
+# memory, free disk, utilisation, load, logged-in users and container/slurm state do
+# not, and neither does a rental's vast_label -- a recycled port means the cached
+# snapshot is describing someone else's machine. That invariant is what lets a fact be
+# computed from an old snapshot: "this box has 4 H100s" stays true while it is off.
+
+# Rungs are the sizes real hardware ships in, not powers of two, because a 12-core part
+# bucketed to 8 is a 33% lie about the number most likely to size a job.
+_VRAM_GIB = (4, 8, 12, 16, 24, 32, 40, 48, 64, 80, 96, 128, 192)
+_RAM_GIB = (4, 8, 16, 32, 64, 128, 256, 512, 1024)
+_CORES = (2, 4, 8, 12, 16, 24, 32, 48, 64, 96, 128, 192, 256)
+_STORAGE_TIB = (1, 2, 4, 8, 16, 32, 64)
+
+# Reported capacity runs under the nominal size, and by more than you would guess.
+# Measured across seven real machines: 32 GiB laptop reports 28.5 (0.891), 4 GiB VM
+# reports 3.6 (0.900), 128 GiB workstation reports 122.9 (0.960), Apple reports exactly
+# 64.0. Firmware reserve and integrated-GPU carve-out account for most of it. Flooring to
+# a rung instead would tag that laptop `ram-16g` -- wrong by a factor of two on the
+# most-read fact in the set.
+#
+# 0.85 is safe rather than generous: clearing a rung falsely would need the value to
+# reach 0.85x the rung ABOVE, i.e. a ladder gap under 1/0.85 = 1.18x. Every gap in every
+# ladder below is at least 1.2x, and a test asserts it so a future rung cannot break it.
+_SLACK = 0.85
+
+
+def _ladder(value: float, rungs: tuple[int, ...], prefix: str, suffix: str) -> list[str]:
+    """Every rung the value clears, smallest first -- a downward closure, not one label.
+
+    `vram-24g` therefore means *at least* 24G, which is the only question anyone asks.
+    One exact label could not answer it: `--tag` repeats as AND, so `--tag vram-24g
+    --tag vram-48g` would match nothing, and an agent wanting ">= 24G" would have to know
+    the whole ladder and OR across it. Closure makes the obvious query the correct one.
+    """
+    return [f"{prefix}{r}{suffix}" for r in rungs if value >= r * _SLACK]
+
+
+def is_macos(snap: dict | None) -> bool:
+    """One predicate, because `derive_id` keys device identity on the same question."""
+    snap = snap or {}
+    return (snap.get("uname_s") == "Darwin"
+            or str(snap.get("os", "")).lower().startswith(("macos", "mac os", "darwin")))
+
+
+_ARCH = {"x86_64": "x86_64", "amd64": "x86_64", "x64": "x86_64",
+         "arm64": "arm64", "aarch64": "arm64"}
+
+
+def facts(dev: Device, snap: dict | None, state: dict | None) -> list[str]:
+    """What fleet can measure about this machine. Derived, never stored.
+
+    Ordered, never a set: string hashing is randomised per process, so a set would make
+    `fleet ls --json` emit different bytes on every run -- and the determinism test
+    compares two calls inside one process, so it would pass while the property is broken.
+    """
+    out: list[str] = []
+    snap = snap or {}
+    gpus = snap.get("gpus") or []
+
+    # `gpu` means you own one; `cuda` means you can run on it. They come apart when
+    # nvidia-smi is present but wedged (gpu_present == "err", the classic state after a
+    # kernel upgrade): the card is almost certainly there and the list is empty. Saying
+    # nothing makes an expensive machine vanish from your own inventory; saying `cuda`
+    # sends a job to a box that dies at torch.cuda.init.
+    if gpus:
+        out.append("gpu")
+        out.append("cuda")
+        if len(gpus) > 1:
+            out.append("multi-gpu")
+        # The largest single card, never the total: a model fits in one card's VRAM or it
+        # does not, and 4x24G is not a 96G machine. Same rule as free_vram_mib below.
+        out += _ladder(max(g["vram_total_mib"] for g in gpus) / 1024, _VRAM_GIB, "vram-", "g")
+    elif snap.get("gpu_present") == "err":
+        out.append("gpu")
+    elif is_macos(snap) and _ARCH.get(str(snap.get("arch", "")).lower()) == "arm64":
+        # Apple Silicon. The probe runs only nvidia-smi, so a 40-core M3 Max GPU reports
+        # gpu.present=0; inferring it is the only way this machine is findable at all.
+        # No VRAM rung: memory is unified, and claiming a number would be a guess.
+        out += ["gpu", "metal"]
+
+    if snap:
+        family = {"Linux": "linux", "Darwin": "macos", "Windows": "windows"}.get(
+            str(snap.get("uname_s", "")))
+        if family is None and snap.get("os"):
+            # Snapshots taken before uname_s was parsed. Only macOS and Windows are
+            # named positively; everything else stays unclassified rather than being
+            # called linux by elimination, which is how a BSD NAS gets mislabelled.
+            low = str(snap["os"]).lower()
+            family = "macos" if is_macos(snap) else "windows" if "windows" in low else None
+        if family:
+            out.append(family)
+        if arch := _ARCH.get(str(snap.get("arch", "")).lower()):
+            out.append(arch)
+        if cores := snap.get("cpu_cores"):
+            # Logical CPUs -- nproc, hw.ncpu -- so a 16C/32T part is cores-32. Exact, no
+            # slack: a core count is a count, not a rounded capacity.
+            out += [f"cores-{r}" for r in _CORES if cores >= r]
+        if mem := snap.get("mem_total_kb"):
+            out += _ladder(mem / 1048576, _RAM_GIB, "ram-", "g")
+        if room := _biggest_volume(snap):
+            out += _ladder(room, _STORAGE_TIB, "storage-", "t")
+
+    # Projected from Device.kind rather than stored again. A derived view of one stored
+    # field cannot drift out of step with it, unlike a hand-typed `rental` tag.
+    if dev.kind in (Kind.RENTAL, Kind.SHARED, Kind.APPLIANCE):
+        out.append(dev.kind.value)
+
+    out += _reachability(dev, state)
+    return out
+
+
+def _biggest_volume(snap: dict) -> float:
+    """TiB of the largest writable volume. Capacity, not free space -- free space flaps.
+
+    used+avail, never total_kb: filesystems reserve blocks nobody can write, and per
+    _disk_view above macOS differs by tens of percent. Max rather than sum, because
+    bind mounts and container overlays would be counted twice.
+    """
+    sizes = [(d.get("used_kb", 0) + d.get("avail_kb", 0)) / 1073741824
+             for d in snap.get("disks") or [] if d.get("writable", True)]
+    return max(sizes, default=0.0)
+
+
+def _reachability(dev: Device, state: dict | None) -> list[str]:
+    """How this machine is reached, from the endpoints recorded for it.
+
+    `public-ip` is a property of the machine and survives being relayed. `mesh` and `lan`
+    describe *our route*, and a broadcast row exists precisely because we have none, so
+    claiming one there would assert reachability we demonstrably lack.
+    """
+    vias = {route_of(e.get("via", ""), e.get("target", "")) for e in dev.endpoints}
+    out = ["public-ip"] if "public" in vias else []
+    if (state or {}).get("source", "self") == "self":
+        out += [v for v in ("mesh", "lan") if v in vias]
+    return out
+
+
+def matches_tag(row: dict, tag: str) -> bool:
+    """One matcher, here rather than in cli.py, so every surface agrees.
+
+    Declared tags and derived facts share one query namespace: asking for `gpu` should
+    not require knowing which of the two a given machine got it from. Fact names are
+    deliberately not reserved -- a hand-set `gpu` on a box whose nvidia-smi is broken is
+    the correct use of the field, and the YAML is hand-editable anyway, so a CLI-only
+    rule would be one the file format ignores.
+    """
+    tag = normalise_tag(tag)
+    return tag in row.get("tags", []) or tag in row.get("facts", [])
+
+
+# The fixed half of the derived vocabulary. Used ONLY to warn when a declared tag
+# shadows a fact -- never to refuse one. A hand-set `gpu` on a box whose nvidia-smi is
+# wedged, or on an accelerator fleet has no probe for, is the correct use of the field.
+FACT_WORDS = frozenset({
+    "gpu", "cuda", "metal", "multi-gpu",
+    "linux", "macos", "windows", "x86_64", "arm64",
+    "public-ip", "mesh", "lan",
+    "rental", "shared", "appliance",
+})
+_FACT_PREFIXES = ("vram-", "ram-", "cores-", "storage-")
+
+
+def is_fact_name(tag: str) -> bool:
+    """Whether a name belongs to the derived vocabulary. For a warning, not a refusal."""
+    tag = normalise_tag(tag)
+    return tag in FACT_WORDS or tag.startswith(_FACT_PREFIXES)
+
+
+def normalise_tag(tag: str) -> str:
+    """Lowercase, so `--tag GPU` finds `gpu`. The request said "GPU", "NAS", "IP"."""
+    return (tag or "").strip().lower()
 
 
 def _disk_view(d: dict) -> dict:
@@ -170,7 +353,14 @@ def device_view(dev: Device, state: dict | None, snap: dict | None,
                       "healthy": s.get("healthy")}
                      for s in (snap or {}).get("services", [])],
         "alerts": _alerts(dev, snap, state),
-        "tags": list(dev.tags),
+        "tags": [normalise_tag(t) for t in dev.tags],
+        "facts": facts(dev, snap, state),
+        # How old the *hardware reading* is, which is not telemetry_age_s: store.latest
+        # answers state and snapshot with two independent queries, so a device probed
+        # 4s ago to a timeout can carry a three-day-old broadcast snapshot underneath a
+        # `source: self` row. Facts read as timeless claims, so they need their own
+        # denominator.
+        "snapshot_age_s": (int(time.time()) - snap["ts"]) if snap and snap.get("ts") else None,
     }
     if state and status != Status.OK.value:
         out["error"] = {"class": state.get("error_class"), "detail": state.get("error_detail")}

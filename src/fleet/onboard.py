@@ -9,7 +9,7 @@ import unicodedata
 from .models import Device, Kind, ProbeResult, Snapshot, Status
 from .probe.runner import run_probe, run_probe_local
 from .sshauth import classify, probe_server
-from .sshcmd import Endpoint, parse_ssh_command, resolve
+from .sshcmd import Endpoint, classify_route, parse_ssh_command, resolve
 
 _RENTAL_HOST_RE = re.compile(r"(vast\.ai|runpod|autodl|seetacloud|lambdalabs|paperspace)", re.I)
 
@@ -112,6 +112,29 @@ def onboard_self(*, name: str | None = None, kind: str | None = None,
     return dev, res
 
 
+
+def _resolved_route(target: str) -> str:
+    """Classify a hostname by what it resolves to, once, at add time.
+
+    Most targets are names, not literals, so without this almost nothing would be
+    classified. Kept out of `classify_route` so that function stays pure and the DNS
+    call happens only where a probe is already about to run.
+    """
+    import socket
+
+    try:
+        infos = socket.getaddrinfo(target, None)
+    except OSError:
+        return ""
+    seen = {classify_route(i[4][0]) for i in infos}
+    # A name that answers with both a private and a public address is reachable from
+    # outside; say the stronger thing rather than picking whichever came back first.
+    for kind in ("public", "mesh", "lan"):
+        if kind in seen:
+            return kind
+    return ""
+
+
 def onboard(ssh_command: str, *, name: str | None = None, kind: str | None = None,
             alias: str = "", taken_names: set[str] | None = None, timeout: float = 20.0,
             probe: bool = True) -> tuple[Device, ProbeResult]:
@@ -119,10 +142,10 @@ def onboard(ssh_command: str, *, name: str | None = None, kind: str | None = Non
     reason and needs_review -- because silently dropping it is worse than listing it."""
     ep = resolve(parse_ssh_command(ssh_command))
     ep.name = "primary"
-    if ep.target.endswith(".ts.net"):
-        # An overlay address, which is all `via` needs to say: it means "stable, do not
-        # rewrite this when the public IP moves". Which overlay is not fleet's business.
-        ep.via = "mesh"
+    # Classify the route once, here, where a network round trip is already being paid
+    # for. `via` decides both which address `edit` is willing to overwrite (an overlay
+    # name is stable; a public IP churns) and whether the machine reports `public-ip`.
+    ep.via = classify_route(ep.target) or _resolved_route(ep.target)
 
     res = run_probe(ep, timeout=timeout) if probe else ProbeResult(status=Status.SKIPPED_POLICY)
     # Only ask who authorizes here when the key was actually refused: that is the one

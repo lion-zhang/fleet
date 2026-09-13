@@ -260,6 +260,15 @@ def name_cell(row: dict[str, Any]) -> str:
     # fitting the fleet on one screen.
     if row.get("alias"):
         name += f" [dim]({row['alias']})[/dim]"
+    # Declared tags only, and at most two, on line 1. Facts are deliberately absent: the
+    # table already shows them, numerically and more precisely -- `vram-24g` and
+    # `cores-32` are lossy restatements of the GPU and CPU columns two cells away. And
+    # this must never wrap: name_cell owns the gutter below, whose height comes from
+    # device_lines(), which counts GPUs and disks and knows nothing about tags.
+    if tags := row.get("tags") or []:
+        shown = " ".join(f"·{t}" for t in tags[:2])
+        more = f"+{len(tags) - 2}" if len(tags) > 2 else ""
+        name += f" [dim]{shown}{more}[/dim]"
     # The center was invisible outside --json, which stops being tenable once "is the
     # center reachable" decides whether a grant happens now or waits.
     if row.get("role") == "center":
@@ -344,6 +353,13 @@ def render_device(row: dict[str, Any], live_within: int = 10) -> Table:
     for proc in (row.get("top_cpu") or [])[:5]:
         t.add_row("[dim]cpu proc[/dim]",
                   f"{proc.get('cpu_pct', 0):.0f}%  [dim]{proc.get('comm', '')}[/dim]")
+    # Both lists, labelled, because this is the one surface with room for them and the
+    # one place a human decides anything. Kept apart so provenance survives: `tags` is
+    # what you said, `facts` is what the last probe measured.
+    if tags := row.get("tags") or []:
+        t.add_row("[bold]tags[/bold]", " ".join(tags))
+    if fs := row.get("facts") or []:
+        t.add_row("[bold]facts[/bold]", f"[dim]{' '.join(fs)}[/dim]")
     for alert in row.get("alerts") or []:
         t.add_row("[yellow]![/yellow]", f"[yellow]{alert}[/yellow]")
     return t

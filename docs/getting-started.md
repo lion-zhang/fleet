@@ -64,8 +64,8 @@ fleet add "ssh -p 58418 root@1.2.3.4" --name machine_A --alias a
 fleet ls
 ```
 
-Names are guessed from the host; `--name` overrides that, and `--alias` gives the machine
-a short handle you can type anywhere a name goes — `fleet ssh a`, `fleet show a`, `fleet
+Names are guessed from the host; `--name` overrides that, `--tag` labels it (repeatable),
+and `--alias` gives the machine a short handle you can type anywhere a name goes — `fleet ssh a`, `fleet show a`, `fleet
 access a --allow b`. Both are optional, and `fleet edit NAME --alias SHORT` sets one later
 (`--alias ""` removes it). An alias cannot be another machine's name or alias: the point
 is that the short form is never ambiguous.
@@ -113,6 +113,7 @@ This is the point the setup hands over. You ask in words; the agent picks the co
 | You say | The agent runs |
 |---|---|
 | "what's free right now?" | `fleet ls --json` |
+| "find me a box with a 24G card" | `fleet ls --tag cuda --tag vram-24g --json` |
 | "train this on whatever has a spare GPU" | `fleet ls --json`, then `fleet ssh NAME -- ...` |
 | "add my new rental, ssh -p 40001 root@1.2.3.4" | `fleet add "ssh -p 40001 root@1.2.3.4"` |
 | "let machine_B reach machine_A" | `fleet access machine_A --allow machine_B`, then `fleet sync` |
@@ -133,6 +134,54 @@ half-heard fragment is how the wrong one gets removed.
 ever asks, and a human has to run it. And the irreversible ones: `fleet rm`, handing the
 center over, `fleet center --dissolve`. Agents are told to report a refusal rather than
 work around it.
+
+## Finding the right machine
+
+Two things answer "which machine should I use", and they are kept apart on purpose.
+
+**Facts are measured.** fleet recomputes them from the last probe every time, so they are
+current by construction — pull a GPU out and the `gpu` fact goes with it. You never set
+them.
+
+```
+gpu cuda metal multi-gpu vram-NNg          what it can compute
+linux macos windows x86_64 arm64           what it runs
+cores-NN ram-NNg storage-NNt               how big it is
+public-ip mesh lan                         how you reach it
+rental shared appliance                    what it costs you to use
+```
+
+**Tags are declared.** They are for what no probe can tell — `prod`, `nas`, `quiet`,
+`backup`. You set them, and they stay until you change them.
+
+```bash
+fleet edit machine_A --tag nas --tag backup
+fleet edit machine_A --untag backup
+```
+
+One filter searches both, and repeats mean *and*:
+
+```bash
+fleet ls --tag cuda                      # every NVIDIA machine
+fleet ls --tag cuda --tag vram-24g       # ...with a card of at least 24G
+fleet ls --tag nas                       # whatever you called a NAS
+```
+
+**Size facts mean "at least".** A machine with a 48G card also reports `vram-24g`, which
+is what makes `--tag vram-24g` the right way to ask for "24G or more". `cores-NN` counts
+logical CPUs, so a 16-core chip with hyperthreading reports `cores-32`.
+
+**`gpu` without `cuda`** means the card is there but the driver is not answering — usually
+after a kernel upgrade. The machine still shows up when you ask what you own, and stays
+out of the way when you ask what can run CUDA.
+
+Apple Silicon reports `metal` rather than `cuda`, and no VRAM figure: memory is unified,
+and fleet will not invent a number. A machine fleet has never probed has no facts at all
+and matches nothing — `fleet ls --tag` says how many it had to skip rather than quietly
+implying there is nothing suitable.
+
+A tag may share a name with a fact, deliberately. If a box has an accelerator fleet cannot
+see, tagging it `gpu` by hand is the right move, and nothing will overwrite you.
 
 ## Granting access
 
@@ -241,6 +290,8 @@ fleet add "ssh user@host"              # add and enrol a machine
 fleet add "ssh user@host" --name machine_A --alias a     # naming it yourself
 fleet edit machine_A --ssh "ssh -p 40001 root@1.2.3.4"   # it moved
 fleet edit machine_A --alias a                           # a short handle to type
+fleet edit machine_A --tag nas --untag scratch           # labels you choose
+fleet ls --tag cuda --tag vram-24g                       # find a machine by capability
 fleet edit machine_A --disk-path /workspace              # watch this volume
 fleet access machine_A --allow machine_B                 # grant
 fleet access machine_A --deny machine_B                  # revoke
