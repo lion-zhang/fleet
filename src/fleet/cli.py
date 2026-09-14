@@ -896,12 +896,29 @@ def cmd_sync(serve: bool = typer.Option(False, "--serve",
         return
 
     devices = inv.load()
+    from . import access as acl
+
+    # Whether this machine is the center is settled by the access list -- possession of
+    # the signing key -- not by `Device.role`. role rides `inventory.merge`, where a peer
+    # with a fast clock could flip it, and comparing `local_device_id()` adds a third way
+    # to be wrong: it shells out to `ioreg` on macOS, which is not on cron's PATH, and
+    # returns nothing at all on Windows. Ask the one authority.
+    try:
+        if acl.is_center(acl.load()):
+            _sweep(devices)
+            return
+    except acl.AccessError:
+        pass                               # no access list here: a spoke, or no fleet yet
+
     center = next((d for d in inv.live(devices) if d.role == "center"), None)
     if center is None:
-        err.print("[red]No center designated.[/red]  Pick one:  "
-                  "[bold]fleet edit NAME --role center[/bold]")
+        err.print("[red]This machine is not in a fleet, and no center is recorded.[/red]")
+        err.print("  [dim]start one here with [bold]fleet center --init[/bold], or let "
+                  "the center reach this machine once[/dim]")
         raise typer.Exit(2)
     if center.id and center.id == local_device_id():
+        # An inventory that predates the access list, where `role` was the only answer.
+        # Kept so `fleet sync` on such a center stays a no-op rather than dialling itself.
         _sweep(devices)
         return
     eps = inv.endpoints_of(center)
