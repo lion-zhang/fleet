@@ -393,3 +393,21 @@ def test_the_windows_installer_quotes_what_it_is_given():
 
     script = install_script("https://x/y'; rm -rf /; '.git", platform=WINDOWS)
     assert "'https://x/y''; rm -rf /; ''.git'" in script
+
+
+def test_the_windows_installer_does_not_stop_fleet_by_running_fleet():
+    """fleet.exe is a uv trampoline that executes Scripts\\python.exe, so stopping the
+    service by invoking fleet holds open the directory uv is about to replace. It fails
+    with "Access is denied" on Scripts -- and that is not a failed update, because uv has
+    deleted most of the installation by then and the machine is left with no working
+    fleet at all. Found by it happening twice on the real center."""
+    from fleet.ssh.cmd import WINDOWS
+
+    script = install_script("https://x/y.git", platform=WINDOWS)
+    code = "\n".join(l for l in script.splitlines() if not l.strip().startswith("#"))
+    assert "service stop" not in code, "the stop must not go through the fleet binary"
+    assert "schtasks /end" in code, "it still has to stop the task"
+    assert "Start-Sleep" in code, "ending a process returns before its files are released"
+    # and the order matters: stop, wait, then replace
+    assert code.index("schtasks /end") < code.index("uv tool install")
+    assert code.index("Start-Sleep") < code.index("uv tool install")

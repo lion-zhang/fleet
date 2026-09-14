@@ -157,10 +157,30 @@ if (Test-Path (Join-Path $dir '.git')) {{
   git clone --quiet --branch $ref $repo $dir
 }}
 
-# Before replacing the files it is running from. Best-effort and quiet: a machine that is
-# not a center has no service to stop.
+# Stop the center before replacing the files it runs from -- and do it here rather than
+# by calling `fleet service stop`, which was the mistake this replaces. `fleet.exe` is a
+# uv trampoline that executes Scripts\\python.exe, so stopping fleet *by running fleet*
+# holds open the directory uv is about to remove. It fails with "Access is denied" on
+# Scripts, and that is not a failed update: uv has deleted most of the installation by
+# then, so the machine is left with no working fleet at all.
+schtasks /end /tn fleet-center 2>&1 | Out-Null
+taskkill /f /im fleet.exe 2>&1 | Out-Null
+Get-CimInstance Win32_Process -Filter "Name='pythonw.exe'" |
+  Where-Object {{ $_.CommandLine -like '*-m*fleet*center*--listen*' }} |
+  ForEach-Object {{ Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }}
+
+# Ending a process returns before Windows has released its files, so wait for it rather
+# than racing it.
+$deadline = (Get-Date).AddSeconds(15)
+while ((Get-Date) -lt $deadline) {{
+  $alive = @(Get-Process fleet -ErrorAction SilentlyContinue) + @(
+    Get-CimInstance Win32_Process -Filter "Name='pythonw.exe'" |
+    Where-Object {{ $_.CommandLine -like '*-m*fleet*center*--listen*' }})
+  if ($alive.Count -eq 0) {{ break }}
+  Start-Sleep -Milliseconds 400
+}}
+
 $fleet = Join-Path $env:USERPROFILE '.local\\bin\\fleet.exe'
-if (Test-Path $fleet) {{ & $fleet service stop 2>&1 | Out-Null }}
 
 uv tool install --force --reinstall-package fleet-broker --quiet $dir
 
