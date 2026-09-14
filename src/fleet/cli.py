@@ -1132,7 +1132,11 @@ def _sweep(devices) -> None:
     by_id = {d.id: d for d in inv.live(devices)}
     pending = [(k, st) for k, st in ledger.items() if not st.converged]
     if not pending:
+        # Still hand the inventory round. Keys converging is the common case, and it is
+        # exactly when a spoke has nothing else to learn from -- returning here meant a
+        # settled fleet never told anyone anything.
         console.print("[dim]· access is up to date[/dim]")
+        _broadcast(devices)
         return
 
     conn = store.connect()

@@ -659,3 +659,36 @@ def test_a_machine_without_fleet_is_not_an_error(tmp_path, monkeypatch):
     inv.save(devices, inv.INVENTORY_PATH)
     monkeypatch.setattr(cli, "run_sync", lambda *a, **k: (127, "fleet: command not found"))
     cli._broadcast(devices)                # must not raise
+
+
+def test_a_settled_fleet_still_hands_the_inventory_round(tmp_path, monkeypatch):
+    """Keys converging is the common case, and the early return for it skipped the
+    handover entirely -- so a fleet that had finished setting itself up was precisely
+    the one that never told its machines anything."""
+    from typer.testing import CliRunner
+
+    from fleet import access as acl, cli, inventory as inv, store
+    from fleet.models import Device, Kind
+
+    for n in ("ACCESS_PATH", "LEDGER_PATH", "CACHE_PATH", "OUTBOX_PATH"):
+        monkeypatch.setattr(acl, n, tmp_path / getattr(acl, n).name)
+    monkeypatch.setattr(inv, "INVENTORY_PATH", tmp_path / "inventory.yaml")
+    monkeypatch.setattr(store, "DB_PATH", tmp_path / "cache.db")
+    monkeypatch.setattr(cli, "local_device_id", lambda: "id:center")
+
+    devices = [Device(id="id:center", name="hub", kind=Kind.PERMANENT, role="center"),
+               Device(id="id:a", name="a", kind=Kind.PERMANENT,
+                      endpoints=[{"target": "1.2.3.4", "user": "root", "port": 22}])]
+    inv.save(devices, inv.INVENTORY_PATH)
+    # no edges at all, so nothing is ever pending
+    acl.save(acl.Access(fleet_id="7f3a9c", center="SHA256:c", keys={
+        "SHA256:c": {"name": "hub", "pubkey": "x", "device_id": "id:center"}}),
+        acl.ACCESS_PATH)
+
+    handed = []
+    monkeypatch.setattr(cli, "run_sync",
+                        lambda ep, payload: handed.append(ep.target) or (0, payload))
+    monkeypatch.setattr(cli, "_enrol_unpinned", lambda *a, **k: False)
+
+    assert CliRunner().invoke(cli.app, ["sync"]).exit_code == 0
+    assert handed == ["1.2.3.4"]
