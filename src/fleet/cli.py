@@ -3,67 +3,74 @@ universal interface: cron jobs, Makefiles, and non-MCP agents can all use it."""
 
 from __future__ import annotations
 
-import getpass
 import contextlib
+import getpass
 import json as jsonlib
+import os
 import re
 import subprocess
 import sys
 import time
-from pathlib import Path
-
-from contextlib import suppress
+from contextlib import contextmanager, suppress
 from dataclasses import replace
+from functools import lru_cache
+from pathlib import Path
 
 import typer
 import yaml
-from contextlib import contextmanager
-from functools import lru_cache
-
 from rich.console import Console, Group
+from rich.live import Live
+from rich.markup import escape
 from rich.table import Table
 from rich.text import Text
 
-from .state import inventory as inv
-from .state import store
-from .config import DB_PATH, DEFAULT_PORT, FLEET_KEY, INVENTORY_PATH, load_config
+from . import reconcile as rec
+from . import service
+from .agents import (MCP_CLIENTS, TARGETS, detect_mcp_clients, detect_targets,
+                     fleet_command, fleet_executable, install, install_mcp,
+                     package_version, uninstall, uninstall_mcp)
+from .config import (CONFIG_DIR, DB_PATH, DEFAULT_PORT, FLEET_KEY, INVENTORY_PATH,
+                     STATE_DIR, load_config)
 from .edit import apply_edits
 from .install import build_install_argv, install_script
-from .ssh.keys import (ensure_keypair, install_key,
-                   install_key_over_existing_access, pty_available)
+from .mcpserver import McpUnavailable, serve as serve_mcp
 from .models import Device, Kind, Status
-from .ops import FleetError
-from .ops import identity
-from .ops.rows import snapshot as _rows, tick as _live_tick
+from .onboard import onboard, onboard_self
+from .ops import FleetError, identity
 from .ops import sync as _sync
-from .ops.sweep import (apply_now as _apply_now, broadcast as _broadcast,
-                        endpoint_for as _endpoint_for,
-                        enrol_unpinned as _enrol_unpinned, run as _sweep)
-from .ops.handover import (accept as _accept_handover,
-                          give_away as _handover)
-from .ops.lifecycle import (dissolve as _dissolve, leave as _leave_fleet,
-                           membership as _fleet_membership)
-from .ops.migrate import run as _migrate_passwords
-from .ops.names import canonical as _canonical
 from .ops.enrol import (finish_add as _enrol_after_add,
                         install_our_key as _install_key,
                         register_identity as _register_identity)
+from .ops.handover import accept as _accept_handover, give_away as _handover
+from .ops.lifecycle import (dissolve as _dissolve, leave as _leave_fleet,
+                            membership as _fleet_membership)
+from .ops.migrate import run as _migrate_passwords
+from .ops.names import canonical as _canonical
+from .ops.rows import snapshot as _rows, tick as _live_tick
+from .ops.sweep import (apply_now as _apply_now, broadcast as _broadcast,
+                        endpoint_for as _endpoint_for,
+                        enrol_unpinned as _enrol_unpinned, run as _sweep)
 from .ops.sync import (center_advertise_url, ensure_fresh,
                        file_request as _file_request, post as _post,
                        record_relayed as _record_relayed,
                        telemetry_to_relay as _telemetry_to_relay,
                        this_host as _this_host)
-from .ui import DOT as _DOT, chatter_to_stderr as _chatter_to_stderr, console, emit as _emit, err
-from .onboard import onboard, onboard_self
-from .probe.runner import (probe_env, probe_many, run_probe, run_probe_local)
-from .agents import TARGETS, detect_targets, fleet_command, install, uninstall
-from .ssh.cmd import (build_argv, local_platform, local_shell_argv, remote_command,
-                     remote_platform, resolve_command)
-from .render.top import (Schedule, device_lines, disk_cell, gpu_cells_compact,
-                  name_cell, render_device, render_fleet)
+from .probe.runner import PAYLOAD, probe_env, probe_many, run_probe, run_probe_local
 from .render import view as view_mod
 from .render.staleness import staleness_note
+from .render.top import (Schedule, device_lines, disk_cell, gpu_cells_compact,
+                         name_cell, render_device, render_fleet)
 from .render.view import Detail, auth_of, device_view, fleet_view, matches_tag
+from .serve import serve as serve_center
+from .ssh.cmd import (build_argv, local_platform, local_shell_argv, remote_command,
+                      remote_platform, resolve_command)
+from .ssh.keys import (ensure_keypair, install_key, install_key_over_existing_access,
+                       pty_available)
+from .state import access as acl
+from .state import inventory as inv
+from .state import store
+from .ui import (DOT as _DOT, chatter_to_stderr as _chatter_to_stderr, console,
+                 emit as _emit, err)
 
 app = typer.Typer(
     add_completion=False, no_args_is_help=True, rich_markup_mode="rich",
@@ -170,7 +177,6 @@ def cmd_ls(names: list[str] = typer.Argument(None, help="only these devices"),
                   f"${r['usd_per_hour']:.2f}" if r["usd_per_hour"] else "-",
                   age, note)
     console.print(t)
-    from .state import access as acl
     if note := staleness_note():
         console.print(f"[yellow]![/yellow] [dim]{note}[/dim]")
     s = view["summary"]
@@ -536,7 +542,6 @@ def cmd_install(name: str = typer.Argument(None,
 
 def _show_version(value: bool):
     if value:
-        from .agents import package_version
         console.print(f"fleet {package_version()}")
         raise typer.Exit()
 
@@ -640,7 +645,6 @@ def cmd_sync(serve: bool = typer.Option(False, "--serve",
     [dim]Example:[/dim]  fleet sync
     """
     if serve:
-        from .state import access as acl
 
         raw = sys.stdin.read()
         # The inventory carries the endpoints that decide where `fleet ssh` dials, and
@@ -678,7 +682,6 @@ def cmd_sync(serve: bool = typer.Option(False, "--serve",
         return
 
     devices = inv.load()
-    from .state import access as acl
 
     # Whether this machine is the center is settled by the access list -- possession of
     # the signing key -- not by `Device.role`. role rides `inventory.merge`, where a peer
@@ -781,7 +784,6 @@ def cmd_top(name: str = typer.Argument(None, help="one device, instead of the wh
         conn.close()
         return
 
-    from rich.live import Live
     try:
         with _raw_stdin(), Live(frame(), console=console, screen=True,
                                 refresh_per_second=8) as live:
@@ -842,7 +844,6 @@ def cmd_rm(name: str, yes: bool = typer.Option(False, "--yes", "-y")):
         if near := inv.near_matches(devices, name):
             err.print(f"  [dim]did you mean: {', '.join(near)}[/dim]")
         raise typer.Exit(1)
-    from .state import access as acl
 
     # Removing a machine revokes its keys everywhere, which only the center can do.
     # Removing *yourself* is a different act -- leaving -- and needs nobody's permission,
@@ -910,9 +911,6 @@ def cmd_probe(name: str = typer.Argument(None, help="defaults to this machine"),
         raise typer.Exit(1)
     eps = inv.endpoints_of(dev)
     if raw:
-        import subprocess
-        from .probe.runner import PAYLOAD
-        from .ssh.cmd import build_argv
         argv = build_argv(sorted(eps, key=lambda e: e.preference)[0],
                           remote="sh -s", env=probe_env(dev.probe_mode, dev.disk_paths))
         p = subprocess.run(argv, input=PAYLOAD.read_bytes(), capture_output=True)
@@ -935,7 +933,6 @@ def cmd_ssh(ctx: typer.Context, name: str):
 
     [dim]Example:[/dim]  fleet ssh machine_A -- nvidia-smi
     """
-    import os
     dev = inv.find(inv.load(), name)
     if dev is None:
         err.print(f"[red]No device named {name!r}[/red]")
@@ -994,8 +991,6 @@ def cmd_access(target: str = typer.Argument(None, help="one machine, instead of 
 
     [dim]Example:[/dim]  fleet access machine_A --allow machine_B
     """
-    from .state import access as acl
-    from . import reconcile as rec
 
     if migrate:
         with _as_exit():
@@ -1116,8 +1111,6 @@ def cmd_center(name: str = typer.Argument(None, help="hand the role to this mach
 
     [dim]Example:[/dim]  fleet center machine_B
     """
-    from .state import access as acl
-    from .ssh.keys import ensure_keypair
 
     if pubkey:
         # Deliberately works with nothing reachable and no inventory: the moment you
@@ -1127,8 +1120,6 @@ def cmd_center(name: str = typer.Argument(None, help="hand the role to this mach
         return
 
     if listen:
-        from .state import access as acl
-        from .serve import serve
 
         try:
             acc = acl.load()
@@ -1145,7 +1136,7 @@ def cmd_center(name: str = typer.Argument(None, help="hand the role to this mach
         console.print("  [dim]only keys this fleet has pinned are answered; "
                       "first contact still happens by enrolment[/dim]")
         try:
-            serve(port=where, advertise=url)
+            serve_center(port=where, advertise=url)
         except KeyboardInterrupt:
             console.print("\n[dim]stopped[/dim]")
         return
@@ -1190,8 +1181,6 @@ def cmd_center(name: str = typer.Argument(None, help="hand the role to this mach
             # Installed here rather than left as a step to remember: machines keep
             # themselves current by asking the center, and a center that only listens
             # while someone holds a terminal open is not one they can ask.
-            from . import service
-            from .agents import fleet_executable
 
             console.print(f"  [dim]service: {service.install(fleet_executable(), DEFAULT_PORT)}[/dim]")
         console.print(f"  [dim]key to pre-place on locked-down hosts: "
@@ -1240,9 +1229,8 @@ def cmd_center(name: str = typer.Argument(None, help="hand the role to this mach
         # Worth a line: machines keep themselves current by asking this one, so a
         # service that is not up means the whole fleet quietly goes stale, and nothing
         # else on this page would say so.
-        from . import service as svc
 
-        state = svc.status()
+        state = service.status()
         if state == "running":
             console.print(f"serving  {center_advertise_url(acc)}")
         elif state == "installed":
@@ -1289,7 +1277,6 @@ def cmd_setup(
     root = Path.cwd() if project else Path.home()
     # MCP clients are a second namespace: a desktop app is registered, not written to.
     # `--project` never touches them -- their config is per-user, not per-repo.
-    from .agents import (MCP_CLIENTS, detect_mcp_clients, install_mcp, uninstall_mcp)
 
     mcp_names = tuple(c.name for c in MCP_CLIENTS)
     if target == "auto":
@@ -1319,7 +1306,6 @@ def cmd_setup(
         changes = (uninstall(root, targets, dry_run=dry_run, project=project)
                    + uninstall_mcp(root, clients, dry_run=dry_run))
     else:
-        from .agents import fleet_executable
 
         changes = (install(root, targets, cmd, dry_run=dry_run, project=project)
                    + install_mcp(root, clients, fleet_executable(), dry_run=dry_run))
@@ -1347,14 +1333,11 @@ def cmd_service(action: str = typer.Argument("status",
 
     [dim]Example:[/dim]  fleet service status
     """
-    from . import service
 
     if action == "status":
         console.print(service.status())
         return
     if action == "install":
-        from .state import access as acl
-        from .agents import fleet_executable
 
         try:
             acc = acl.load()
@@ -1383,15 +1366,13 @@ def cmd_mcp():
 
     [dim]Example:[/dim]  fleet mcp
     """
-    from .mcpserver import McpUnavailable, serve
 
     try:
-        serve()
+        serve_mcp()
     except McpUnavailable as exc:
         # escaped: the message names an extra, and `[mcp]` is rich markup -- unescaped
         # it printed the install command with the extra silently removed, which is the
         # one part of it the reader needs.
-        from rich.markup import escape
 
         err.print(f"[red]{escape(str(exc))}[/red]")
         raise typer.Exit(2)
@@ -1403,8 +1384,6 @@ def cmd_paths():
 
     [dim]Example:[/dim]  fleet paths
     """
-    from .state import access as acl
-    from .config import CONFIG_DIR, FLEET_KEY, STATE_DIR
 
     console.print(f"inventory  {INVENTORY_PATH}")
     console.print(f"fleet key  {FLEET_KEY}   [dim](never regenerate: it is this "
