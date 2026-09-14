@@ -273,11 +273,14 @@ Anywhere. A name may be omitted where the obvious subject is the machine you are
 Only on the center. `{cmd} center --json` has `is_center`; if it is false,
 these either refuse or file a request for the center to act on later.
 
-- `{cmd} access NAME --allow MACHINE` -- grant, then `{cmd} sync` to apply it.
+- `{cmd} access NAME --allow MACHINE` -- grant, and it is applied on the spot.
   `--user` names whose authorized_keys, since a box answers as both root@ and ubuntu@
 - `{cmd} access NAME --deny MACHINE` -- revoke
 - `{cmd} sync` -- the sweep: enrol anything not yet enrolled, install and remove keys,
-  and collect telemetry
+  and collect telemetry. Rarely needed now: a grant applies itself, and machines refresh
+  from the center on their own. Reach for it to retry something left pending
+- `{cmd} center --listen` -- serve the fleet so machines refresh themselves instead of
+  waiting to be swept. Long-running: tell the user to run it, do not start it yourself
 - `{cmd} center NAME` -- hand the role over; the successor then runs
   `{cmd} center --accept`, which verifies it can write before taking it
 - `{cmd} center --init` / `--dissolve` -- create a fleet, or take it down. Dissolving
@@ -307,6 +310,9 @@ these either refuse or file a request for the center to act on later.
   undone by running them again.
 - A row in `{cmd} access` that is not `present` is a grant that has not reached its
   target yet, not one that failed. Say so rather than retrying.
+- Reading the fleet refreshes it. `{cmd} ls` and `{cmd} show` pull from the center when
+  this machine's copy has gone stale, so you do not need `{cmd} sync` to see current
+  data -- and a center that is down costs you freshness, never the command.
 - The center is expected to be offline -- it is usually a laptop. Everything already
   granted keeps working without it; only *changes* wait. "The center was last seen 3h
   ago" is a normal state to report, not an error.

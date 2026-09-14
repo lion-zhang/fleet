@@ -24,6 +24,10 @@ DB_PATH = STATE_DIR / "cache.db"
 
 DEFAULTS: dict = {
     "telemetry_ttl_s": 60,      # how long a probe result is considered fresh
+    # How stale this machine's copy of the fleet may get before a read refreshes it from
+    # the center. Lazy on purpose: a machine nobody is using does not need fresh data,
+    # and the moment someone uses it, it gets some.
+    "sync_ttl_s": 300,
     "presence_ttl_s": 10,       # tailscale presence is nearly free, so refresh often
     "probe_timeout_s": 20,
     "connect_timeout_s": 8,

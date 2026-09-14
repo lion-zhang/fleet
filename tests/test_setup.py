@@ -446,6 +446,8 @@ FLAGS_NOT_FOR_AGENTS = {
     "--dissolve": "documented in prose as the counterpart to --init",
     "--init": "documented in prose",
     "--force": "overrides a refusal; an agent must report the refusal, not override it",
+    "--port": "where --listen binds; the user's choice, not an agent's",
+    "--advertise": "--listen plumbing, for a center behind a different address",
 }
 
 

@@ -151,6 +151,7 @@ def cmd_ls(names: list[str] = typer.Argument(None, help="only these devices"),
 
     [dim]Example:[/dim]  fleet ls --json
     """
+    ensure_fresh()
     rows = _rows(list(names) if names else None, refresh=refresh)
     if online:
         rows = [r for r in rows if r["status"] == "ok"]
@@ -221,6 +222,7 @@ def cmd_show(name: str = typer.Argument(None, help="defaults to this machine"),
 
     [dim]Example:[/dim]  fleet show machine_A
     """
+    ensure_fresh()
     if name is None:
         name = _this_machine(inv.load(), "show").name
     rows = _rows([name], refresh=refresh, detail=Detail.FULL)
@@ -1025,6 +1027,112 @@ def _endpoint_for(dev, user: str):
     return replace(ep, user=user or ep.user)
 
 
+def _apply_now(acc, src: str, dst: str, user: str, *, install: bool) -> None:
+    """Reconcile one edge immediately, on the machine it affects.
+
+    Targeted, not a sweep: one connection to the machine whose authorized_keys changes.
+    An unreachable target is not an error -- the ledger keeps it pending with an age and
+    a retry count, which is the honest report and what `fleet access` already shows.
+    """
+    from . import reconcile as rec
+
+    dev = inv.find_exact(inv.load(), acc.name_of(dst))
+    if dev is None:
+        return
+    ep = _endpoint_for(dev, user)
+    if ep is None:
+        return
+    ledger = rec.load_ledger()
+    key = ">".join((src, dst, user))
+    st = ledger.get(key) or rec.EdgeState()
+    conn = store.connect()
+    try:
+        _, snap = store.latest(conn, dev.id)
+    finally:
+        conn.close()
+    ok, out = rec.apply_edge(acc, (src, dst, user), ep, install=install,
+                             platform=remote_platform(snap))
+    if ok:
+        st.observed = st.desired = "present" if install else "absent"
+        st.last_error = ""
+        console.print(f"  [green]✓[/green] applied on {dev.name}")
+    else:
+        st.last_error = out
+        console.print(f"  [yellow]·[/yellow] {dev.name} not reached [dim]({out[:60]})[/dim]")
+        console.print("  [dim]it stays pending; `fleet sync` retries[/dim]")
+    ledger[key] = st
+    rec.save_ledger(ledger)
+
+
+def _this_host(acc) -> str:
+    """The address machines already reach this machine on, for --listen to advertise.
+
+    Taken from the inventory rather than from a socket: what matters is the name the
+    fleet already uses, which on an overlay is the only one that resolves everywhere.
+    """
+    me = inv.find_exact(inv.load(), acc.name_of(acc.center))
+    for ep in sorted(inv.endpoints_of(me) if me else [], key=lambda e: e.preference):
+        if ep.target:
+            return ep.target
+    import socket
+
+    return socket.gethostname()
+
+
+def ensure_fresh(*, force: bool = False) -> None:
+    """Refresh this machine's copy of the fleet from the center, if it has gone stale.
+
+    Called by the commands that read fleet-wide state. It is why nobody types `fleet
+    sync` any more: the machine asks when it needs to know, rather than waiting for the
+    center to come round.
+
+    Failure is deliberately almost invisible. Every command that calls this already works
+    from local state, and the design's own rule is that a sync outage must not become a
+    fleet outage -- so a center that is down, or a machine that has never been told where
+    to look, simply carries on with what it has.
+    """
+    from . import access as acl
+
+    url = acl.center_url()
+    pinned = acl.trusted_center_pubkey()
+    if not url or not pinned:
+        return                             # never been told where to ask, or who to trust
+    if not force and int(time.time()) - acl.center_last_seen() < int(
+            load_config().sync_ttl_s):
+        return
+    try:
+        payload = acl.seal(inv.dumps(inv.load()), telemetry=_telemetry_to_relay())
+    except Exception:
+        return                             # no key of our own yet; nothing to say
+    body = _post(url, payload)
+    if body is None:
+        return
+    try:
+        note = acl.unseal_note(body, pinned)
+        incoming = inv.loads(note["inventory"])
+    except Exception:
+        return                             # unsigned, or not from the center we pinned
+    inv.update(lambda current: inv.merge(current, incoming, authoritative=True))
+    if note["telemetry"]:
+        _record_relayed(note["telemetry"])
+    acl.note_center_seen()
+    acl.note_center_url(note["center_url"] or url)
+
+
+def _post(url: str, payload: str, timeout: float = 15.0) -> str | None:
+    """One request to the center. None on any failure, which is never fatal here."""
+    import urllib.error
+    import urllib.request
+
+    req = urllib.request.Request(url, data=payload.encode(),
+                                 headers={"Content-Type": "text/yaml"}, method="POST")
+    try:
+        with urllib.request.urlopen(req, timeout=timeout) as resp:
+            return resp.read().decode(errors="replace")
+    except (urllib.error.URLError, OSError, ValueError):
+        return None
+
+
 def _telemetry_to_relay() -> list[dict]:
     """What we measured ourselves, for machines the far side may not be able to reach.
 
@@ -1192,26 +1300,29 @@ def _sweep(devices) -> None:
 def _broadcast(devices) -> None:
     """Hand every machine that runs fleet the current inventory, and with it the center.
 
-    The center dials out and nothing dials in, so without this a spoke never learns who
-    the center is. It ends up holding our key in its authorized_keys with no idea where
-    the key came from: `fleet ls` there cannot mark the center, `fleet sync` there has
-    nobody to ask, and a machine added from that spoke never reaches anyone.
+    A fallback now rather than the routine path: a machine that can reach the listener
+    refreshes itself, and one that cannot -- or that has not been told where to look yet
+    -- is told here. That is what stops a machine holding our key in its authorized_keys
+    with no idea where the key came from.
 
-    `run_sync` already does the work -- seal, hand over, take back the merge -- and was
-    only ever called from the spoke half of `fleet sync`, which under center-dials-spokes
-    nothing reaches.
+    The inventory is read once rather than per machine: this loop used to re-read it from
+    disk on every iteration, which on a fleet of any size is the same file parsed N times
+    to send N copies of the same thing.
 
     A machine without fleet installed simply fails this; that is the ordinary case for a
     managed target and is not worth a line of output. The inventory is not the authority
     on anything security-relevant -- the access list is, and it is signed -- so a spoke
     declining to answer costs nothing.
     """
+    from . import access as acl
+
+    mine = inv.dumps(inv.load())
     reached = 0
     for dev in inv.live(devices):
         eps = sorted(inv.endpoints_of(dev), key=lambda e: e.preference)
         if not eps:
             continue                       # the center itself
-        code, output = run_sync(eps[0], inv.dumps(inv.load()))
+        code, output = run_sync(eps[0], mine)
         if code != 0:
             continue
         try:
@@ -1526,7 +1637,13 @@ def cmd_access(target: str = typer.Argument(None, help="one machine, instead of 
         console.print(f"[green]✓[/green] {verb} {current.name_of(src)} -> "
                       f"{current.name_of(dst)}"
                       + ("" if changed else "  [dim](already so)[/dim]"))
-        console.print("  [dim]run [bold]fleet sync[/bold] to apply it[/dim]")
+        if changed:
+            # Applied here rather than left for a sweep. You have just said what you
+            # want, so telling you to run a second command to mean it was always a poor
+            # trade -- and for a revoke it is worse than that: a machine that waits to
+            # be asked would keep the key until it next happened to sync, which for an
+            # idle machine is never, while the peer losing access carries on using it.
+            _apply_now(current, src, dst, user, install=bool(allow))
 
     ledger = rec.load_ledger()
     rows = []
@@ -1646,6 +1763,14 @@ def cmd_center(name: str = typer.Argument(None, help="hand the role to this mach
                                            help="print the key to pre-place on a host"),
                export: bool = typer.Option(False, "--export",
                                            help="print the access list and pins"),
+               listen: bool = typer.Option(False, "--listen",
+                                           help="serve the fleet so machines can sync "
+                                                "themselves, instead of being swept"),
+               port: int = typer.Option(0, "--port", metavar="N",
+                                        help="port for --listen (default 7373)"),
+               advertise: str = typer.Option("", "--advertise", metavar="URL",
+                                             help="the address machines should dial; "
+                                                  "defaults to this host and port"),
                accept: bool = typer.Option(False, "--accept",
                                            help="take the role a handover offered"),
                dissolve: bool = typer.Option(False, "--dissolve",
@@ -1671,6 +1796,30 @@ def cmd_center(name: str = typer.Argument(None, help="hand the role to this mach
         # want this is before the machine exists, writing a cloud-init file.
         _, pub = ensure_keypair()
         print(pub)
+        return
+
+    if listen:
+        from . import access as acl
+        from .serve import DEFAULT_PORT, serve
+
+        try:
+            acc = acl.load()
+        except acl.AccessError as exc:
+            err.print(f"[red]{exc}[/red]")
+            raise typer.Exit(2)
+        if not acl.is_center(acc):
+            err.print("[red]Only the center can serve the fleet.[/red]")
+            raise typer.Exit(2)
+        where = port or DEFAULT_PORT
+        url = advertise or f"http://{_this_host(acc)}:{where}/sync"
+        console.print(f"[green]✓[/green] serving fleet {acc.fleet_id} on port {where}")
+        console.print(f"  [dim]machines are told to dial {url}[/dim]")
+        console.print("  [dim]only keys this fleet has pinned are answered; "
+                      "first contact still happens by enrolment[/dim]")
+        try:
+            serve(port=where, advertise=url)
+        except KeyboardInterrupt:
+            console.print("\n[dim]stopped[/dim]")
         return
 
     if init:

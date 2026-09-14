@@ -351,6 +351,90 @@ def unseal_with_telemetry(payload: str, signer_pubkey: str):
     return _open(env, signer_pubkey)
 
 
+def claimed_signer(payload: str) -> str:
+    """Who the envelope says signed it. A claim, not yet a fact.
+
+    It selects *which* pinned key to check against; the signature is what proves
+    possession of it. Reading it before verifying is safe only because nothing else is
+    read: a caller must look the key up among the ones it already trusts, and refuse if
+    it is not there, before unsealing anything.
+    """
+    try:
+        env = yaml.safe_load(payload) or {}
+    except yaml.YAMLError:
+        return ""
+    return str((env or {}).get("center_pubkey") or "").strip() if isinstance(env, dict) else ""
+
+
+def is_pinned(acc: Access, pubkey: str) -> bool:
+    """Whether this key is one the fleet already knows. The listener's whole gate."""
+    return bool(pubkey) and fingerprint(pubkey) in acc.keys
+
+
+def seal_note(inventory_yaml: str, *, key_path: Path | None = None,
+              telemetry: list | None = None, center_url: str = "") -> str:
+    """`seal`, plus where to reach the center next time.
+
+    A spoke pins the center's key but has never known its address, so it could only ever
+    be told by being dialled. Carrying it inside the signed body means the address
+    arrives over a channel the spoke already verifies, from a key it has already pinned
+    -- which is what keeps a listening center from being something anyone can claim to be.
+    """
+    key_path = key_path or FLEET_KEY
+    body = yaml.safe_dump({"inventory": inventory_yaml, "telemetry": telemetry or [],
+                           "center_url": center_url}, sort_keys=False)
+    return yaml.safe_dump({
+        "protocol": PROTOCOL,
+        "center_pubkey": key_path.with_suffix(".pub").read_text().strip(),
+        "signature": sign(body, key_path),
+        "body": body,
+    }, sort_keys=False)
+
+
+def unseal_note(payload: str, signer_pubkey: str) -> dict:
+    """The whole inner body, verified. Returns inventory, telemetry and center_url."""
+    try:
+        env = yaml.safe_load(payload) or {}
+    except yaml.YAMLError as exc:
+        raise AccessError(f"unreadable sync payload: {exc}") from exc
+    if not isinstance(env, dict) or "body" not in env:
+        raise AccessError("unsigned sync payload -- refusing it")
+    if int(env.get("protocol") or 0) != PROTOCOL:
+        raise AccessError(f"sync protocol {env.get('protocol')!r} is not {PROTOCOL}")
+    if not verify(env["body"], env.get("signature") or "", signer_pubkey):
+        raise AccessError("sync payload is not signed by the key we trust")
+    inner = yaml.safe_load(env["body"]) or {}
+    return {"inventory": inner.get("inventory", ""),
+            "telemetry": list(inner.get("telemetry") or []),
+            "center_url": str(inner.get("center_url") or "")}
+
+
+def center_url(cache_path: Path | None = None) -> str:
+    """Where this machine last learned the center listens, or ""."""
+    path = cache_path or CACHE_PATH
+    try:
+        return str((yaml.safe_load(path.read_text()) or {}).get("center_url") or "")
+    except (OSError, yaml.YAMLError):
+        return ""
+
+
+def note_center_url(url: str, cache_path: Path | None = None) -> None:
+    if not url:
+        return
+    path = cache_path or CACHE_PATH
+    try:
+        data = yaml.safe_load(path.read_text()) or {}
+    except (OSError, yaml.YAMLError):
+        data = {}
+    if data.get("center_url") == url:
+        return
+    data["center_url"] = url
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = path.with_suffix(".tmp")
+    tmp.write_text(yaml.safe_dump(data, sort_keys=False))
+    os.replace(tmp, path)
+
+
 def trusted_center_pubkey(cache_path: Path | None = None) -> str:
     """The center's key as this machine last learned it, or "" on first contact.
 
