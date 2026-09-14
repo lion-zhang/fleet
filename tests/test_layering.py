@@ -51,7 +51,11 @@ def test_nothing_imports_the_argument_parser():
     """cli.py is a surface. A module reaching into it is the shape of the cycle fleet
     already had -- serve.py importing two helpers that happened to live there."""
     for path, tree in _modules():
-        if path.name == "cli.py":
+        # __main__.py is exempt because it is not a module reaching into the parser: it
+        # *is* an entry point to it, the same surface `fleet` the console script names.
+        # `python -m fleet` exists so the Windows center can serve without a console
+        # window, which needs an interpreter-level entry point rather than a launcher.
+        if path.name in ("cli.py", "__main__.py"):
             continue
         imports = _fleet_imports(tree, path)
         assert not {i for i in imports if i == "cli" or i.startswith("cli.")}, \

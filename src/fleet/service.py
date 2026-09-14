@@ -156,11 +156,31 @@ def _linux_start() -> None:
 
 # ------------------------------------------------------------------- Windows
 
+def _windowless() -> str:
+    """The interpreter that runs without a console, or "" if there is not one.
+
+    Windows gives a console to anything built against the console subsystem, and the
+    `fleet` launcher uv writes is one -- so the center served the fleet with a terminal
+    window sitting open on the desktop for as long as it ran. `pythonw.exe` is the same
+    interpreter built against the GUI subsystem and lives beside the one already running,
+    so `pythonw -m fleet` gets no window at all: not a hidden one, and not one that
+    flashes on the way past.
+    """
+    exe = Path(sys.executable)
+    for name in ("pythonw.exe", "pythonw3.exe"):
+        candidate = exe.with_name(name)
+        if candidate.exists():
+            return str(candidate)
+    return ""
+
+
 def _windows_install(cmd: str, port: int) -> str:
     # At logon as this user, not at startup as SYSTEM: fleet's access list lives in a
     # per-user directory, so a task running as SYSTEM would look somewhere else, find no
     # fleet, and serve nothing while looking perfectly healthy.
-    task = f'"{cmd}" center --listen --port {port}'
+    quiet = _windowless()
+    task = (f'"{quiet}" -m fleet center --listen --port {port}' if quiet
+            else f'"{cmd}" center --listen --port {port}')
     _run(["schtasks", "/delete", "/tn", TASK, "/f"])
     p = _run(["schtasks", "/create", "/tn", TASK, "/tr", task,
               "/sc", "onlogon", "/rl", "highest", "/f"])
@@ -193,9 +213,11 @@ def _windows_open_port(port: int) -> str:
     Those are removed here, scoped to fleet's own uv-managed interpreter -- not to Python
     generally, which the user may have blocked deliberately.
     """
-    import sys as _sys
-
-    exe = _sys.executable
+    # Whatever ends up holding the socket: the windowless interpreter when the task
+    # uses one, and the ordinary one otherwise. Naming the wrong one is not a visible
+    # failure -- the port rule still lets connections in, and Windows simply offers to
+    # block the interpreter again the next time it listens.
+    exe = _windowless() or sys.executable
     removed = _windows_unblock(exe)
     _run(["netsh", "advfirewall", "firewall", "delete", "rule", f"name={FIREWALL_RULE}"])
     p = _run(["netsh", "advfirewall", "firewall", "add", "rule",
@@ -249,8 +271,18 @@ def _windows_status() -> str:
 def _windows_stop() -> None:
     _run(["schtasks", "/end", "/tn", TASK])
     # /end asks the task to stop; the process it started may outlive it, and on Windows a
-    # running fleet.exe holds its own installation open so the next update fails.
+    # running fleet holds its own installation open, so the next update fails against it
+    # with an error that mentions nothing about why.
+    #
+    # By image name for the launcher, because `fleet.exe` is ours and nothing else is
+    # called that. Never by image name for the interpreter: `pythonw.exe` is whatever the
+    # user happens to be running, and `taskkill /im pythonw.exe` would end all of it. So
+    # the windowless center is matched on its command line and killed by pid.
     _run(["taskkill", "/f", "/im", "fleet.exe"])
+    _run(["powershell", "-NoProfile", "-Command",
+          "Get-CimInstance Win32_Process -Filter \"Name='pythonw.exe'\" | "
+          "Where-Object { $_.CommandLine -like '*-m*fleet*center*--listen*' } | "
+          "ForEach-Object { Stop-Process -Id $_.ProcessId -Force }"])
 
 
 def _windows_start() -> None:

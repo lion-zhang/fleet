@@ -226,7 +226,9 @@ def test_nothing_but_the_cli_imports_the_cli():
     root = pathlib.Path(__file__).resolve().parent.parent / "src" / "fleet"
     offenders = []
     for path in root.rglob("*.py"):
-        if path.name == "cli.py":
+        # __main__.py is an entry point to the parser, not a dependency on it -- see the
+        # same exemption in test_layering.py.
+        if path.name in ("cli.py", "__main__.py"):
             continue
         tree = ast.parse(path.read_text())
         for node in ast.walk(tree):
@@ -255,3 +257,55 @@ def test_operations_do_not_import_a_surface():
                 if tail in surfaces:
                     offenders.append(f"{path.name}:{node.lineno} -> {node.module}")
     assert not offenders, "ops must not import a surface: " + str(offenders)
+
+
+# ------------------------------------------------------ serving without a window
+
+def test_the_center_serves_without_a_console_window(monkeypatch, tmp_path):
+    """The center sat with a terminal window open on the desktop for as long as it ran.
+
+    Windows gives a console to any program built against the console subsystem, and the
+    launcher uv writes is one. pythonw.exe is the same interpreter built for the GUI
+    subsystem, so `pythonw -m fleet` gets no window at all -- not a hidden one, and not
+    one that flashes on the way past.
+    """
+    quiet = tmp_path / "pythonw.exe"
+    quiet.write_text("")
+    monkeypatch.setattr(service.sys, "executable", str(tmp_path / "python.exe"))
+
+    calls = []
+    monkeypatch.setattr(service, "_run", lambda argv, **k: calls.append(argv) or _ok())
+    service._windows_install("C:\\fleet.exe", 7373)
+
+    create = next(c for c in calls if "/create" in c)
+    action = create[create.index("/tr") + 1]
+    assert str(quiet) in action and "-m fleet" in action, action
+    assert "fleet.exe" not in action, "the console launcher is what opened the window"
+
+
+def test_it_falls_back_to_the_launcher_when_there_is_no_windowless_python(monkeypatch,
+                                                                         tmp_path):
+    """Serving with a visible window beats not serving at all."""
+    monkeypatch.setattr(service.sys, "executable", str(tmp_path / "python.exe"))
+    calls = []
+    monkeypatch.setattr(service, "_run", lambda argv, **k: calls.append(argv) or _ok())
+    service._windows_install("C:\\fleet.exe", 7373)
+
+    create = next(c for c in calls if "/create" in c)
+    assert "C:\\fleet.exe" in create[create.index("/tr") + 1]
+
+
+def test_stopping_never_kills_every_pythonw_on_the_machine(monkeypatch, tmp_path):
+    """pythonw.exe is whatever the user happens to be running. `taskkill /im pythonw.exe`
+    would end all of it, so the center is matched on its command line and killed by pid.
+    fleet.exe stays matched by name: nothing else is called that."""
+    calls = []
+    monkeypatch.setattr(service, "_run", lambda argv, **k: calls.append(argv) or _ok())
+    service._windows_stop()
+    flat = [" ".join(c) for c in calls]
+
+    assert not any("/im" in f and "pythonw" in f for f in flat), \
+        "an image-name kill would take out unrelated programs"
+    targeted = [f for f in flat if "pythonw.exe" in f]
+    assert targeted, "the windowless center must still be stopped"
+    assert all("CommandLine" in f and "ProcessId" in f for f in targeted)
