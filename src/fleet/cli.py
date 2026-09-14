@@ -56,7 +56,7 @@ from .ops.sync import (center_advertise_url, ensure_fresh,
 from .ui import DOT as _DOT, chatter_to_stderr as _chatter_to_stderr, console, emit as _emit, err
 from .onboard import onboard, onboard_self
 from .probe.runner import (probe_env, probe_many, run_probe, run_probe_local)
-from .setup import TARGETS, detect_targets, fleet_command, install, uninstall
+from .agents import TARGETS, detect_targets, fleet_command, install, uninstall
 from .ssh.cmd import (build_argv, local_platform, local_shell_argv, remote_command,
                      remote_platform, resolve_command)
 from .render.top import (Schedule, device_lines, disk_cell, gpu_cells_compact,
@@ -536,7 +536,7 @@ def cmd_install(name: str = typer.Argument(None,
 
 def _show_version(value: bool):
     if value:
-        from .setup import package_version
+        from .agents import package_version
         console.print(f"fleet {package_version()}")
         raise typer.Exit()
 
@@ -1191,7 +1191,7 @@ def cmd_center(name: str = typer.Argument(None, help="hand the role to this mach
             # themselves current by asking the center, and a center that only listens
             # while someone holds a terminal open is not one they can ask.
             from . import service
-            from .setup import fleet_executable
+            from .agents import fleet_executable
 
             console.print(f"  [dim]service: {service.install(fleet_executable(), DEFAULT_PORT)}[/dim]")
         console.print(f"  [dim]key to pre-place on locked-down hosts: "
@@ -1289,7 +1289,7 @@ def cmd_setup(
     root = Path.cwd() if project else Path.home()
     # MCP clients are a second namespace: a desktop app is registered, not written to.
     # `--project` never touches them -- their config is per-user, not per-repo.
-    from .setup import (MCP_CLIENTS, detect_mcp_clients, install_mcp, uninstall_mcp)
+    from .agents import (MCP_CLIENTS, detect_mcp_clients, install_mcp, uninstall_mcp)
 
     mcp_names = tuple(c.name for c in MCP_CLIENTS)
     if target == "auto":
@@ -1319,7 +1319,7 @@ def cmd_setup(
         changes = (uninstall(root, targets, dry_run=dry_run, project=project)
                    + uninstall_mcp(root, clients, dry_run=dry_run))
     else:
-        from .setup import fleet_executable
+        from .agents import fleet_executable
 
         changes = (install(root, targets, cmd, dry_run=dry_run, project=project)
                    + install_mcp(root, clients, fleet_executable(), dry_run=dry_run))
@@ -1354,7 +1354,7 @@ def cmd_service(action: str = typer.Argument("status",
         return
     if action == "install":
         from .state import access as acl
-        from .setup import fleet_executable
+        from .agents import fleet_executable
 
         try:
             acc = acl.load()

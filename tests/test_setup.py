@@ -8,7 +8,7 @@ did not write, and that running setup twice is not different from running it onc
 
 from __future__ import annotations
 
-from fleet.setup import (
+from fleet.agents import (
     BEGIN,
     END,
     agents_block,
@@ -209,7 +209,7 @@ def test_a_project_agents_file_is_still_a_shared_region(tmp_path):
 def test_moving_codex_to_a_skill_takes_the_old_block_back_out(tmp_path):
     """A stale region in ~/.codex/AGENTS.md would keep being read into every
     conversation -- which is the cost the move to a skill exists to avoid."""
-    from fleet.setup import agents_block, apply_block
+    from fleet.agents import agents_block, apply_block
 
     (tmp_path / ".codex").mkdir()
     old = tmp_path / ".codex" / "AGENTS.md"
@@ -336,7 +336,7 @@ def test_the_hermes_skill_reports_a_real_version():
     """Hardcoding one guarantees it drifts from the package that is installed."""
     import yaml
 
-    from fleet.setup import package_version
+    from fleet.agents import package_version
 
     _, frontmatter, _ = hermes_skill_text("fleet").split("---\n", 2)
     assert yaml.safe_load(frontmatter)["version"] == package_version()
@@ -383,7 +383,7 @@ def test_the_cli_accepts_every_target_the_setup_module_supports(tmp_path, monkey
     from typer.testing import CliRunner
 
     from fleet.cli import app
-    from fleet.setup import TARGETS
+    from fleet.agents import TARGETS
 
     monkeypatch.setattr(Path, "home", classmethod(lambda cls: tmp_path))
     for target in TARGETS:
@@ -397,7 +397,7 @@ def test_target_all_covers_every_supported_agent(tmp_path, monkeypatch):
     from typer.testing import CliRunner
 
     from fleet.cli import app
-    from fleet.setup import TARGETS
+    from fleet.agents import TARGETS
 
     monkeypatch.setattr(Path, "home", classmethod(lambda cls: tmp_path))
     out = CliRunner().invoke(app, ["setup", "--target", "all", "--dry-run"]).output
@@ -409,7 +409,7 @@ def test_target_all_covers_every_supported_agent(tmp_path, monkeypatch):
 def test_the_instructions_separate_what_needs_the_center():
     """An agent that does not know the difference either avoids things that would work,
     or tries things that cannot and reports a confusing refusal as a fault."""
-    from fleet.setup import skill_text
+    from fleet.agents import skill_text
 
     text = skill_text("fleet")
     assert "Only on the center" in text
@@ -462,7 +462,7 @@ def test_every_command_is_either_listed_or_deliberately_excluded():
     is invisible: nothing breaks, the capability is simply never reached for.
     """
     from fleet.cli import app
-    from fleet.setup import skill_text
+    from fleet.agents import skill_text
 
     text = skill_text("fleet")
     missing = [c.name for c in app.registered_commands
@@ -483,7 +483,7 @@ def test_the_exclusions_are_real_commands():
 def test_the_agent_is_told_never_to_handle_a_password():
     """The only command that asks for one needs a human, and an agent offering to type
     it would put a credential in a transcript that is replayed forever."""
-    from fleet.setup import skill_text
+    from fleet.agents import skill_text
 
     text = skill_text("fleet")
     assert "Never type a password" in text
@@ -494,7 +494,7 @@ def test_the_agent_is_told_never_to_handle_a_password():
 def test_the_agent_is_told_to_ask_rather_than_guess_a_name():
     """`inventory.find` resolves a unique prefix, and `fleet rm` is not undone by running
     it again. An agent filling in a half-heard name is exactly how that goes wrong."""
-    from fleet.setup import skill_text
+    from fleet.agents import skill_text
 
     text = skill_text("fleet")
     assert "Ask rather than guess" in text
@@ -503,7 +503,7 @@ def test_the_agent_is_told_to_ask_rather_than_guess_a_name():
 
 def test_the_agent_is_told_an_absent_center_is_normal():
     """It is usually a laptop. Reporting a closed lid as a fault would be noise."""
-    from fleet.setup import skill_text
+    from fleet.agents import skill_text
 
     text = skill_text("fleet")
     assert "expected to be offline" in text
@@ -511,7 +511,7 @@ def test_the_agent_is_told_an_absent_center_is_normal():
 
 
 def test_the_agent_is_told_relayed_telemetry_is_second_hand():
-    from fleet.setup import skill_text
+    from fleet.agents import skill_text
 
     text = skill_text("fleet")
     assert "broadcast" in text and "do not present it as live" in text
@@ -530,7 +530,7 @@ def test_every_flag_is_either_listed_or_deliberately_excluded():
     import subprocess
 
     from fleet.cli import app
-    from fleet.setup import skill_text
+    from fleet.agents import skill_text
 
     text = skill_text("fleet")
     env = {"COLUMNS": "200", "PATH": os.environ["PATH"], "HOME": os.environ["HOME"]}
@@ -574,7 +574,7 @@ def test_every_agent_entry_is_well_formed():
     """Adding an agent is one line in AGENTS, which is the point -- but a wrong line is
     a file written into somebody's home directory, so the shape is checked here rather
     than discovered there."""
-    from fleet.setup import AGENTS, TARGETS
+    from fleet.agents import AGENTS, TARGETS
 
     assert len({a.name for a in AGENTS}) == len(AGENTS), "names must be unique"
     assert TARGETS == tuple(a.name for a in AGENTS), "TARGETS is derived, not repeated"
@@ -591,7 +591,7 @@ def test_a_file_we_do_not_own_is_never_written_wholesale():
     """The one rule that must never be got wrong, asserted across the whole table: only
     a SKILL.md is ours outright. Anything else is the user's and gets a marked region,
     so a new entry pointing at someone's config cannot quietly start overwriting it."""
-    from fleet.setup import AGENTS
+    from fleet.agents import AGENTS
 
     for a in AGENTS:
         for field in (a.home, a.project):
@@ -604,7 +604,7 @@ def test_a_file_we_do_not_own_is_never_written_wholesale():
 def test_the_full_command_surface_reaches_every_agent():
     """One body for all of them; an agent uses the parts it can. Tailoring per agent
     would mean an agent that gained a capability silently kept the trimmed text."""
-    from fleet.setup import agents_block, hermes_skill_text, skill_text
+    from fleet.agents import agents_block, hermes_skill_text, skill_text
 
     bodies = [skill_text("fleet"), hermes_skill_text("fleet"), agents_block("fleet")]
     for command in ("fleet ls", "fleet ssh", "fleet access", "fleet sync", "fleet top"):
@@ -616,7 +616,7 @@ def test_uninstall_removes_every_skill_we_own(tmp_path):
     """Ownership is read from the filename, not from the agent's name. Dispatching on
     the name meant uninstalling Hermes left its skill file on disk, because only Claude
     Code was named -- and Codex would have joined it on moving to a skill."""
-    from fleet.setup import install, plan, uninstall
+    from fleet.agents import install, plan, uninstall
 
     for name in ("claude", "codex", "hermes"):
         (tmp_path / f".{name}").mkdir()
@@ -632,7 +632,7 @@ def test_uninstall_removes_every_skill_we_own(tmp_path):
 def test_an_emptied_legacy_file_is_not_left_behind(tmp_path):
     """If our region was all that was ever in it, the file existed because fleet made
     it. Leaving a one-byte husk is litter rather than caution."""
-    from fleet.setup import agents_block, apply_block, install
+    from fleet.agents import agents_block, apply_block, install
 
     (tmp_path / ".codex").mkdir()
     old = tmp_path / ".codex" / "AGENTS.md"
@@ -642,7 +642,7 @@ def test_an_emptied_legacy_file_is_not_left_behind(tmp_path):
 
 
 def test_a_legacy_file_with_the_users_own_text_survives(tmp_path):
-    from fleet.setup import agents_block, apply_block, install
+    from fleet.agents import agents_block, apply_block, install
 
     (tmp_path / ".codex").mkdir()
     old = tmp_path / ".codex" / "AGENTS.md"

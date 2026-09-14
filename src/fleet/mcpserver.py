@@ -41,7 +41,7 @@ def _fleet() -> str:
     exactly wrong here: every tool would answer "fleet is not installed on this machine"
     on a machine where it plainly is.
     """
-    from .setup import fleet_executable
+    from .agents import fleet_executable
 
     return fleet_executable()
 
@@ -79,7 +79,7 @@ def build_server():
             "the MCP extra is not installed -- `uv tool install --force "
             "'fleet-broker[mcp]'`, or `pip install 'mcp>=2'`") from exc
 
-    from .setup import package_version
+    from .agents import package_version
 
     server = MCPServer(
         name="fleet",

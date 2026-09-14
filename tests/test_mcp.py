@@ -9,10 +9,11 @@ resolved `fleet` the way a shell would, on a process that never read a profile.
 from __future__ import annotations
 
 import json
+import sys
 
 import pytest
 
-from fleet import setup as st
+from fleet import agents as st
 
 
 # ------------------------------------------------------------- resolving fleet
@@ -27,7 +28,7 @@ def test_a_launched_server_never_gets_the_bare_name(monkeypatch, tmp_path):
     exe.write_text("#!/bin/sh\n")
     exe.chmod(0o755)
     monkeypatch.setenv("PATH", str(exe.parent))
-    monkeypatch.setattr(st.sys, "prefix", str(tmp_path / "other"))
+    monkeypatch.setattr(sys, "prefix", str(tmp_path / "other"))
 
     assert st.fleet_command() == "fleet", "a skill still gets the bare name"
     assert st.fleet_executable() == str(exe), "a config gets an absolute path"
@@ -47,7 +48,7 @@ def test_the_fallback_does_not_resolve_out_of_its_own_directory(monkeypatch, tmp
     (toolbin / "python3").symlink_to(real / "python3")
 
     monkeypatch.setenv("PATH", "")
-    monkeypatch.setattr(st.sys, "executable", str(toolbin / "python3"))
+    monkeypatch.setattr(sys, "executable", str(toolbin / "python3"))
     assert st.fleet_executable() == str(toolbin / "fleet")
 
 
