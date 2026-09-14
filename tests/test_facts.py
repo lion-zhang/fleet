@@ -533,3 +533,29 @@ def test_a_probe_payload_keeps_its_newlines():
         runner._run_probe_once(Endpoint(target="h"), timeout=1)
     assert isinstance(seen["payload"], bytes)
     assert b"\r\n" not in seen["payload"], "CRLF would break the remote shell"
+
+
+def test_a_windows_machine_knows_its_own_id(monkeypatch):
+    """It returned "" there, so a Windows center did not recognise its own row: it tried
+    to ssh to itself and reported "device has no endpoints" about the machine it was
+    running on. The value must match what derive_id stamps from payload.ps1, which reads
+    the same registry key."""
+    import sys
+    import types
+
+    from fleet import cli
+
+    fake = types.SimpleNamespace(
+        HKEY_LOCAL_MACHINE=object(),
+        OpenKey=lambda *a: __import__("contextlib").nullcontext(),
+        QueryValueEx=lambda key, name: ("665aebe1-5029-45c5-adae-035a2b4fada7", 1),
+    )
+    monkeypatch.setitem(sys.modules, "winreg", fake)
+    monkeypatch.setattr(cli, "local_platform", lambda: "windows")
+    # lru_cache(maxsize=1): without clearing on both sides this answer leaks into every
+    # test that runs after it, and the failure surfaces somewhere else entirely.
+    cli.local_device_id.cache_clear()
+    try:
+        assert cli.local_device_id() == "linux:machine-id:665aebe1-5029-45c5-adae-035a2b4fada7"
+    finally:
+        cli.local_device_id.cache_clear()

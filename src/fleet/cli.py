@@ -726,6 +726,23 @@ def local_device_id() -> str:
     Used only to notice that we ARE the center, so `fleet sync` can be safe to run
     everywhere rather than being a command you must remember not to run in one place.
     """
+    if local_platform() == "windows":
+        # The same registry value payload.ps1 reads, so this agrees with the id
+        # `derive_id` stamps from a probe -- which is the whole point: without it a
+        # Windows center did not recognise its own row, tried to ssh to itself, and
+        # reported "device has no endpoints" about the machine it was running on.
+        try:
+            import winreg
+
+            with winreg.OpenKey(winreg.HKEY_LOCAL_MACHINE,
+                                r"SOFTWARE\Microsoft\Cryptography") as key:
+                guid = str(winreg.QueryValueEx(key, "MachineGuid")[0]).strip()
+            if guid:
+                # `linux:machine-id:` is what derive_id stamps for anything not macOS.
+                # Misleading on Windows, but the two must agree, and they are opaque.
+                return f"linux:machine-id:{guid}"
+        except (ImportError, OSError):
+            pass
     for candidate in ("/etc/machine-id", "/var/lib/dbus/machine-id"):
         try:
             value = Path(candidate).read_text().strip()
