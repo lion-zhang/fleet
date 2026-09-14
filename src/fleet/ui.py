@@ -28,6 +28,19 @@ for _stream in (sys.stdout, sys.stderr):
         with suppress(Exception):       # not reconfigurable under some capture harnesses
             _stream.reconfigure(encoding="utf-8", errors="replace")
 
+def confirm(question: str, *, default: bool = False) -> bool:
+    """Ask before doing something irreversible.
+
+    Here rather than in an operation: `typer.confirm` would make dissolving a fleet
+    depend on the argument parser, which is the coupling this layer exists to remove.
+    A surface with no terminal never gets here -- it passes force=True or does not call
+    the operation at all.
+    """
+    import typer
+
+    return typer.confirm(question, default=default)
+
+
 console = Console()
 err = Console(stderr=True)
 

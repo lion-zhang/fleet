@@ -13,7 +13,7 @@ from fleet import inventory as inv
 from fleet import reconcile as rec
 from fleet import store
 from fleet.models import Device, Kind
-from fleet.ops import enrol
+from fleet.ops import enrol, handover
 
 
 @pytest.fixture
@@ -27,9 +27,13 @@ def two_machines(tmp_path, monkeypatch):
     subprocess.run(["ssh-keygen", "-t", "ed25519", "-N", "", "-q", "-f", str(key)],
                    check=True)
     pub = key.with_suffix(".pub").read_text()
-    monkeypatch.setattr(enrol, "ensure_keypair", lambda *a, **k: (key, pub), raising=False)
+    # Patched on every module that *reads* the name, not only on the one that defines
+    # it: these import it at module scope, so rebinding `fleet.keys.ensure_keypair`
+    # alone leaves them holding the original and generating a real key.
     import fleet.keys
-    monkeypatch.setattr(fleet.keys, "ensure_keypair", lambda *a, **k: (key, pub))
+    for mod in (fleet.keys, enrol, handover):
+        monkeypatch.setattr(mod, "ensure_keypair", lambda *a, **k: (key, pub),
+                            raising=False)
 
     mine = acl.fingerprint(pub)
     other = "SHA256:otherotherotherotherotherotherotherother"

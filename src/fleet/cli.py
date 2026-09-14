@@ -37,6 +37,12 @@ from .ops import sync as _sync
 from .ops.sweep import (apply_now as _apply_now, broadcast as _broadcast,
                         endpoint_for as _endpoint_for,
                         enrol_unpinned as _enrol_unpinned, run as _sweep)
+from .ops.handover import (accept as _accept_handover,
+                          give_away as _handover)
+from .ops.lifecycle import (dissolve as _dissolve, leave as _leave_fleet,
+                           membership as _fleet_membership)
+from .ops.migrate import run as _migrate_passwords
+from .ops.names import canonical as _canonical
 from .ops.enrol import (finish_add as _enrol_after_add,
                         install_our_key as _install_key,
                         register_identity as _register_identity)
@@ -287,19 +293,6 @@ def cmd_show(name: str = typer.Argument(None, help="defaults to this machine"),
         console.print(f"  [dim]{r['notes'].strip()}[/dim]")
 
 
-def _canonical(token: str) -> str:
-    """Translate an alias into the name the access list knows. Anything else passes.
-
-    The list is keyed on key fingerprints and carries a name only to render them, so it
-    has no idea aliases exist. Translating here, at the edge, is cheaper than teaching it
-    a second naming scheme it would then have to keep in step through every rename.
-    """
-    if not token:
-        return token
-    dev = inv.find_exact(inv.load(), token)
-    return dev.name if dev else token
-
-
 def _tags(values) -> list[str] | None:
     """Normalise a repeatable --tag/--untag into a clean list, or None if unmentioned.
 
@@ -312,19 +305,6 @@ def _tags(values) -> list[str] | None:
     return [t for t in (view_mod.normalise_tag(v) for v in values) if t] or None
 
 
-def _fleet_membership() -> str:
-    """Is this machine in a fleet, and does it decide? `center`, `member`, or `""`.
-
-    A spoke holds no access list -- only the center does -- so membership there is the
-    signed cache the sweep leaves behind. Checking for either is what lets `fleet add`
-    run anywhere while still refusing on a machine that is in no fleet at all.
-    """
-    from . import access as acl
-    try:
-        acc = acl.load()
-    except acl.AccessError:
-        return "member" if acl.CACHE_PATH.exists() else ""
-    return "center" if acl.is_center(acc) else "member"
 
 
 # A host that never answered. Adding it would record an address nobody can reach and a
@@ -1238,60 +1218,6 @@ def cmd_access(target: str = typer.Argument(None, help="one machine, instead of 
                       "changes are filed as requests from here[/dim]")
 
 
-def _migrate_passwords() -> None:
-    """Spend each stored password once, to install this machine's fleet key.
-
-    Install, verify, then remove -- in that order, never the reverse. A password dropped
-    before the key is proven leaves a host nobody can reach, and the whole point of the
-    change is that there is no second copy of it anywhere.
-
-    Reading them needs `pyrage`, which is now an optional extra. That is deliberate: the
-    encrypted file is still on disk, and removing the only thing that can read it in the
-    same release that added the migration would strand it.
-    """
-    from . import secrets as sec
-    from .keys import ensure_keypair, install_key
-
-    try:
-        data = sec.read_secrets(sec.SECRETS_PATH, sec.load_identity())
-    except Exception as exc:
-        err.print(f"[red]Cannot read the old secrets:[/red] {exc}")
-        # escaped: rich reads a bare [migrate] as a style tag and silently eats it,
-        # leaving the user an install command that does not install the reader
-        err.print("  [dim]install the reader with [bold]uv tool install "
-                  r"'fleet-broker\[migrate]'[/bold][/dim]")
-        raise FleetError("the migrate extra is not installed", code=2)
-    if not data:
-        console.print("[dim]nothing stored -- nothing to migrate[/dim]")
-        return
-
-    _, pub = ensure_keypair()
-    devices = inv.load()
-    failed = []
-    for name, password in sorted(data.items()):
-        dev = inv.find(devices, name)
-        eps = inv.endpoints_of(dev) if dev else []
-        if not eps:
-            failed.append((name, "no endpoint recorded"))
-            continue
-        ok, out = install_key(sorted(eps, key=lambda e: e.preference)[0], password, pub)
-        if ok:
-            console.print(f"[green]✓[/green] {name}")
-        else:
-            failed.append((name, out.strip()[-120:]))
-    for name, why in failed:
-        err.print(f"[red]✗[/red] {name}: {why}")
-    if failed:
-        err.print(f"\n[yellow]Keeping {sec.SECRETS_PATH.name}[/yellow] -- "
-                  f"{len(failed)} of {len(data)} could not be migrated.")
-        raise FleetError(f"{len(failed)} of {len(data)} could not be migrated", code=1)
-    # "removed", not "shredded": os.replace on a journalling filesystem or an SSD does
-    # not reliably destroy the old blocks, and saying otherwise would be a lie that
-    # outlives whoever wrote it.
-    for path in (sec.SECRETS_PATH, sec.IDENTITY_PATH):
-        with suppress(OSError):
-            path.unlink()
-    console.print(f"\n[green]✓[/green] all {len(data)} migrated; stored passwords removed.")
 
 
 @app.command("center")
@@ -1475,229 +1401,12 @@ def cmd_center(name: str = typer.Argument(None, help="hand the role to this mach
 
 
 
-def _dissolve(acc, *, force: bool) -> None:
-    """Take the fleet down: every key off every machine, then forget it existed.
-
-    The counterpart to `--init`, and it was missing. Deleting access.yaml by hand does
-    not dissolve anything -- it orphans it: `access.load` then raises, so the center can
-    no longer manage the fleet, and every machine keeps its keys with no tooling able to
-    reach them. The worst of both, arrived at silently.
-
-    Order matters and is not negotiable. Keys come off first; the list is forgotten only
-    once they are gone, because the list is the only record of where they were put.
-    """
-    from . import access as acl
-    from . import reconcile as rec
-
-    if not acl.is_center(acc):
-        err.print("[red]Only the center can dissolve the fleet.[/red]")
-        err.print("  [dim]to remove just this machine, use [bold]fleet center "
-                  "--leave[/bold][/dim]")
-        raise FleetError("only the center can dissolve the fleet", code=2)
-
-    machines = [m.get("name", fp[:18]) for fp, m in acc.keys.items() if fp != acc.center]
-    console.print(f"[yellow]This removes fleet {acc.fleet_id}'s keys from "
-                  f"{len(machines)} machine(s):[/yellow] {', '.join(sorted(machines))}")
-    console.print("[dim]Access granted through this fleet stops working. Keys you "
-                  "installed by hand are untouched.[/dim]")
-    if not force and not typer.confirm("Dissolve it?"):
-        raise FleetError("cancelled", code=1)
-
-    # Every edge becomes desired-absent, including the center's own -- which `revoke`
-    # refuses to express, and rightly: on any other day it would strand a machine.
-    ledger = rec.plan(acc, rec.load_ledger())
-    now = int(time.time())
-    for st in ledger.values():
-        st.desired, st.pending_since = "absent", now
-    acc.allow = []
-    acl.save(acc)
-
-    devices = {d.id: d for d in inv.live(inv.load())}
-    left, gone = [], 0
-    conn = store.connect()
-    try:
-        for key, st in ledger.items():
-            src, dst, user = key.split(">")
-            dev = devices.get(st.dst_device or (acc.keys.get(dst) or {}).get("device_id", ""))
-            if dev is None or not inv.endpoints_of(dev):
-                left.append(((acc.keys.get(dst) or {}).get("name", dst[:18]),
-                             "no route recorded"))
-                continue
-            ep = _endpoint_for(dev, user)
-            _, snap = store.latest(conn, dev.id)
-            ok, out = rec.apply_edge(acc, (src, dst, user), ep, install=False,
-                                     platform=remote_platform(snap))
-            st.attempts += 1
-            if ok:
-                st.observed = "absent"
-                gone += 1
-                console.print(f"[green]✓[/green] keys removed from {dev.name}")
-            else:
-                st.last_error = out
-                left.append((dev.name, out[:60]))
-                console.print(f"[red]✗[/red] {dev.name} [dim]{out[:50]}[/dim]")
-    finally:
-        conn.close()
-
-    if left and not force:
-        rec.save_ledger(ledger)
-        err.print(f"\n[yellow]{len(left)} machine(s) still hold keys[/yellow] and the "
-                  "fleet is kept so you can finish:")
-        for name, why in left:
-            err.print(f"  {name}: {why}")
-        err.print("\n  [dim]run this again when they are reachable, or [bold]--force"
-                  "[/bold] to forget the fleet anyway -- those keys then stay installed "
-                  "with nothing left to remove them[/dim]")
-        raise FleetError("some machines could not be reached", code=1)
-
-    for path in (acl.ACCESS_PATH, acl.LEDGER_PATH, acl.CACHE_PATH, acl.OUTBOX_PATH):
-        with suppress(OSError):
-            path.unlink()
-    console.print(f"\n[green]✓[/green] fleet {acc.fleet_id} dissolved; "
-                  f"keys removed from {gone} machine(s).")
-    if left:
-        err.print(f"[yellow]![/yellow] {len(left)} machine(s) kept their keys and there "
-                  "is no longer any record of them. Remove them by hand:")
-        for name, _ in left:
-            err.print(f"  {name}")
 
 
-def _accept_handover(acc) -> None:
-    """Phase two, on the successor: prove we can write, then take the role.
-
-    The check is a no-op marker-block edit on every machine -- drop our own block and put
-    it straight back. Probing would only prove our key is *present*; it says nothing
-    about whether the file can be written, and on Windows every way that fails is
-    silent, so a handover verified by probing would hand the fleet to a machine that
-    cannot manage it and discover that only after the predecessor was gone.
-    """
-    from . import access as acl
-    from . import reconcile as rec
-    from .authkeys import sync_command
-    from .keys import ensure_keypair
-
-    _, pub = ensure_keypair()
-    mine = acl.fingerprint(pub)
-    if mine == acc.center:
-        console.print("[dim]already the center[/dim]")
-        return
-    if mine not in acc.keys:
-        err.print("[red]This machine is not in the access list,[/red] so no handover "
-                  "could have named it.")
-        raise FleetError("this machine is not in the access list", code=2)
-
-    devices = {d.id: d for d in inv.live(inv.load())}
-    targets = [(fp, m) for fp, m in acc.keys.items() if fp != mine]
-    unwritable = []
-    for fp, meta in targets:
-        dev = devices.get(meta.get("device_id", ""))
-        eps = sorted(inv.endpoints_of(dev), key=lambda e: e.preference) if dev else []
-        if not eps:
-            unwritable.append((meta.get("name", fp[:18]), "no endpoint recorded"))
-            continue
-        # drop-then-append of our own block: idempotent, and it changes nothing if it
-        # works, which is what makes it safe to run as a test
-        conn = store.connect()
-        try:
-            _, snap = store.latest(conn, dev.id)
-        finally:
-            conn.close()
-        plat = remote_platform(snap)
-        script = sync_command(acc.fleet_id, mine, user=eps[0].user, pubkey=pub,
-                              platform=plat)
-        ok, out = rec._remote(eps[0], script, platform=plat)
-        name = meta.get("name", fp[:18])
-        if ok:
-            console.print(f"[green]✓[/green] can write {name}")
-        else:
-            unwritable.append((name, out[:80]))
-            console.print(f"[red]✗[/red] {name} [dim]{out[:60]}[/dim]")
-
-    if unwritable:
-        err.print(f"\n[red]Not taking the role.[/red] {len(unwritable)} machine(s) "
-                  "cannot be written from here, and a center that cannot write is a "
-                  "fleet nobody can manage:")
-        for name, why in unwritable:
-            err.print(f"  {name}: {why}")
-        err.print("\n  [dim]the current center still holds the role; fix these and "
-                  "run this again[/dim]")
-        raise FleetError("the successor cannot write every machine", code=2)
-
-    acc.center = mine
-    acl.save(acc)
-    console.print(f"\n[green]✓[/green] this machine is now the center of {acc.fleet_id}.")
-    console.print("  [dim]run [bold]fleet sync[/bold] to sweep, then retire the old one "
-                  "with [bold]fleet rm[/bold] on it if it is leaving[/dim]")
 
 
-def _leave_fleet(acc) -> None:
-    """Strip this fleet's keys from this machine. No permission required.
-
-    You own your machines; the center does not get a veto. It cannot reliably tell
-    'left' from 'down' either -- both look like an auth failure -- so this is a courtesy
-    to the center as much as a right of the machine.
-    """
-    import subprocess
-
-    # Local, not remote: this edits the file on the machine you are standing on. So the
-    # platform is ours, not a probed host's -- and on Windows there is no `sh` at all,
-    # which made leaving a fleet impossible from the very machines most likely to want to.
-    shell = local_shell_argv()
-    for fp in acc.keys:
-        script = sync_command(acc.fleet_id, fp, pubkey=None, platform=local_platform())
-        subprocess.run(shell, input=script.encode(), capture_output=True)
-    console.print(f"[green]✓[/green] removed fleet {acc.fleet_id}'s keys from this machine.")
-    console.print("  [dim]the center will see this as unreachable until you tell it[/dim]")
 
 
-def _handover(acc, name: str, *, force: bool) -> None:
-    """Give the role away. The one irreversible command in the tool."""
-    from . import access as acl
-
-    if not acl.is_center(acc):
-        err.print("[red]Only the center can hand the role over.[/red]")
-        err.print(f"  [dim]the center is {acc.name_of(acc.center)}[/dim]")
-        raise FleetError("only the center can hand the role over", code=2)
-    try:
-        successor = acl.resolve(acc, _canonical(name))
-    except acl.AccessError as exc:
-        err.print(f"[red]{exc}[/red]")
-        raise FleetError(str(exc), code=2)
-    if successor == acc.center:
-        console.print(f"[dim]{name} is already the center.[/dim]")
-        return
-    # Phase one. The successor's key goes everywhere and a signed record names it, but
-    # nothing is retired yet: proving the successor can *write* each authorized_keys
-    # requires the successor to try, and on Windows both ways that fails are silent. So
-    # it finishes the job from its own side.
-    fp = successor
-    pub = (acc.keys.get(fp) or {}).get("pubkey", "")
-    if not pub:
-        err.print(f"[red]No pinned key for {name}.[/red]  Enrol it first:  "
-                  f"[bold]fleet sync[/bold]")
-        raise FleetError(f"no pinned key for {name}", code=2)
-
-    added = 0
-    for other in acc.keys:
-        if other != fp and acl.grant(acc, fp, other):
-            added += 1
-    acl.save(acc)
-    console.print(f"[green]✓[/green] {name} granted access to {added} machine(s)")
-
-    record = acl.handover_record(acc, fp)
-    signed = acl.sign(record)
-    bundle = acl.CACHE_PATH.with_name("handover.yaml")
-    bundle.write_text(yaml.safe_dump({"record": record, "signature": signed},
-                                     sort_keys=False))
-
-    console.print(f"\n[bold]Two things left, in this order.[/bold]")
-    console.print(f"  1. [bold]fleet sync[/bold] here, to install {name}'s key everywhere")
-    console.print(f"  2. on {name}: [bold]fleet center --accept[/bold]")
-    console.print(f"\n[dim]It verifies it can actually write each authorized_keys before "
-                  f"taking the role -- probing only proves a key is present. Nothing is "
-                  f"retired until it succeeds, so this machine stays the center until "
-                  f"then.[/dim]")
-    console.print(f"[dim]handover record: {bundle}[/dim]")
 
 
 @app.command("setup")
