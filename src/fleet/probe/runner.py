@@ -19,7 +19,7 @@ import time
 from pathlib import Path
 
 from ..models import ProbeResult, Snapshot, Status
-from ..sshcmd import (IS_WINDOWS, WINDOWS, Endpoint, build_argv,
+from ..ssh.cmd import (IS_WINDOWS, WINDOWS, Endpoint, build_argv,
                       local_platform, local_shell_argv)
 from .parse import MissingSentinel, parse_payload
 

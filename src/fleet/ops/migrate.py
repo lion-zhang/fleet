@@ -11,7 +11,7 @@ from __future__ import annotations
 from contextlib import suppress
 
 from .. import inventory as inv
-from ..keys import ensure_keypair, install_key
+from ..ssh.keys import ensure_keypair, install_key
 from ..ui import console, err
 from .errors import FleetError
 

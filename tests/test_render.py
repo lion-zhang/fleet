@@ -107,7 +107,7 @@ def test_every_rendered_path_agrees_with_its_json(seeded):
 
 def test_an_interactive_session_is_not_wrapped():
     """`fleet ssh box` with no command must hand the user a plain login shell."""
-    from fleet.sshcmd import remote_command
+    from fleet.ssh.cmd import remote_command
 
     assert remote_command([]) == ""
 
@@ -116,7 +116,7 @@ def test_a_remote_command_can_find_tools_installed_in_the_home_directory():
     """A non-interactive ssh gets a minimal PATH with no ~/.local/bin, so anything
     installed by uv, pipx or cargo is invisible -- including fleet itself, which is why
     `fleet ssh box -- fleet ls` failed while `fleet sync` worked."""
-    from fleet.sshcmd import remote_command
+    from fleet.ssh.cmd import remote_command
 
     out = remote_command(["fleet", "ls"])
     assert ".local/bin" in out
@@ -126,7 +126,7 @@ def test_a_remote_command_still_reaches_a_shell(tmp_path):
     """Run what we would hand ssh, and check it does the thing."""
     import subprocess
 
-    from fleet.sshcmd import remote_command
+    from fleet.ssh.cmd import remote_command
 
     got = subprocess.run(["sh", "-c", remote_command(["echo", "hello"])],
                          capture_output=True, text=True, timeout=30)
@@ -138,7 +138,7 @@ def test_shell_syntax_in_a_remote_command_is_still_interpreted():
     lets the far shell parse it, and quoting each word would break that."""
     import subprocess
 
-    from fleet.sshcmd import remote_command
+    from fleet.ssh.cmd import remote_command
 
     got = subprocess.run(["sh", "-c", remote_command(["echo hi | tr a-z A-Z"])],
                          capture_output=True, text=True, timeout=30)
@@ -148,7 +148,7 @@ def test_shell_syntax_in_a_remote_command_is_still_interpreted():
 def test_several_arguments_are_joined_the_way_ssh_joins_them():
     import subprocess
 
-    from fleet.sshcmd import remote_command
+    from fleet.ssh.cmd import remote_command
 
     got = subprocess.run(["sh", "-c", remote_command(["echo", "a", "b"])],
                          capture_output=True, text=True, timeout=30)
@@ -162,7 +162,7 @@ def test_the_wrapper_survives_quotes_inside_the_command():
     as it is with plain ssh -- joining argv is ssh's semantics, not ours.)"""
     import subprocess
 
-    from fleet.sshcmd import remote_command
+    from fleet.ssh.cmd import remote_command
 
     got = subprocess.run(["sh", "-c", remote_command(['echo "it\'s"'])],
                          capture_output=True, text=True, timeout=30)

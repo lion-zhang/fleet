@@ -13,7 +13,7 @@ import sys
 
 import pytest
 
-from fleet.authkeys import block, posix_sync_command, powershell_sync_command
+from fleet.ssh.authkeys import block, posix_sync_command, powershell_sync_command
 
 pytestmark = pytest.mark.skipif(sys.platform == "win32", reason="POSIX sh")
 

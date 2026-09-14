@@ -8,8 +8,8 @@ import unicodedata
 
 from .models import Device, Kind, ProbeResult, Snapshot, Status
 from .probe.runner import run_probe, run_probe_local
-from .sshauth import classify, probe_server
-from .sshcmd import Endpoint, classify_route, parse_ssh_command, resolve
+from .ssh.auth import classify, probe_server
+from .ssh.cmd import Endpoint, classify_route, parse_ssh_command, resolve
 
 _RENTAL_HOST_RE = re.compile(r"(vast\.ai|runpod|autodl|seetacloud|lambdalabs|paperspace)", re.I)
 

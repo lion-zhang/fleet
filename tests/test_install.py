@@ -14,7 +14,7 @@ import sys
 import pytest
 
 from fleet.install import build_install_argv, install_script
-from fleet.sshcmd import Endpoint
+from fleet.ssh.cmd import Endpoint
 
 pytestmark = pytest.mark.skipif(sys.platform == "win32", reason="POSIX sh")
 

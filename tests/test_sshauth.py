@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from fleet.sshauth import classify, server_identity
+from fleet.ssh.auth import classify, server_identity
 
 OPENSSH = """OpenSSH_9.6p1, LibreSSL 3.3.6
 debug1: Reading configuration data /etc/ssh/ssh_config
@@ -52,7 +52,7 @@ def test_an_unknown_server_falls_back_to_keys():
 
 def test_the_table_is_data_not_logic():
     """Adding a vendor must be one line in sshauth, not a branch somewhere else."""
-    from fleet import sshauth
+    from fleet.ssh import auth as sshauth
 
     assert "future-mesh" not in str(sshauth.EXTERNAL_SERVERS)
     original = sshauth.EXTERNAL_SERVERS

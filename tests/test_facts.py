@@ -342,7 +342,7 @@ def test_fleet_imports_without_a_pty():
     saved = {k: sys.modules.get(k) for k in blocked}
     try:
         sys.modules.update(blocked)          # import of these now raises ImportError
-        for mod in ("fleet.keys", "fleet.cli"):
+        for mod in ("fleet.ssh.keys", "fleet.cli"):
             importlib.reload(importlib.import_module(mod))
     finally:
         for k, v in saved.items():
@@ -350,7 +350,7 @@ def test_fleet_imports_without_a_pty():
                 sys.modules.pop(k, None)
             else:
                 sys.modules[k] = v
-        for mod in ("fleet.keys", "fleet.cli"):
+        for mod in ("fleet.ssh.keys", "fleet.cli"):
             importlib.reload(importlib.import_module(mod))
 
 
@@ -429,7 +429,7 @@ def test_one_function_answers_which_os_this_is():
     """There were three separate `sys.platform == "win32"` tests and they had already
     drifted in shape, which is how the local probe kept running the POSIX payload on a
     Windows center. Local and remote now answer in the same vocabulary."""
-    from fleet.sshcmd import POSIX, WINDOWS, local_platform, local_shell_argv, remote_platform
+    from fleet.ssh.cmd import POSIX, WINDOWS, local_platform, local_shell_argv, remote_platform
 
     assert local_platform() in (POSIX, WINDOWS)
     assert local_shell_argv()[0] in ("sh", "powershell")
@@ -520,7 +520,7 @@ def test_a_probe_payload_keeps_its_newlines():
     import unittest.mock as mock
 
     from fleet.probe import runner
-    from fleet.sshcmd import Endpoint
+    from fleet.ssh.cmd import Endpoint
 
     seen = {}
 

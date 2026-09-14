@@ -10,7 +10,7 @@ from fleet import inventory as inv
 from fleet.models import Device, Kind, ProbeResult, Status
 from fleet.onboard import classify_kind, derive_id, slugify, suggest_name
 from fleet.probe.parse import parse_payload
-from fleet.sshcmd import Endpoint, parse_ssh_command
+from fleet.ssh.cmd import Endpoint, parse_ssh_command
 
 FIX = pathlib.Path(__file__).parent / "fixtures" / "probe"
 

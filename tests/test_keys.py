@@ -16,14 +16,14 @@ import sys
 
 import pytest
 
-from fleet.keys import (
+from fleet.ssh.keys import (
     authorized_keys_command,
     ensure_keypair,
     build_password_argv,
     public_key,
     run_with_password,
 )
-from fleet.sshcmd import Endpoint
+from fleet.ssh.cmd import Endpoint
 from fleet.ops import enrol
 
 
@@ -112,7 +112,7 @@ def test_the_first_dial_lets_the_agent_answer():
     agent key. The commonest way into a fresh cloud VM is exactly such a key, and
     probing with IdentitiesOnly would report AUTH_FAILED and send us asking for a
     password the host does not even accept."""
-    from fleet.sshcmd import build_argv, build_enroll_argv
+    from fleet.ssh.cmd import build_argv, build_enroll_argv
 
     ep = Endpoint(target="oracle", user="ubuntu")
     assert "IdentitiesOnly=yes" in build_argv(ep), "steady state still pins identities"
@@ -325,7 +325,7 @@ def test_a_machine_with_no_keypair_gets_one(tmp_path):
     *its* key, so without one it can be reached and granted nothing."""
     import subprocess
 
-    from fleet.keys import ensure_remote_keypair_command
+    from fleet.ssh.keys import ensure_remote_keypair_command
 
     cmd = ensure_remote_keypair_command()
     env = {"HOME": str(tmp_path), "PATH": "/usr/bin:/bin:/usr/local/bin"}
@@ -348,7 +348,7 @@ def test_a_key_written_by_an_older_fleet_is_moved_not_replaced(tmp_path):
     left to match them by -- so the key moves and keeps its fingerprint."""
     import subprocess
 
-    from fleet.keys import ensure_remote_keypair_command
+    from fleet.ssh.keys import ensure_remote_keypair_command
 
     if sys.platform != "darwin":
         pytest.skip("only macOS changed where the key belongs")
@@ -372,7 +372,7 @@ def test_it_never_replaces_a_key_the_machine_already_has(tmp_path):
     everywhere, with nothing left to match them by."""
     import subprocess
 
-    from fleet.keys import ensure_remote_keypair_command
+    from fleet.ssh.keys import ensure_remote_keypair_command
 
     cmd = ensure_remote_keypair_command()
     env = {"HOME": str(tmp_path), "PATH": "/usr/bin:/bin:/usr/local/bin"}
@@ -386,7 +386,7 @@ def test_an_interrupted_keygen_does_not_wedge_it_forever(tmp_path):
     would leave a half-made pair that can never be completed. The .pub is the test."""
     import subprocess
 
-    from fleet.keys import ensure_remote_keypair_command
+    from fleet.ssh.keys import ensure_remote_keypair_command
 
     d = tmp_path / ".config" / "fleet"
     d.mkdir(parents=True)
@@ -400,7 +400,7 @@ def test_an_interrupted_keygen_does_not_wedge_it_forever(tmp_path):
 def test_the_windows_twin_uses_the_config_dir_fleet_will_look_in():
     """platformdirs puts a non-roaming user config under LOCALAPPDATA, which is where
     fleet on that machine looks -- a key written anywhere else is invisible to it."""
-    from fleet.keys import ensure_remote_keypair_command
+    from fleet.ssh.keys import ensure_remote_keypair_command
 
     cmd = ensure_remote_keypair_command(platform="windows")
     assert "$env:LOCALAPPDATA" in cmd and "'fleet'" in cmd

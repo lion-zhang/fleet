@@ -13,11 +13,11 @@ import sys
 
 from .. import inventory as inv
 from .. import store
-from ..keys import (ensure_keypair, install_key, install_key_over_existing_access,
+from ..ssh.keys import (ensure_keypair, install_key, install_key_over_existing_access,
                     pty_available)
 from ..models import Status
 from ..probe.runner import run_probe
-from ..sshcmd import remote_platform
+from ..ssh.cmd import remote_platform
 from ..ui import console, err
 
 def confirm_key(dev, ep) -> None:
@@ -118,7 +118,7 @@ def register_identity(dev) -> str:
     """
     from .. import access as acl
     from .. import reconcile as rec
-    from ..keys import ensure_remote_keypair_command
+    from ..ssh.keys import ensure_remote_keypair_command
 
     try:
         acc = acl.load()

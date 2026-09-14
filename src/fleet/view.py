@@ -13,7 +13,7 @@ from enum import StrEnum
 from typing import Any
 
 from .models import Device, Kind, Status
-from .sshcmd import route_of
+from .ssh.cmd import route_of
 from .store import age_s
 
 

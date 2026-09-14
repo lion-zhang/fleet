@@ -14,7 +14,7 @@ from __future__ import annotations
 
 import shlex
 
-from .sshcmd import Endpoint
+from .ssh.cmd import Endpoint
 
 INSTALL_DIR = "$HOME/.local/share/fleet"
 

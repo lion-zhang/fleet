@@ -28,10 +28,10 @@ def two_machines(tmp_path, monkeypatch):
                    check=True)
     pub = key.with_suffix(".pub").read_text()
     # Patched on every module that *reads* the name, not only on the one that defines
-    # it: these import it at module scope, so rebinding `fleet.keys.ensure_keypair`
+    # it: these import it at module scope, so rebinding `fleet.ssh.keys.ensure_keypair`
     # alone leaves them holding the original and generating a real key.
-    import fleet.keys
-    for mod in (fleet.keys, enrol, handover):
+    import fleet.ssh.keys
+    for mod in (fleet.ssh.keys, enrol, handover):
         monkeypatch.setattr(mod, "ensure_keypair", lambda *a, **k: (key, pub),
                             raising=False)
 

@@ -32,9 +32,9 @@ def a_fleet(tmp_path, monkeypatch):
                    check=True)
     pub = key.with_suffix(".pub").read_text()
     import fleet.config
-    import fleet.keys
+    import fleet.ssh.keys
     monkeypatch.setattr(fleet.config, "FLEET_KEY", key)
-    monkeypatch.setattr(fleet.keys, "ensure_keypair", lambda *a, **k: (key, pub))
+    monkeypatch.setattr(fleet.ssh.keys, "ensure_keypair", lambda *a, **k: (key, pub))
     monkeypatch.setattr(cli, "ensure_keypair", lambda *a, **k: (key, pub), raising=False)
 
     me = acl.fingerprint(pub)

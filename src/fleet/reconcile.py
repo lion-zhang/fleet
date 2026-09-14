@@ -22,8 +22,8 @@ import yaml
 
 from . import access as acc_mod
 from .access import Access, AccessError
-from .authkeys import sync_command
-from .sshcmd import Endpoint, build_argv
+from .ssh.authkeys import sync_command
+from .ssh.cmd import Endpoint, build_argv
 
 
 @dataclass(slots=True)

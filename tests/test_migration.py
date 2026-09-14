@@ -58,7 +58,7 @@ def test_a_failure_keeps_the_file(tmp_path, monkeypatch):
     monkeypatch.setattr(sec, "load_identity", lambda *a, **k: object())
     monkeypatch.setattr(cli, "install_key", lambda *a, **k: (False, "Permission denied"),
                         raising=False)
-    import fleet.keys as keys
+    import fleet.ssh.keys as keys
     monkeypatch.setattr(keys, "install_key", lambda *a, **k: (False, "Permission denied"))
     r = runner.invoke(cli.app, ["access", "--migrate"])
     assert r.exit_code == 1

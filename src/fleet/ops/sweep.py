@@ -20,7 +20,7 @@ from .. import inventory as inv
 from .. import reconcile as rec
 from .. import store
 from ..probe.runner import run_probe
-from ..sshcmd import remote_platform
+from ..ssh.cmd import remote_platform
 from ..ui import console, err
 from . import enrol
 from .errors import FleetError

@@ -24,7 +24,7 @@ from .. import inventory as inv
 from .. import store
 from ..config import DEFAULT_PORT, load_config
 from ..models import Status
-from ..sshcmd import build_argv
+from ..ssh.cmd import build_argv
 from ..ui import console
 
 def center_advertise_url(acc, port: int = 0) -> str:

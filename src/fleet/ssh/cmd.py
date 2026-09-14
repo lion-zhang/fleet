@@ -14,7 +14,7 @@ import subprocess
 import sys
 from dataclasses import dataclass, field
 
-from .config import FLEET_KEY
+from ..config import FLEET_KEY
 
 IS_WINDOWS = sys.platform == "win32"     # see local_platform(); kept for hot paths
 

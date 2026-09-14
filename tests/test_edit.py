@@ -12,7 +12,7 @@ import pytest
 
 from fleet.edit import apply_edits
 from fleet.models import Device, Kind
-from fleet.sshcmd import Endpoint
+from fleet.ssh.cmd import Endpoint
 
 
 def _dev(id: str = "net:1.2.3.4:22", **kw) -> Device:

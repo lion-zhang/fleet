@@ -22,8 +22,8 @@ import time
 from contextlib import suppress
 from pathlib import Path
 
-from .config import FLEET_KEY
-from .sshcmd import Endpoint, build_enroll_argv
+from ..config import FLEET_KEY
+from .cmd import Endpoint, build_enroll_argv
 
 # sshd's prompt varies ("Password:", "root@host's password:", a PAM phrasing), so match
 # the one word they reliably share, case-insensitively.

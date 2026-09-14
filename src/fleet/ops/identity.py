@@ -18,7 +18,7 @@ import subprocess
 from functools import lru_cache
 from pathlib import Path
 
-from ..sshcmd import local_platform
+from ..ssh.cmd import local_platform
 
 
 @lru_cache(maxsize=1)

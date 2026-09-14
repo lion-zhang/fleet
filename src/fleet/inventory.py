@@ -18,7 +18,7 @@ from filelock import FileLock, Timeout
 
 from .config import INVENTORY_PATH, ensure_dirs
 from .models import Device, Kind
-from .sshcmd import Endpoint, route_of
+from .ssh.cmd import Endpoint, route_of
 
 SCHEMA_VERSION = 1
 

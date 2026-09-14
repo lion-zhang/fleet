@@ -16,8 +16,8 @@ from contextlib import suppress
 from .. import access as acl
 from .. import inventory as inv
 from .. import reconcile as rec
-from ..authkeys import sync_command
-from ..sshcmd import local_platform, local_shell_argv, remote_platform
+from ..ssh.authkeys import sync_command
+from ..ssh.cmd import local_platform, local_shell_argv, remote_platform
 from .. import store
 from ..ui import console, err
 from ..ui import confirm

@@ -13,7 +13,7 @@ from dataclasses import dataclass, field
 
 from .inventory import touch
 from .models import Device
-from .sshcmd import Endpoint, classify_route
+from .ssh.cmd import Endpoint, classify_route
 
 
 @dataclass(slots=True)

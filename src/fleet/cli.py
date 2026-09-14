@@ -29,7 +29,7 @@ from . import store
 from .config import DB_PATH, DEFAULT_PORT, FLEET_KEY, INVENTORY_PATH, load_config
 from .edit import apply_edits
 from .install import build_install_argv, install_script
-from .keys import (ensure_keypair, install_key,
+from .ssh.keys import (ensure_keypair, install_key,
                    install_key_over_existing_access, pty_available)
 from .models import Device, Kind, Status
 from .ops import FleetError
@@ -57,7 +57,7 @@ from .ui import DOT as _DOT, chatter_to_stderr as _chatter_to_stderr, console, e
 from .onboard import onboard, onboard_self
 from .probe.runner import (probe_env, probe_many, run_probe, run_probe_local)
 from .setup import TARGETS, detect_targets, fleet_command, install, uninstall
-from .sshcmd import (build_argv, local_platform, local_shell_argv, remote_command,
+from .ssh.cmd import (build_argv, local_platform, local_shell_argv, remote_command,
                      remote_platform, resolve_command)
 from .top import (Schedule, device_lines, disk_cell, gpu_cells_compact,
                   name_cell, render_device, render_fleet)
@@ -911,7 +911,7 @@ def cmd_probe(name: str = typer.Argument(None, help="defaults to this machine"),
     if raw:
         import subprocess
         from .probe.runner import PAYLOAD
-        from .sshcmd import build_argv
+        from .ssh.cmd import build_argv
         argv = build_argv(sorted(eps, key=lambda e: e.preference)[0],
                           remote="sh -s", env=probe_env(dev.probe_mode, dev.disk_paths))
         p = subprocess.run(argv, input=PAYLOAD.read_bytes(), capture_output=True)
@@ -1116,7 +1116,7 @@ def cmd_center(name: str = typer.Argument(None, help="hand the role to this mach
     [dim]Example:[/dim]  fleet center machine_B
     """
     from . import access as acl
-    from .keys import ensure_keypair
+    from .ssh.keys import ensure_keypair
 
     if pubkey:
         # Deliberately works with nothing reachable and no inventory: the moment you

@@ -59,7 +59,7 @@ def test_only_a_pinned_key_is_ever_installed(tmp_path):
     acc = _acc()
     acc.keys[B]["pubkey"] = ""
     ok, msg = reconcile.apply_edge(acc, (B, C, "root"),
-                                   __import__("fleet.sshcmd", fromlist=["Endpoint"])
+                                   __import__("fleet.ssh.cmd", fromlist=["Endpoint"])
                                    .Endpoint(target="nowhere.invalid"), install=True)
     assert ok is False
     assert "no pinned key" in msg and "fleet sync" in msg

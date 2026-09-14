@@ -23,7 +23,7 @@ import subprocess
 import sys
 from pathlib import Path
 
-from .sshcmd import WINDOWS, local_platform
+from .ssh.cmd import WINDOWS, local_platform
 
 LABEL = "io.fleet.center"
 TASK = "fleet-center"
