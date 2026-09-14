@@ -559,3 +559,28 @@ def test_a_windows_machine_knows_its_own_id(monkeypatch):
         assert cli.local_device_id() == "linux:machine-id:665aebe1-5029-45c5-adae-035a2b4fada7"
     finally:
         cli.local_device_id.cache_clear()
+
+
+def test_init_marks_the_center_in_the_inventory_too(tmp_path, monkeypatch):
+    """`is_center()` stays the authority, but the diamond in `ls` and `top` is drawn from
+    Device.role -- so without this the center was invisible in the one view that exists
+    to answer "which machine decides"."""
+    from typer.testing import CliRunner
+
+    from fleet import access as acl, cli, inventory as inv, store
+    from fleet.models import Device, Kind, ProbeResult, Status
+
+    for n in ("ACCESS_PATH", "LEDGER_PATH", "CACHE_PATH", "OUTBOX_PATH"):
+        monkeypatch.setattr(acl, n, tmp_path / getattr(acl, n).name)
+    monkeypatch.setattr(inv, "INVENTORY_PATH", tmp_path / "inventory.yaml")
+    monkeypatch.setattr(store, "DB_PATH", tmp_path / "cache.db")
+    import subprocess
+    key = tmp_path / "k"
+    subprocess.run(["ssh-keygen", "-t", "ed25519", "-N", "", "-q", "-f", str(key)], check=True)
+    monkeypatch.setattr(cli, "ensure_keypair",
+                        lambda *a, **k: (key, key.with_suffix(".pub").read_text().strip()))
+    monkeypatch.setattr(cli, "onboard_self", lambda **k: (
+        Device(id="id:me", name="hub", kind=Kind.PERMANENT), ProbeResult(status=Status.OK)))
+
+    assert CliRunner().invoke(cli.app, ["center", "--init"]).exit_code == 0
+    assert inv.find_exact(inv.load(inv.INVENTORY_PATH), "hub").role == "center"

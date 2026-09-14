@@ -1648,6 +1648,11 @@ def cmd_center(name: str = typer.Argument(None, help="hand the role to this mach
         except acl.AccessError as exc:
             err.print(f"[red]{exc}[/red]")
             raise typer.Exit(2)
+        # Reflect the role in the inventory too. `is_center()` remains the authority --
+        # this field rides the merge and cannot be trusted for a decision -- but it is
+        # what `ls` and `top` draw the diamond from, and a center nobody can see in the
+        # table is the problem the glyph was added to solve.
+        dev.role = "center"
         # Seed the inventory from the same object the access list was pinned from. Done
         # separately the two derive a name each, and nothing reconciles them: the access
         # list would keep answering to one name while `fleet show` knew the other. It
