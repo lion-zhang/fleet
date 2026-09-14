@@ -137,3 +137,29 @@ def test_the_installer_stops_the_service_before_replacing_it():
     # every dependency, which turns a deploy into a download of the world
     assert "--reinstall-package fleet-broker" in sc
     assert "--reinstall " not in sc
+
+
+def test_windows_allows_the_interpreter_not_the_shim(monkeypatch):
+    """fleet.exe is a launcher; the socket belongs to the Python behind it. A program
+    rule naming fleet.exe matches nothing that ever accepts a connection."""
+    calls = []
+    monkeypatch.setattr(service, "_run", lambda argv, **k: calls.append(argv) or _ok())
+    monkeypatch.setattr(service.sys, "executable", "C:\\uv\\python\\python.exe")
+    service._windows_open_port(7373)
+    flat = [" ".join(c) for c in calls]
+    assert any("localport=7373" in f for f in flat), "the port itself must be opened"
+    assert any("program=C:\\uv\\python\\python.exe" in f for f in flat)
+    assert not any("program=" in f and "fleet.exe" in f for f in flat)
+
+
+def test_windows_clears_a_block_rule_on_its_own_interpreter(monkeypatch):
+    """A block rule beats an allow rule whatever the allow rule says, and Windows writes
+    one for any program refused at the prompt -- so the port rule is simply overridden."""
+    calls = []
+    monkeypatch.setattr(service, "_run", lambda argv, **k: calls.append(argv) or _ok())
+    service._windows_unblock("C:\\uv\\python\\python.exe")
+    script = " ".join(calls[0])
+    assert "Action Block" in script and "Remove-NetFirewallRule" in script
+    # scoped to fleet's own interpreter, not to Python generally: the user may have
+    # blocked another one deliberately
+    assert "uv" in script and "python.exe" in script

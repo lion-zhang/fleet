@@ -178,25 +178,65 @@ FIREWALL_RULE = "fleet center"
 def _windows_open_port(port: int) -> str:
     """Let the fleet actually reach it.
 
-    Windows Firewall blocks inbound by default, and its rules are per *program path* --
-    so a listener started by hand from one install and one started by the scheduler from
-    another are two different programs as far as it is concerned. Binding the port then
-    looks completely healthy from the machine itself and is invisible from everywhere
-    else, which is the worst way for this to fail.
+    Windows blocks inbound by default, so the port needs a rule. Two things make that
+    less obvious than it sounds, and both were found the hard way -- the listener bound
+    0.0.0.0, answered on localhost and its own tailnet address, and was invisible from
+    every other machine, which is the worst way for this to fail.
+
+    **The program that listens is not fleet.exe.** That is a launcher shim; the socket
+    belongs to the Python interpreter behind it, and a program rule naming fleet.exe
+    matches nothing that ever accepts a connection.
+
+    **A block rule beats an allow rule**, whatever the allow rule says. Windows quietly
+    writes one for any program that tries to listen and is refused at the prompt, so an
+    interpreter that was once denied stays denied and the port rule is simply overridden.
+    Those are removed here, scoped to fleet's own uv-managed interpreter -- not to Python
+    generally, which the user may have blocked deliberately.
     """
+    import sys as _sys
+
+    exe = _sys.executable
+    removed = _windows_unblock(exe)
     _run(["netsh", "advfirewall", "firewall", "delete", "rule", f"name={FIREWALL_RULE}"])
     p = _run(["netsh", "advfirewall", "firewall", "add", "rule",
               f"name={FIREWALL_RULE}", "dir=in", "action=allow",
               "protocol=TCP", f"localport={port}"])
-    return (f"opened TCP {port} inbound" if p.returncode == 0
-            else f"could not open TCP {port}: machines will not reach it")
+    # The program rule as well as the port rule: the port rule is what makes it reachable,
+    # and this is what stops Windows offering to block the interpreter again later.
+    _run(["netsh", "advfirewall", "firewall", "delete", "rule", f"name={FIREWALL_RULE} app"])
+    _run(["netsh", "advfirewall", "firewall", "add", "rule",
+          f"name={FIREWALL_RULE} app", "dir=in", "action=allow", f"program={exe}",
+          "enable=yes"])
+    if p.returncode != 0:
+        return f"could not open TCP {port}: machines will not reach it"
+    return f"opened TCP {port} inbound" + (f", and cleared {removed} block rule(s) on its "
+                                           "interpreter" if removed else "")
+
+
+def _windows_unblock(exe: str) -> int:
+    """Drop inbound block rules on fleet's own interpreter. Returns how many.
+
+    Matched on the uv python directory rather than the exact path, because the blocked
+    rule and the running interpreter differ by patch version -- uv writes
+    cpython-3.12.14-... into the rule and runs from cpython-3.12-... -- so an exact
+    comparison finds nothing while the block still applies.
+    """
+    script = (
+        "Get-NetFirewallRule -Direction Inbound -Action Block | "
+        "Where-Object { ($_ | Get-NetFirewallApplicationFilter "
+        "-ErrorAction SilentlyContinue).Program -like '*uv\\python\\*python.exe' } | "
+        "ForEach-Object { Remove-NetFirewallRule -Name $_.Name; 'removed' }"
+    )
+    p = _run(["powershell", "-NoProfile", "-Command", script])
+    return p.stdout.count("removed") if p.returncode == 0 else 0
 
 
 def _windows_remove() -> str:
     _windows_stop()
     _run(["schtasks", "/delete", "/tn", TASK, "/f"])
-    _run(["netsh", "advfirewall", "firewall", "delete", "rule", f"name={FIREWALL_RULE}"])
-    return "removed, and the firewall rule with it"
+    for name in (FIREWALL_RULE, f"{FIREWALL_RULE} app"):
+        _run(["netsh", "advfirewall", "firewall", "delete", "rule", f"name={name}"])
+    return "removed, and the firewall rules with it"
 
 
 def _windows_status() -> str:
