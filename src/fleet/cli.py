@@ -32,7 +32,7 @@ from .agents import (MCP_CLIENTS, TARGETS, detect_mcp_clients, detect_targets,
 from .config import (CONFIG_DIR, DB_PATH, DEFAULT_PORT, FLEET_KEY, INVENTORY_PATH,
                      STATE_DIR, load_config)
 from .edit import apply_edits
-from .install import build_install_argv, install_script
+from .install import build_install_argv, install_script, payload_for
 from .mcpserver import McpUnavailable, serve as serve_mcp
 from .models import Device, Kind, Status
 from .onboard import onboard, onboard_self
@@ -464,7 +464,8 @@ def configured_repo() -> str:
 def run_installer(ep, script: str, *, forward_agent: bool = True,
                   platform: str = "") -> tuple[int, str]:
     argv = build_install_argv(ep, forward_agent=forward_agent, platform=platform)
-    p = subprocess.run(argv, input=script.encode(), capture_output=True, timeout=900)
+    p = subprocess.run(argv, input=payload_for(script, platform),
+                       capture_output=True, timeout=900)
     return p.returncode, (p.stdout + p.stderr).decode(errors="replace")
 
 

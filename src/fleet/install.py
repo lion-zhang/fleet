@@ -12,6 +12,7 @@ connected, so it can be declined for a host you do not trust with that.
 
 from __future__ import annotations
 
+import base64
 import shlex
 
 from .ssh.cmd import WINDOWS, Endpoint
@@ -117,8 +118,28 @@ def build_install_argv(ep: Endpoint, *, forward_agent: bool = True,
     argv.append(f"{ep.user}@{ep.target}" if ep.user else ep.target)
     # Both read the script from stdin, so nothing long or quoted has to survive a second
     # round of shell parsing on the way in.
-    argv.append("powershell -NoProfile -Command -" if platform == WINDOWS else "sh -s")
+    #
+    # Windows arrives base64 and is decoded on the far side. `powershell -Command -`
+    # reads stdin and evaluates it *statement by statement*, so the first line of a
+    # multi-line `if {` is a syntax error on its own and everything after it is quietly
+    # skipped: the installer appears to run, says nothing, and does nothing. Measured,
+    # not assumed -- a one-line `while` loop came back fine and an `if/else` block came
+    # back empty. Decoding the whole thing first makes it one unit again.
+    argv.append(WINDOWS_STDIN_SHELL if platform == WINDOWS else "sh -s")
     return argv
+
+
+WINDOWS_STDIN_SHELL = (
+    "powershell -NoProfile -Command $i=[Console]::In.ReadToEnd(); "
+    "iex ([Text.Encoding]::UTF8.GetString([Convert]::FromBase64String($i)))"
+)
+
+
+def payload_for(script: str, platform: str = "") -> bytes:
+    """What to write to the installer's stdin, for the shell that will read it."""
+    if platform == WINDOWS:
+        return base64.b64encode(script.encode("utf-8"))
+    return script.encode()
 
 
 def _windows_script(repo: str, ref: str = "main") -> str:

@@ -411,3 +411,29 @@ def test_the_windows_installer_does_not_stop_fleet_by_running_fleet():
     # and the order matters: stop, wait, then replace
     assert code.index("schtasks /end") < code.index("uv tool install")
     assert code.index("Start-Sleep") < code.index("uv tool install")
+
+
+def test_the_windows_script_is_delivered_as_one_unit():
+    """`powershell -Command -` reads stdin and evaluates it statement by statement, so
+    the first line of a multi-line `if {` is a syntax error on its own and everything
+    after it is quietly skipped -- the installer appears to run, says nothing, and does
+    nothing. Measured on a real Windows box: a one-line `while` came back fine and an
+    `if/else` block came back empty. Base64 makes the script one unit again."""
+    import base64
+
+    from fleet.install import payload_for
+    from fleet.ssh.cmd import WINDOWS, Endpoint
+
+    script = install_script("https://x/y.git", platform=WINDOWS)
+    assert "\n" in script and "if (" in script, "the script does use blocks"
+
+    wire = payload_for(script, WINDOWS)
+    assert b"\n" not in wire, "it must arrive as a single line"
+    assert base64.b64decode(wire).decode() == script
+
+    remote = build_install_argv(Endpoint(target="b", user="u"), platform=WINDOWS)[-1]
+    assert "FromBase64String" in remote and "ReadToEnd" in remote
+
+    # POSIX is unchanged: sh reads a script from stdin correctly as it is.
+    assert payload_for(script) == script.encode()
+    assert build_install_argv(Endpoint(target="b", user="u"))[-1] == "sh -s"
