@@ -171,6 +171,10 @@ def test_the_sweep_enrols_a_machine_that_has_no_pinned_key(tmp_path, monkeypatch
     monkeypatch.setattr(enrol, "run_probe", lambda *a, **k: (_ for _ in ()).throw(OSError()))
     # the sweep ends by handing the inventory to every machine, which is one ssh each
     monkeypatch.setattr(sync, "run_sync", lambda *a, **k: (255, ""))
+    # broadcast seals once then sends per machine, so the stub goes
+    # on the half that dials; sealing would shell out to ssh-keygen.
+    monkeypatch.setattr(sync, "sealed_envelope", lambda payload: payload)
+    monkeypatch.setattr(sync, "send_sealed", lambda *a, **k: (255, ""))
 
     r = runner.invoke(cli.app, ["sync"])
     assert r.exit_code == 0, r.output

@@ -297,7 +297,13 @@ def broadcast(devices) -> None:
             routes.append(eps[0])
 
     cfg = load_config()
-    answers = _across_machines(routes, lambda ep: sync.run_sync(ep, mine),
+    # Sealed once, here, before any thread starts. Sealing reads the access list, reads
+    # telemetry out of sqlite and shells out to `ssh-keygen -Y sign`, and doing that from
+    # eight workers at once wedged a real sweep: the threads sat in `sign` while their
+    # subprocess reader threads waited on pipes that never closed. It is also the same
+    # envelope for every machine, so signing it per machine was only ever extra work.
+    sealed = sync.sealed_envelope(mine)
+    answers = _across_machines(routes, lambda ep: sync.send_sealed(ep, sealed),
                                workers=int(cfg.max_workers))
 
     reached = 0

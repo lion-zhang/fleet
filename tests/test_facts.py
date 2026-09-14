@@ -649,8 +649,11 @@ def test_the_sweep_hands_the_inventory_to_every_machine(tmp_path, monkeypatch):
     monkeypatch.setattr(rec, "apply_edge", lambda *a, **k: (True, ""))
     monkeypatch.setattr(enrol, "run_probe", lambda *a, **k: (_ for _ in ()).throw(OSError()))
     handed = []
-    monkeypatch.setattr(sync, "run_sync",
-                        lambda ep, payload: handed.append(ep.target) or (0, payload))
+    monkeypatch.setattr(sync, "run_sync", lambda ep, payload: handed.append(ep.target) or (0, payload))
+    # broadcast seals once then sends per machine, so the stub goes
+    # on the half that dials; sealing would shell out to ssh-keygen.
+    monkeypatch.setattr(sync, "sealed_envelope", lambda payload: payload)
+    monkeypatch.setattr(sync, "send_sealed", lambda ep, payload: handed.append(ep.target) or (0, payload))
 
     assert CliRunner().invoke(cli.app, ["sync"]).exit_code == 0
     assert handed == ["1.2.3.4"], "every machine with an endpoint, and only those"
@@ -668,6 +671,10 @@ def test_a_machine_without_fleet_is_not_an_error(tmp_path, monkeypatch):
                       endpoints=[{"target": "1.2.3.4", "user": "root", "port": 22}])]
     inv.save(devices, inv.INVENTORY_PATH)
     monkeypatch.setattr(sync, "run_sync", lambda *a, **k: (127, "fleet: command not found"))
+    # broadcast seals once then sends per machine, so the stub goes
+    # on the half that dials; sealing would shell out to ssh-keygen.
+    monkeypatch.setattr(sync, "sealed_envelope", lambda payload: payload)
+    monkeypatch.setattr(sync, "send_sealed", lambda *a, **k: (127, "fleet: command not found"))
     sweep.broadcast(devices)                # must not raise
 
 
@@ -697,8 +704,11 @@ def test_a_settled_fleet_still_hands_the_inventory_round(tmp_path, monkeypatch):
         acl.ACCESS_PATH)
 
     handed = []
-    monkeypatch.setattr(sync, "run_sync",
-                        lambda ep, payload: handed.append(ep.target) or (0, payload))
+    monkeypatch.setattr(sync, "run_sync", lambda ep, payload: handed.append(ep.target) or (0, payload))
+    # broadcast seals once then sends per machine, so the stub goes
+    # on the half that dials; sealing would shell out to ssh-keygen.
+    monkeypatch.setattr(sync, "sealed_envelope", lambda payload: payload)
+    monkeypatch.setattr(sync, "send_sealed", lambda ep, payload: handed.append(ep.target) or (0, payload))
     monkeypatch.setattr(sweep, "enrol_unpinned", lambda *a, **k: False)
 
     assert CliRunner().invoke(cli.app, ["sync"]).exit_code == 0

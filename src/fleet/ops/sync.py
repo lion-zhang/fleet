@@ -52,22 +52,41 @@ def this_host(acc) -> str:
 
     return socket.gethostname()
 
-def run_sync(ep, payload: str) -> tuple[int, str]:
-    """Hand our inventory to the center and take back the merged result."""
-    # a non-interactive shell may not have ~/.local/bin on PATH, which is exactly where
-    # `fleet install` puts fleet.
-    remote = 'sh -lc \'PATH="$HOME/.local/bin:$PATH" fleet sync --serve\''
-    argv = build_argv(ep, remote=remote)
-    # Sealed, because the far side runs this filter for anyone holding a key on it.
+def sealed_envelope(payload: str) -> str:
+    """Sign our inventory once, for whoever is about to be handed it.
 
+    Split out of `run_sync` because none of it varies per machine and all of it is
+    hostile to being run from several threads at once: it reads the access list, reads
+    telemetry out of sqlite, and shells out to `ssh-keygen -Y sign`. Handing the same
+    envelope to every machine is also simply less work -- the old shape signed the same
+    bytes once per spoke.
+    """
     try:
         url = center_advertise_url(acl.load())
     except acl.AccessError:
         url = ""                           # not a center; nothing to advertise
-    sealed = acl.seal(payload, telemetry=telemetry_to_relay(), center_url=url)
+    return acl.seal(payload, telemetry=telemetry_to_relay(), center_url=url)
+
+
+def send_sealed(ep, sealed: str) -> tuple[int, str]:
+    """Hand an already-sealed envelope to one machine and take back its answer.
+
+    The only half that varies per machine, and the only half safe to run concurrently:
+    it spawns ssh and reads its pipes, and touches nothing this process shares.
+    """
+    # a non-interactive shell may not have ~/.local/bin on PATH, which is exactly where
+    # `fleet install` puts fleet.
+    remote = 'sh -lc \'PATH="$HOME/.local/bin:$PATH" fleet sync --serve\''
+    argv = build_argv(ep, remote=remote)
     p = subprocess.run(argv, input=sealed.encode(), capture_output=True, timeout=180)
     out = p.stdout.decode(errors="replace")
     return p.returncode, (out if p.returncode == 0 else out + p.stderr.decode(errors="replace"))
+
+
+def run_sync(ep, payload: str) -> tuple[int, str]:
+    """Seal our inventory and hand it to one machine. Sealed, because the far side runs
+    this filter for anyone holding a key on it."""
+    return send_sealed(ep, sealed_envelope(payload))
 
 def post(url: str, payload: str, timeout: float = 8.0) -> str | None:
     """One request to the center. None on any failure, which is never fatal here."""

@@ -438,3 +438,38 @@ def test_the_windows_script_is_delivered_as_one_unit():
     # POSIX is unchanged: sh reads a script from stdin correctly as it is.
     assert payload_for(script) == script.encode()
     assert build_install_argv(Endpoint(target="b", user="u"))[-1] == "sh -s"
+
+
+def test_every_powershell_sent_over_command_dash_completes_per_line():
+    """`powershell -Command -` reads stdin and evaluates it statement by statement, so a
+    line ending in `{` is a syntax error on its own and the block after it is skipped --
+    silently. `reconcile._remote` still uses that form for authorized_keys edits, and it
+    is safe today only because every statement there happens to fit on one line.
+
+    Nothing enforced that. This does, because the failure is invisible: the edit would
+    report success having done nothing, or worse, half of it. The installer needed a
+    different answer -- it has real blocks, so it goes over base64 -- but this script is
+    fine as it is and does not need rewriting, only keeping.
+    """
+    from fleet.ssh.authkeys import posix_sync_command, powershell_sync_command
+
+    script = powershell_sync_command("abc123", "SHA256:xx", user="u",
+                                     pubkey="ssh-ed25519 AAAA x")
+    for n, line in enumerate(script.splitlines(), 1):
+        text = line.strip()
+        if not text or text.startswith("#"):
+            continue
+        assert text.count("{") == text.count("}"), \
+            f"line {n} leaves a block open, which -Command - will not carry: {text!r}"
+        assert text.count("(") == text.count(")"), \
+            f"line {n} leaves a paren open: {text!r}"
+
+    # The removal form too -- it is a different script.
+    removal = powershell_sync_command("abc123", "SHA256:xx", user="u", pubkey=None)
+    for line in removal.splitlines():
+        text = line.strip()
+        if text and not text.startswith("#"):
+            assert text.count("{") == text.count("}"), text
+
+    assert posix_sync_command("abc123", "SHA256:xx", user="u", pubkey=None), \
+        "the POSIX form still exists; sh reads a whole script and has no such limit"

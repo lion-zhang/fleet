@@ -35,6 +35,10 @@ def fleet_at(tmp_path, monkeypatch):
     # the sweep hands the inventory to every machine at the end; that is a real
     # ssh per device, and these tests are about the reconciler
     monkeypatch.setattr(sync, "run_sync", lambda *a, **k: (255, ""))
+    # broadcast seals once then sends per machine, so the stub goes
+    # on the half that dials; sealing would shell out to ssh-keygen.
+    monkeypatch.setattr(sync, "sealed_envelope", lambda payload: payload)
+    monkeypatch.setattr(sync, "send_sealed", lambda *a, **k: (255, ""))
 
     devices = [
         Device(id="id:center", name="macbook", kind=Kind.PERMANENT, role="center"),
@@ -324,8 +328,11 @@ def test_the_center_does_not_hand_the_inventory_to_itself(fleet_at, monkeypatch)
     inv.save(devices, inv.INVENTORY_PATH)
 
     dialled = []
-    monkeypatch.setattr(sync, "run_sync",
-                        lambda ep, *a, **k: dialled.append(ep.target) or (255, ""))
+    monkeypatch.setattr(sync, "run_sync", lambda ep, *a, **k: dialled.append(ep.target) or (255, ""))
+    # broadcast seals once then sends per machine, so the stub goes
+    # on the half that dials; sealing would shell out to ssh-keygen.
+    monkeypatch.setattr(sync, "sealed_envelope", lambda payload: payload)
+    monkeypatch.setattr(sync, "send_sealed", lambda ep, *a, **k: dialled.append(ep.target) or (255, ""))
     monkeypatch.setattr(rec, "apply_edge", lambda *a, **k: (True, ""))
     monkeypatch.setattr(enrol, "run_probe", lambda *a, **k: (_ for _ in ()).throw(OSError()))
     monkeypatch.setattr(sweep, "run_probe", lambda *a, **k: (_ for _ in ()).throw(OSError()))
@@ -333,3 +340,31 @@ def test_the_center_does_not_hand_the_inventory_to_itself(fleet_at, monkeypatch)
     runner.invoke(cli.app, ["sync"])
     assert dialled, "the sweep never broadcast at all"
     assert "center.example" not in dialled, "the center dialled itself"
+
+
+def test_the_inventory_is_signed_once_not_once_per_machine(fleet_at, monkeypatch):
+    """Found by hanging a real sweep. `broadcast` called `run_sync` per machine, and
+    run_sync read the access list, read telemetry out of sqlite and shelled out to
+    `ssh-keygen -Y sign` -- none of which varies per machine, and none of which survives
+    being run from eight threads at once. A faulthandler dump of the wedged center showed
+    the workers sitting in `access.sign` with their subprocess reader threads waiting on
+    pipes that never closed.
+
+    Signing once is also just less work: it is the same envelope for everyone."""
+    runner, _ = fleet_at
+    seals = []
+    sent = []
+
+    monkeypatch.setattr(sync, "sealed_envelope",
+                        lambda payload: seals.append(payload) or "SEALED")
+    monkeypatch.setattr(sync, "send_sealed",
+                        lambda ep, sealed: sent.append((ep.target, sealed)) or (255, ""))
+    monkeypatch.setattr(rec, "apply_edge", lambda *a, **k: (True, ""))
+    monkeypatch.setattr(enrol, "run_probe", lambda *a, **k: (_ for _ in ()).throw(OSError()))
+    monkeypatch.setattr(sweep, "run_probe", lambda *a, **k: (_ for _ in ()).throw(OSError()))
+
+    runner.invoke(cli.app, ["sync"])
+
+    assert len(sent) >= 2, "the fleet has more than one machine to hand it to"
+    assert len(seals) == 1, f"signed {len(seals)} times for {len(sent)} machines"
+    assert {s for _, s in sent} == {"SEALED"}, "every machine gets the same envelope"
