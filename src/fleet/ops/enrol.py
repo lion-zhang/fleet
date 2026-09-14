@@ -11,8 +11,8 @@ from __future__ import annotations
 import getpass
 import sys
 
-from .. import inventory as inv
-from .. import store
+from ..state import inventory as inv
+from ..state import store
 from ..ssh.keys import (ensure_keypair, install_key, install_key_over_existing_access,
                     pty_available)
 from ..models import Status
@@ -116,7 +116,7 @@ def register_identity(dev) -> str:
     The key is read back over our own connection rather than taken from anything the
     machine published, so what gets pinned is what we saw on the host itself.
     """
-    from .. import access as acl
+    from ..state import access as acl
     from .. import reconcile as rec
     from ..ssh.keys import ensure_remote_keypair_command
 

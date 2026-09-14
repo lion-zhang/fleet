@@ -10,8 +10,8 @@ import subprocess
 
 import pytest
 
-from fleet import access
-from fleet.access import Access, AccessError, Edge
+from fleet.state import access
+from fleet.state.access import Access, AccessError, Edge
 
 A = "SHA256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
 B = "SHA256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"

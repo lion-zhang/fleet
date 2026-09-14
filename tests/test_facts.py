@@ -253,7 +253,8 @@ def test_a_declared_tag_may_shadow_a_fact():
 def _cli(tmp_path, monkeypatch, devices):
     from typer.testing import CliRunner
 
-    from fleet import cli, inventory as inv, store
+    from fleet import cli
+    from fleet.state import inventory as inv, store
 
     path = tmp_path / "inventory.yaml"
     inv.save(devices, path)
@@ -264,7 +265,7 @@ def _cli(tmp_path, monkeypatch, devices):
 
 
 def test_edit_adds_and_removes_tags(tmp_path, monkeypatch):
-    from fleet import inventory as inv
+    from fleet.state import inventory as inv
 
     runner, cli = _cli(tmp_path, monkeypatch, [_dev(name="box")])
     assert runner.invoke(cli.app, ["edit", "box", "--tag", "prod", "--tag", "nas"]).exit_code == 0
@@ -277,7 +278,7 @@ def test_edit_adds_and_removes_tags(tmp_path, monkeypatch):
 def test_tags_are_lowercased_on_write(tmp_path, monkeypatch):
     """The request said "GPU", "NAS", "IP". Storing those verbatim beside lowercase
     facts would make `--tag nas` miss the machine the user just tagged."""
-    from fleet import inventory as inv
+    from fleet.state import inventory as inv
 
     runner, cli = _cli(tmp_path, monkeypatch, [_dev(name="box")])
     runner.invoke(cli.app, ["edit", "box", "--tag", "NAS"])
@@ -285,7 +286,7 @@ def test_tags_are_lowercased_on_write(tmp_path, monkeypatch):
 
 
 def test_adding_the_same_tag_twice_is_not_a_change(tmp_path, monkeypatch):
-    from fleet import inventory as inv
+    from fleet.state import inventory as inv
 
     runner, cli = _cli(tmp_path, monkeypatch, [_dev(name="box", tags=["prod"])])
     before = inv.load(inv.INVENTORY_PATH)[0].updated_at
@@ -445,7 +446,7 @@ def test_enrolment_records_whose_authorized_keys_to_write():
     """`edges()` fell back to root for every machine, so a center kept trying to write
     root's file on hosts only ever reached as an ordinary user, and every grant sat
     pending behind a permission denial naming the wrong account."""
-    from fleet import access as acl
+    from fleet.state import access as acl
 
     # Built in memory, never via bootstrap(): that resolves the real ACCESS_PATH and
     # would pin a center into this machine's actual config directory.
@@ -467,7 +468,7 @@ def test_an_identity_path_from_another_machine_is_ignored(tmp_path):
     """`identity` is a filename on whichever machine recorded the endpoint, and the
     inventory syncs. Handing ssh a path this machine does not have fails the whole
     connection, where no path at all just falls back to the fleet key."""
-    from fleet import inventory as inv
+    from fleet.state import inventory as inv
     from fleet.models import Device, Kind
 
     real = tmp_path / "id_ed25519"
@@ -487,7 +488,8 @@ def test_reinitialising_does_not_rename_the_center(tmp_path, monkeypatch):
     inventory kept the first."""
     from typer.testing import CliRunner
 
-    from fleet import access as acl, cli, inventory as inv, store
+    from fleet.state import access as acl, inventory as inv, store
+    from fleet import cli
     from fleet.models import Device, Kind, ProbeResult, Status
 
     for n in ("ACCESS_PATH", "LEDGER_PATH", "CACHE_PATH", "OUTBOX_PATH"):
@@ -569,7 +571,8 @@ def test_init_marks_the_center_in_the_inventory_too(tmp_path, monkeypatch):
     to answer "which machine decides"."""
     from typer.testing import CliRunner
 
-    from fleet import access as acl, cli, inventory as inv, store
+    from fleet.state import access as acl, inventory as inv, store
+    from fleet import cli
     from fleet.models import Device, Kind, ProbeResult, Status
 
     for n in ("ACCESS_PATH", "LEDGER_PATH", "CACHE_PATH", "OUTBOX_PATH"):
@@ -618,7 +621,8 @@ def test_the_sweep_hands_the_inventory_to_every_machine(tmp_path, monkeypatch):
     nobody to ask."""
     from typer.testing import CliRunner
 
-    from fleet import access as acl, cli, inventory as inv, reconcile as rec, store
+    from fleet.state import access as acl, inventory as inv, store
+    from fleet import cli, reconcile as rec
     from fleet.models import Device, Kind
 
     for n in ("ACCESS_PATH", "LEDGER_PATH", "CACHE_PATH", "OUTBOX_PATH"):
@@ -652,7 +656,8 @@ def test_the_sweep_hands_the_inventory_to_every_machine(tmp_path, monkeypatch):
 def test_a_machine_without_fleet_is_not_an_error(tmp_path, monkeypatch):
     """Most managed targets have nothing installed. The handover failing there is the
     ordinary case, not a fault worth a line of output."""
-    from fleet import cli, inventory as inv
+    from fleet import cli
+    from fleet.state import inventory as inv
     from fleet.models import Device, Kind
 
     monkeypatch.setattr(inv, "INVENTORY_PATH", tmp_path / "inventory.yaml")
@@ -669,7 +674,8 @@ def test_a_settled_fleet_still_hands_the_inventory_round(tmp_path, monkeypatch):
     the one that never told its machines anything."""
     from typer.testing import CliRunner
 
-    from fleet import access as acl, cli, inventory as inv, store
+    from fleet.state import access as acl, inventory as inv, store
+    from fleet import cli
     from fleet.models import Device, Kind
 
     for n in ("ACCESS_PATH", "LEDGER_PATH", "CACHE_PATH", "OUTBOX_PATH"):

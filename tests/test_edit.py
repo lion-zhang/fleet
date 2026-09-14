@@ -133,7 +133,7 @@ def test_an_edit_that_changes_nothing_reports_nothing():
 
 def test_disk_paths_survive_a_round_trip_through_the_inventory_file(tmp_path):
     """A setting that does not persist is not a setting."""
-    from fleet import inventory as inv
+    from fleet.state import inventory as inv
 
     path = tmp_path / "inventory.yaml"
     dev = _dev(kind=Kind.RENTAL)
@@ -147,7 +147,7 @@ def test_disk_paths_survive_a_round_trip_through_the_inventory_file(tmp_path):
 def test_renaming_a_device_carries_its_cached_history(tmp_path):
     """Migrating the id without moving the cache would silently orphan every snapshot
     the device recorded -- the device would look brand new instead of moved."""
-    from fleet import store
+    from fleet.state import store
     from fleet.models import ProbeResult, Snapshot, Status
 
     conn = store.connect(tmp_path / "cache.db")
@@ -165,7 +165,7 @@ def test_renaming_a_device_carries_its_cached_history(tmp_path):
 def test_renaming_onto_an_id_that_already_has_history_does_not_crash(tmp_path):
     """device_state.device_id is a primary key, so a naive UPDATE would raise. The new
     identity's own history is the truthful one and wins."""
-    from fleet import store
+    from fleet.state import store
     from fleet.models import ProbeResult, Snapshot, Status
 
     conn = store.connect(tmp_path / "cache.db")
@@ -186,7 +186,8 @@ def _cli_env(tmp_path, monkeypatch, dev: Device):
     """Point the CLI at a scratch inventory and cache, and keep DNS out of it."""
     from typer.testing import CliRunner
 
-    from fleet import cli, inventory as inv, store
+    from fleet import cli
+    from fleet.state import inventory as inv, store
 
     path = tmp_path / "inventory.yaml"
     inv.save([dev], path)
@@ -197,7 +198,7 @@ def _cli_env(tmp_path, monkeypatch, dev: Device):
 
 
 def test_cli_edit_rewrites_the_address_in_the_inventory(tmp_path, monkeypatch):
-    from fleet import inventory as inv
+    from fleet.state import inventory as inv
     from fleet.cli import app
 
     runner, path = _cli_env(tmp_path, monkeypatch, _dev(id="linux:machine-id:1111"))
@@ -208,7 +209,7 @@ def test_cli_edit_rewrites_the_address_in_the_inventory(tmp_path, monkeypatch):
 
 def test_cli_edit_moves_cached_history_when_the_identity_migrates(tmp_path, monkeypatch):
     """The end-to-end case: a rental that was never reachable gets a new address."""
-    from fleet import store
+    from fleet.state import store
     from fleet.cli import app
     from fleet.models import ProbeResult, Snapshot, Status
 
@@ -228,7 +229,7 @@ def test_cli_edit_moves_cached_history_when_the_identity_migrates(tmp_path, monk
 
 
 def test_cli_edit_sets_disk_paths(tmp_path, monkeypatch):
-    from fleet import inventory as inv
+    from fleet.state import inventory as inv
     from fleet.cli import app
 
     runner, path = _cli_env(tmp_path, monkeypatch, _dev())

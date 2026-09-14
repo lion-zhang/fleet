@@ -81,8 +81,8 @@ def exchange(raw: str) -> tuple[int, str]:
     Pulled out of the handler so it can be tested without a socket, and so the one place
     that decides who is allowed to speak is readable on its own.
     """
-    from . import access as acl
-    from . import inventory as inv
+    from .state import access as acl
+    from .state import inventory as inv
 
     try:
         acc = acl.load()

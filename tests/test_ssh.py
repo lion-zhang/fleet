@@ -14,8 +14,8 @@ import pytest
 from typer.testing import CliRunner
 
 from fleet import cli
-from fleet import inventory as inv
-from fleet import store
+from fleet.state import inventory as inv
+from fleet.state import store
 from fleet.models import Device, Kind
 
 

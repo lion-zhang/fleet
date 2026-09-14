@@ -15,13 +15,13 @@ from __future__ import annotations
 
 import yaml
 
-from .. import access as acl
-from .. import inventory as inv
+from ..state import access as acl
+from ..state import inventory as inv
 from .. import reconcile as rec
 from ..ssh.authkeys import sync_command
 from ..ssh.keys import ensure_keypair
 from ..ssh.cmd import remote_platform
-from .. import store
+from ..state import store
 from ..ui import console, err
 from . import enrol
 from .errors import FleetError

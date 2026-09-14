@@ -7,7 +7,7 @@ silently eats a device you spent an evening onboarding.
 
 from __future__ import annotations
 
-from fleet.inventory import merge, touch
+from fleet.state.inventory import merge, touch
 from fleet.models import Device, Kind
 from fleet.ops import identity
 from fleet.ops import sweep
@@ -128,7 +128,7 @@ def test_touch_advances_updated_at():
 
 def test_updated_at_survives_the_inventory_file(tmp_path):
     """A timestamp that does not persist cannot resolve tomorrow's conflict."""
-    from fleet import inventory as inv
+    from fleet.state import inventory as inv
 
     path = tmp_path / "inventory.yaml"
     inv.save([_dev("box", updated_at=12345)], path)
@@ -140,7 +140,7 @@ def test_updated_at_survives_the_inventory_file(tmp_path):
 def test_an_inventory_survives_a_round_trip_through_text():
     """Sync ships inventories over a pipe, so the on-the-wire form must be the same
     thing the file holds -- one format, not two that can drift."""
-    from fleet.inventory import dumps, loads
+    from fleet.state.inventory import dumps, loads
 
     devices = [_dev("a", updated_at=7), _dev("b", notes="hello")]
     back = loads(dumps(devices))
@@ -150,7 +150,7 @@ def test_an_inventory_survives_a_round_trip_through_text():
 
 
 def test_the_wire_format_is_the_file_format(tmp_path):
-    from fleet import inventory as inv
+    from fleet.state import inventory as inv
 
     path = tmp_path / "inventory.yaml"
     inv.save([_dev("a")], path)
@@ -162,7 +162,7 @@ def test_the_wire_format_is_the_file_format(tmp_path):
 def _serve_env(tmp_path, monkeypatch, devices):
     from typer.testing import CliRunner
 
-    from fleet import inventory as inv, store
+    from fleet.state import inventory as inv, store
 
     path = tmp_path / "inventory.yaml"
     inv.save(devices, path)
@@ -176,7 +176,7 @@ def _sandbox_access(tmp_path, monkeypatch):
     """access.py resolves its paths at import, so the FLEET_*_DIR env vars do not reach
     it. Without this a `--serve` test pins a center key into the real config directory
     -- which one of these did, silently, until it was noticed."""
-    from fleet import access as acl
+    from fleet.state import access as acl
 
     for name in ("ACCESS_PATH", "LEDGER_PATH", "CACHE_PATH", "OUTBOX_PATH"):
         monkeypatch.setattr(acl, name, tmp_path / getattr(acl, name).name)
@@ -188,8 +188,8 @@ def _sealed(tmp_path, devices):
     hostile one."""
     import subprocess
 
-    from fleet import access as acl
-    from fleet import inventory as inv
+    from fleet.state import access as acl
+    from fleet.state import inventory as inv
 
     key = tmp_path / "center_key"
     if not key.exists():
@@ -199,7 +199,7 @@ def _sealed(tmp_path, devices):
 
 
 def test_serve_merges_what_it_is_given_with_what_it_holds(tmp_path, monkeypatch):
-    from fleet import inventory as inv
+    from fleet.state import inventory as inv
     from fleet.cli import app
 
     runner, path = _serve_env(tmp_path, monkeypatch, [_dev("center-only")])
@@ -210,7 +210,7 @@ def test_serve_merges_what_it_is_given_with_what_it_holds(tmp_path, monkeypatch)
 
 
 def test_serve_persists_the_merge_so_the_center_stays_canonical(tmp_path, monkeypatch):
-    from fleet import inventory as inv
+    from fleet.state import inventory as inv
     from fleet.cli import app
 
     runner, path = _serve_env(tmp_path, monkeypatch, [_dev("center-only")])
@@ -220,7 +220,7 @@ def test_serve_persists_the_merge_so_the_center_stays_canonical(tmp_path, monkey
 
 def test_serve_rejects_junk_rather_than_destroying_the_inventory(tmp_path, monkeypatch):
     """A truncated pipe must not be read as 'the other side has no devices'."""
-    from fleet import inventory as inv
+    from fleet.state import inventory as inv
     from fleet.cli import app
 
     runner, path = _serve_env(tmp_path, monkeypatch, [_dev("precious")])
@@ -252,7 +252,8 @@ def test_sync_on_the_center_itself_is_a_no_op_not_an_error(tmp_path, monkeypatch
 
 
 def test_sync_applies_what_the_center_returns(tmp_path, monkeypatch):
-    from fleet import cli, inventory as inv
+    from fleet import cli
+    from fleet.state import inventory as inv
     from fleet.cli import app
 
     runner, path = _serve_env(tmp_path, monkeypatch,
@@ -266,7 +267,8 @@ def test_sync_applies_what_the_center_returns(tmp_path, monkeypatch):
 
 def test_a_failed_sync_leaves_local_state_untouched(tmp_path, monkeypatch):
     """Sync is not on the critical path. A dead center must not cost you your inventory."""
-    from fleet import cli, inventory as inv
+    from fleet import cli
+    from fleet.state import inventory as inv
     from fleet.cli import app
 
     runner, path = _serve_env(tmp_path, monkeypatch,
@@ -280,7 +282,7 @@ def test_a_failed_sync_leaves_local_state_untouched(tmp_path, monkeypatch):
 # --------------------------------------------------------------- one center only
 
 def test_promoting_a_center_demotes_the_previous_one():
-    from fleet.inventory import promote_center
+    from fleet.state.inventory import promote_center
 
     devices = [_dev("old", role="center"), _dev("new")]
     promote_center(devices, devices[1])
@@ -290,7 +292,7 @@ def test_promoting_a_center_demotes_the_previous_one():
 def test_the_demoted_center_keeps_no_standing_privilege():
     """It still has fleet installed and still holds a full copy. Dropping it to 'none'
     would silently throw away a replica."""
-    from fleet.inventory import promote_center
+    from fleet.state.inventory import promote_center
 
     devices = [_dev("old", role="center"), _dev("new")]
     promote_center(devices, devices[1])
@@ -300,7 +302,7 @@ def test_the_demoted_center_keeps_no_standing_privilege():
 def test_demotion_is_stamped_so_it_survives_the_next_merge():
     """An unstamped demotion loses to the other machine's stale 'center' record, and
     you are back to two centers."""
-    from fleet.inventory import promote_center
+    from fleet.state.inventory import promote_center
 
     old = _dev("old", role="center", updated_at=1)
     devices = [old, _dev("new")]
@@ -309,7 +311,7 @@ def test_demotion_is_stamped_so_it_survives_the_next_merge():
 
 
 def test_devices_that_are_not_brokers_are_left_alone():
-    from fleet.inventory import promote_center
+    from fleet.state.inventory import promote_center
 
     # A legacy record may still say "backup" -- the role was removed, but inventories
     # written before that are on disk. Promotion touches only the outgoing center, so a
@@ -321,7 +323,7 @@ def test_devices_that_are_not_brokers_are_left_alone():
 
 
 def test_promoting_the_current_center_again_changes_nothing():
-    from fleet.inventory import promote_center
+    from fleet.state.inventory import promote_center
 
     devices = [_dev("hub", role="center")]
     assert promote_center(devices, devices[0]) == []
@@ -343,7 +345,7 @@ def test_a_merge_that_produces_two_centers_keeps_only_the_newer(tmp_path):
 def test_removing_a_device_leaves_a_tombstone_rather_than_a_hole(tmp_path):
     """A record that merely vanishes is indistinguishable from one the other machine
     has not seen yet, so the next sync would resurrect it."""
-    from fleet import inventory as inv
+    from fleet.state import inventory as inv
 
     path = tmp_path / "inventory.yaml"
     inv.save([_dev("gone"), _dev("kept")], path)
@@ -356,7 +358,7 @@ def test_removing_a_device_leaves_a_tombstone_rather_than_a_hole(tmp_path):
 
 
 def test_a_tombstoned_device_is_not_found_by_name():
-    from fleet import inventory as inv
+    from fleet.state import inventory as inv
 
     devices = [_dev("gone"), _dev("kept")]
     inv.remove(devices, devices[0])
@@ -366,7 +368,7 @@ def test_a_tombstoned_device_is_not_found_by_name():
 
 def test_a_deletion_propagates_through_a_merge():
     """Deleted on the laptop, so it must go away on the center too."""
-    from fleet import inventory as inv
+    from fleet.state import inventory as inv
 
     remote = [_dev("doomed", updated_at=100)]
     local = [_dev("doomed", updated_at=100)]
@@ -378,7 +380,7 @@ def test_a_deletion_propagates_through_a_merge():
 def test_an_older_deletion_does_not_undo_a_newer_re_add():
     """Delete it on the laptop, then add it again on the desktop. The re-add is newer,
     so the device comes back rather than being permanently poisoned."""
-    from fleet import inventory as inv
+    from fleet.state import inventory as inv
 
     local = [_dev("box", updated_at=100)]
     inv.remove(local, local[0])                        # tombstone, stamped now
@@ -389,7 +391,7 @@ def test_an_older_deletion_does_not_undo_a_newer_re_add():
 
 def test_a_tombstone_survives_the_inventory_file(tmp_path):
     """It has to outlive a restart, or the deletion is forgotten before it propagates."""
-    from fleet import inventory as inv
+    from fleet.state import inventory as inv
 
     path = tmp_path / "inventory.yaml"
     devices = [_dev("gone")]
@@ -399,7 +401,7 @@ def test_a_tombstone_survives_the_inventory_file(tmp_path):
 
 
 def test_ancient_tombstones_are_pruned_so_the_file_does_not_grow_forever():
-    from fleet import inventory as inv
+    from fleet.state import inventory as inv
 
     old = _dev("ancient")
     old.deleted_at = 1                                  # 1970
@@ -415,7 +417,7 @@ def test_re_adding_a_removed_device_brings_it_back():
     """`fleet rm` then `fleet add` is an ordinary correction. upsert matches on id, so
     without clearing the tombstone the add merges into a deleted record and the device
     stays invisible -- it looks like `fleet add` silently did nothing."""
-    from fleet import inventory as inv
+    from fleet.state import inventory as inv
 
     devices = [_dev("box", id="net:box:22")]
     inv.remove(devices, devices[0])
@@ -425,7 +427,7 @@ def test_re_adding_a_removed_device_brings_it_back():
 
 def test_re_adding_reports_that_it_was_restored():
     """"unchanged" would be a lie: the device was invisible a moment ago."""
-    from fleet import inventory as inv
+    from fleet.state import inventory as inv
 
     devices = [_dev("box", id="net:box:22")]
     inv.remove(devices, devices[0])
@@ -436,7 +438,7 @@ def test_re_adding_reports_that_it_was_restored():
 def test_a_restored_device_keeps_everything_you_had_recorded_about_it():
     """Keeping the record through a deletion is the whole reason it is a tombstone;
     coming back as a blank device would waste that."""
-    from fleet import inventory as inv
+    from fleet.state import inventory as inv
 
     devices = [_dev("box", id="net:box:22", notes="the noisy one", tags=["gpu"])]
     inv.remove(devices, devices[0])
@@ -448,7 +450,7 @@ def test_a_restored_device_keeps_everything_you_had_recorded_about_it():
 def test_restoring_stamps_the_record_so_the_center_learns_about_it():
     """Otherwise the next sync sees the center's stale tombstone as newer and deletes
     it right back."""
-    from fleet import inventory as inv
+    from fleet.state import inventory as inv
 
     devices = [_dev("box", id="net:box:22")]
     inv.remove(devices, devices[0])
@@ -459,7 +461,7 @@ def test_restoring_stamps_the_record_so_the_center_learns_about_it():
 
 def test_adding_a_device_that_was_never_removed_is_unaffected():
     """The dedupe behaviour that already existed must not change."""
-    from fleet import inventory as inv
+    from fleet.state import inventory as inv
 
     devices = [_dev("box", id="net:box:22")]
     _, action = inv.upsert(devices, _dev("box", id="net:box:22"))
@@ -476,7 +478,8 @@ def test_sync_does_not_erase_a_device_added_while_it_was_running(tmp_path, monke
     """
     from typer.testing import CliRunner
 
-    from fleet import cli, inventory as inv, store
+    from fleet import cli
+    from fleet.state import inventory as inv, store
     from fleet.cli import app
 
     path = tmp_path / "inventory.yaml"
@@ -503,7 +506,8 @@ def test_the_center_does_not_erase_a_device_added_while_it_was_serving(tmp_path,
     """--serve has the same window: it loads, merges what arrived, and writes back."""
     from typer.testing import CliRunner
 
-    from fleet import cli, inventory as inv, store
+    from fleet import cli
+    from fleet.state import inventory as inv, store
     from fleet.cli import app
 
     path = tmp_path / "inventory.yaml"
@@ -534,7 +538,7 @@ def test_an_endpoint_can_be_removed_by_the_authority():
     """The union ran both ways, so a route one machine learned survived forever on
     every machine however wrong it turned out to be -- there was no deletion primitive
     anywhere. The center's answer replaces rather than merges."""
-    from fleet import inventory as inv
+    from fleet.state import inventory as inv
 
     mine = _dev("box")
     mine.endpoints = [{"target": "good", "user": "root", "port": 22},
@@ -550,7 +554,7 @@ def test_an_endpoint_can_be_removed_by_the_authority():
 def test_an_ordinary_merge_still_unions():
     """Between peers a route one side knows is still a real route; only the authority
     may take one away."""
-    from fleet import inventory as inv
+    from fleet.state import inventory as inv
 
     mine = _dev("box")
     mine.endpoints = [{"target": "lan", "user": "root", "port": 22}]

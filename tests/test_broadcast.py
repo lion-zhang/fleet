@@ -6,9 +6,9 @@ import subprocess
 
 import pytest
 
-from fleet import access as acl
+from fleet.state import access as acl
 from fleet import cli
-from fleet import store
+from fleet.state import store
 from fleet.models import ProbeResult, Snapshot, Status
 
 

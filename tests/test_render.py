@@ -26,7 +26,8 @@ FIXTURES = ["gpu-box", "vm-a", "vm-b", "macos-laptop"]
 @pytest.fixture
 def seeded(tmp_path, monkeypatch):
     """A fleet whose devices each carry a real captured snapshot."""
-    from fleet import cli, inventory as inv, store
+    from fleet import cli
+    from fleet.state import inventory as inv, store
     from fleet.ops import rows
 
     devices = [

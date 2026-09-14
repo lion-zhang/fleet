@@ -32,8 +32,8 @@ from pathlib import Path
 
 import yaml
 
-from . import config
-from .config import CONFIG_DIR, FLEET_KEY, STATE_DIR
+from .. import config
+from ..config import CONFIG_DIR, FLEET_KEY, STATE_DIR
 
 # CONFIG_DIR and STATE_DIR are the *same directory* on macOS (platformdirs gives both as
 # ~/Library/Application Support/fleet). So every name here is globally distinct, and

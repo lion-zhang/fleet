@@ -84,7 +84,8 @@ def test_a_device_with_no_id_is_never_mistaken_for_this_machine():
 def test_the_current_machine_is_not_probed_over_ssh(tmp_path, monkeypatch):
     from typer.testing import CliRunner
 
-    from fleet import cli, inventory as inv, store
+    from fleet import cli
+    from fleet.state import inventory as inv, store
 
     from fleet.ops import rows
     from fleet.cli import app
@@ -156,7 +157,8 @@ def test_add_refuses_an_ssh_command_together_with_self(tmp_path, monkeypatch):
 def test_show_defaults_to_this_machine(tmp_path, monkeypatch):
     from typer.testing import CliRunner
 
-    from fleet import cli, inventory as inv, store
+    from fleet import cli
+    from fleet.state import inventory as inv, store
     from fleet.models import Device, Kind
 
     monkeypatch.setattr(inv, "INVENTORY_PATH", tmp_path / "inventory.yaml")
@@ -174,7 +176,8 @@ def test_show_defaults_to_this_machine(tmp_path, monkeypatch):
 def test_a_machine_not_in_the_inventory_is_told_what_to_run(tmp_path, monkeypatch):
     from typer.testing import CliRunner
 
-    from fleet import cli, inventory as inv, store
+    from fleet import cli
+    from fleet.state import inventory as inv, store
 
     monkeypatch.setattr(inv, "INVENTORY_PATH", tmp_path / "inventory.yaml")
     monkeypatch.setattr(store, "DB_PATH", tmp_path / "cache.db")

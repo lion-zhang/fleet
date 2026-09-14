@@ -6,7 +6,7 @@ import pathlib
 
 import pytest
 
-from fleet import inventory as inv
+from fleet.state import inventory as inv
 from fleet.models import Device, Kind, ProbeResult, Status
 from fleet.onboard import classify_kind, derive_id, slugify, suggest_name
 from fleet.probe.parse import parse_payload

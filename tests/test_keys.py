@@ -206,8 +206,8 @@ def test_public_key_reports_absence_rather_than_inventing_one(tmp_path):
 def _cli(tmp_path, monkeypatch, **devkw):
     from typer.testing import CliRunner
 
-    from fleet import access as acl
-    from fleet import inventory as inv, store
+    from fleet.state import access as acl
+    from fleet.state import inventory as inv, store
     from fleet.models import Device, Kind
 
     dev = Device(id="net:5.6.7.8:2222", name="box", kind=Kind.RENTAL,

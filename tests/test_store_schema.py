@@ -12,7 +12,7 @@ import sqlite3
 
 import pytest
 
-from fleet import store
+from fleet.state import store
 from fleet.models import ProbeResult, Snapshot, Status
 
 

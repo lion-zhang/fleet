@@ -8,8 +8,8 @@ import sqlite3
 import time
 from pathlib import Path
 
-from .config import DB_PATH, ensure_dirs, load_config
-from .models import ProbeResult, Snapshot, Status
+from ..config import DB_PATH, ensure_dirs, load_config
+from ..models import ProbeResult, Snapshot, Status
 
 # Bumped whenever the shape below changes. `CREATE TABLE IF NOT EXISTS` is silent about
 # a table that exists with the wrong columns, so without this an upgraded fleet keeps the

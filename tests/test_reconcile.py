@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from fleet import reconcile
-from fleet.access import Access
+from fleet.state.access import Access
 from fleet.reconcile import EdgeState, plan, refuses_to_run
 
 A, B, C = "SHA256:aaa", "SHA256:bbb", "SHA256:ccc"

@@ -7,7 +7,7 @@ naming scheme it would then have to keep in step through every rename.
 
 from __future__ import annotations
 
-from .. import inventory as inv
+from ..state import inventory as inv
 
 
 def canonical(token: str) -> str:

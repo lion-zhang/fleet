@@ -16,9 +16,9 @@ from pathlib import Path
 import yaml
 from filelock import FileLock, Timeout
 
-from .config import INVENTORY_PATH, ensure_dirs
-from .models import Device, Kind
-from .ssh.cmd import Endpoint, route_of
+from ..config import INVENTORY_PATH, ensure_dirs
+from ..models import Device, Kind
+from ..ssh.cmd import Endpoint, route_of
 
 SCHEMA_VERSION = 1
 

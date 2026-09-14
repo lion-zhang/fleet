@@ -153,7 +153,7 @@ def test_agent_forwarding_can_be_declined_for_a_host_you_do_not_trust():
 def _cli(tmp_path, monkeypatch):
     from typer.testing import CliRunner
 
-    from fleet import inventory as inv, store
+    from fleet.state import inventory as inv, store
     from fleet.models import Device, Kind
 
     dev = Device(id="linux:machine-id:o", name="oracle", kind=Kind.PERMANENT,
@@ -186,7 +186,8 @@ def test_install_says_what_to_configure_when_no_repo_is_known(tmp_path, monkeypa
 
 
 def test_a_successful_install_records_the_new_role(tmp_path, monkeypatch):
-    from fleet import cli, inventory as inv
+    from fleet import cli
+    from fleet.state import inventory as inv
     from fleet.cli import app
 
     runner, path = _cli(tmp_path, monkeypatch)
@@ -200,7 +201,8 @@ def test_a_successful_install_records_the_new_role(tmp_path, monkeypatch):
 def test_a_failed_install_does_not_claim_the_device_is_a_backup(tmp_path, monkeypatch):
     """Recording the role on failure would make `fleet ls` lie about where your state
     is replicated -- the exact thing you would rely on when the center dies."""
-    from fleet import cli, inventory as inv
+    from fleet import cli
+    from fleet.state import inventory as inv
     from fleet.cli import app
 
     runner, path = _cli(tmp_path, monkeypatch)
@@ -289,7 +291,8 @@ def test_updating_an_existing_center_does_not_demote_it(tmp_path, monkeypatch):
     """`fleet install` doubles as `fleet update` -- that is its documented purpose --
     so an unasked-for --role default silently destroys the center designation, and the
     next `fleet sync` has nowhere to go."""
-    from fleet import cli, inventory as inv
+    from fleet import cli
+    from fleet.state import inventory as inv
     from fleet.cli import app
 
     runner, path = _cli(tmp_path, monkeypatch)
@@ -307,7 +310,8 @@ def test_installing_does_not_make_a_device_a_second_root(tmp_path, monkeypatch):
     """It used to default to `backup`, which meant a second machine holding a key on
     every device forever. There is one fleet-root now, and it is not conferred by
     installing software."""
-    from fleet import cli, inventory as inv
+    from fleet import cli
+    from fleet.state import inventory as inv
     from fleet.cli import app
 
     runner, path = _cli(tmp_path, monkeypatch)
@@ -319,7 +323,8 @@ def test_installing_does_not_make_a_device_a_second_root(tmp_path, monkeypatch):
 
 def test_an_explicit_role_is_still_obeyed(tmp_path, monkeypatch):
     """Not clobbering by default must not make the flag stop working."""
-    from fleet import cli, inventory as inv
+    from fleet import cli
+    from fleet.state import inventory as inv
     from fleet.cli import app
 
     runner, path = _cli(tmp_path, monkeypatch)

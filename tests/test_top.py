@@ -340,7 +340,8 @@ def test_recovering_clears_the_backoff():
 def _cli(tmp_path, monkeypatch, devices):
     from typer.testing import CliRunner
 
-    from fleet import cli, inventory as inv, store
+    from fleet import cli
+    from fleet.state import inventory as inv, store
 
     from fleet.ops import rows
 

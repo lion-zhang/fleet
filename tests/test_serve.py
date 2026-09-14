@@ -12,9 +12,10 @@ import subprocess
 
 import pytest
 
-from fleet import access as acl
-from fleet import inventory as inv
-from fleet import serve, store
+from fleet.state import access as acl
+from fleet.state import inventory as inv
+from fleet import serve
+from fleet.state import store
 from fleet.models import Device, Kind
 
 

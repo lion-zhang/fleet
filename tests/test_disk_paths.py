@@ -90,7 +90,8 @@ def test_configured_paths_replace_the_default_filter_rather_than_adding_to_it(tm
 def test_devices_with_different_disk_paths_are_probed_in_separate_groups(tmp_path, monkeypatch):
     """The sweep batches devices to share one SSH fan-out. Batching by mode alone would
     hand one device's configured paths to every other device in the batch."""
-    from fleet import cli, inventory as inv, store
+    from fleet import cli
+    from fleet.state import inventory as inv, store
     from fleet.ops import rows
     from fleet.models import Device, Kind
 

@@ -17,8 +17,8 @@ from __future__ import annotations
 
 import time
 
-from .. import inventory as inv
-from .. import store
+from ..state import inventory as inv
+from ..state import store
 from ..config import load_config
 from ..probe.runner import probe_many, run_probe_local
 from ..view import Detail, device_view

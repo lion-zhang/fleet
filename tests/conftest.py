@@ -24,8 +24,9 @@ import pytest
 def _sandbox_fleet_state(tmp_path_factory, monkeypatch):
     root = tmp_path_factory.mktemp("fleet-state")
 
-    from fleet import access as acl
-    from fleet import config, inventory as inv, store
+    from fleet.state import access as acl
+    from fleet import config
+    from fleet.state import inventory as inv, store
 
     for name in ("ACCESS_PATH", "LEDGER_PATH", "CACHE_PATH", "OUTBOX_PATH"):
         monkeypatch.setattr(acl, name, root / getattr(acl, name).name, raising=False)

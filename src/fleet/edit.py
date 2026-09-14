@@ -11,7 +11,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 
-from .inventory import touch
+from .state.inventory import touch
 from .models import Device
 from .ssh.cmd import Endpoint, classify_route
 

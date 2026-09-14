@@ -8,7 +8,7 @@ from fleet import cli
 
 
 def _env(tmp_path, monkeypatch):
-    from fleet import access as acl, inventory as inv, store
+    from fleet.state import access as acl, inventory as inv, store
 
     monkeypatch.setattr(inv, "INVENTORY_PATH", tmp_path / "inventory.yaml")
     monkeypatch.setattr(store, "DB_PATH", tmp_path / "cache.db")
@@ -47,7 +47,8 @@ def test_an_unreadable_store_says_how_to_read_it(tmp_path, monkeypatch):
 def test_a_failure_keeps_the_file(tmp_path, monkeypatch):
     """Install, verify, then remove -- never the reverse. A password dropped before the
     key is proven leaves a host nobody can reach, and there is no second copy."""
-    from fleet import inventory as inv, secrets as sec
+    from fleet.state import inventory as inv
+    from fleet import secrets as sec
     from fleet.models import Device, Kind
 
     runner = _env(tmp_path, monkeypatch)

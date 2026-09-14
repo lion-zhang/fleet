@@ -18,11 +18,11 @@ import subprocess
 import pytest
 from typer.testing import CliRunner
 
-from fleet import access as acl
+from fleet.state import access as acl
 from fleet import cli
 from fleet.ops import identity
-from fleet import inventory as inv
-from fleet import store
+from fleet.state import inventory as inv
+from fleet.state import store
 from fleet.models import Device, Kind, ProbeResult, Status
 from fleet.ops import enrol
 from fleet.ops import sweep

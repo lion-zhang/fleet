@@ -15,10 +15,10 @@ import time
 from contextlib import suppress
 from dataclasses import replace
 
-from .. import access as acl
-from .. import inventory as inv
+from ..state import access as acl
+from ..state import inventory as inv
 from .. import reconcile as rec
-from .. import store
+from ..state import store
 from ..probe.runner import run_probe
 from ..ssh.cmd import remote_platform
 from ..ui import console, err

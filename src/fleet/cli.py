@@ -24,8 +24,8 @@ from rich.console import Console, Group
 from rich.table import Table
 from rich.text import Text
 
-from . import inventory as inv
-from . import store
+from .state import inventory as inv
+from .state import store
 from .config import DB_PATH, DEFAULT_PORT, FLEET_KEY, INVENTORY_PATH, load_config
 from .edit import apply_edits
 from .install import build_install_argv, install_script
@@ -169,7 +169,7 @@ def cmd_ls(names: list[str] = typer.Argument(None, help="only these devices"),
                   f"${r['usd_per_hour']:.2f}" if r["usd_per_hour"] else "-",
                   age, note)
     console.print(t)
-    from . import access as acl
+    from .state import access as acl
     if note := acl.staleness_note():
         console.print(f"[yellow]![/yellow] [dim]{note}[/dim]")
     s = view["summary"]
@@ -639,7 +639,7 @@ def cmd_sync(serve: bool = typer.Option(False, "--serve",
     [dim]Example:[/dim]  fleet sync
     """
     if serve:
-        from . import access as acl
+        from .state import access as acl
 
         raw = sys.stdin.read()
         # The inventory carries the endpoints that decide where `fleet ssh` dials, and
@@ -677,7 +677,7 @@ def cmd_sync(serve: bool = typer.Option(False, "--serve",
         return
 
     devices = inv.load()
-    from . import access as acl
+    from .state import access as acl
 
     # Whether this machine is the center is settled by the access list -- possession of
     # the signing key -- not by `Device.role`. role rides `inventory.merge`, where a peer
@@ -841,7 +841,7 @@ def cmd_rm(name: str, yes: bool = typer.Option(False, "--yes", "-y")):
         if near := inv.near_matches(devices, name):
             err.print(f"  [dim]did you mean: {', '.join(near)}[/dim]")
         raise typer.Exit(1)
-    from . import access as acl
+    from .state import access as acl
 
     # Removing a machine revokes its keys everywhere, which only the center can do.
     # Removing *yourself* is a different act -- leaving -- and needs nobody's permission,
@@ -993,7 +993,7 @@ def cmd_access(target: str = typer.Argument(None, help="one machine, instead of 
 
     [dim]Example:[/dim]  fleet access machine_A --allow machine_B
     """
-    from . import access as acl
+    from .state import access as acl
     from . import reconcile as rec
 
     if migrate:
@@ -1115,7 +1115,7 @@ def cmd_center(name: str = typer.Argument(None, help="hand the role to this mach
 
     [dim]Example:[/dim]  fleet center machine_B
     """
-    from . import access as acl
+    from .state import access as acl
     from .ssh.keys import ensure_keypair
 
     if pubkey:
@@ -1126,7 +1126,7 @@ def cmd_center(name: str = typer.Argument(None, help="hand the role to this mach
         return
 
     if listen:
-        from . import access as acl
+        from .state import access as acl
         from .serve import serve
 
         try:
@@ -1352,7 +1352,7 @@ def cmd_service(action: str = typer.Argument("status",
         console.print(service.status())
         return
     if action == "install":
-        from . import access as acl
+        from .state import access as acl
         from .setup import fleet_executable
 
         try:
@@ -1402,7 +1402,7 @@ def cmd_paths():
 
     [dim]Example:[/dim]  fleet paths
     """
-    from . import access as acl
+    from .state import access as acl
     from .config import CONFIG_DIR, FLEET_KEY, STATE_DIR
 
     console.print(f"inventory  {INVENTORY_PATH}")

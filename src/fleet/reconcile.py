@@ -20,8 +20,8 @@ from pathlib import Path
 
 import yaml
 
-from . import access as acc_mod
-from .access import Access, AccessError
+from .state import access as acc_mod
+from .state.access import Access, AccessError
 from .ssh.authkeys import sync_command
 from .ssh.cmd import Endpoint, build_argv
 
