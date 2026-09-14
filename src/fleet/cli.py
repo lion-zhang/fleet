@@ -461,8 +461,9 @@ def configured_repo() -> str:
         return ""
 
 
-def run_installer(ep, script: str, *, forward_agent: bool = True) -> tuple[int, str]:
-    argv = build_install_argv(ep, forward_agent=forward_agent)
+def run_installer(ep, script: str, *, forward_agent: bool = True,
+                  platform: str = "") -> tuple[int, str]:
+    argv = build_install_argv(ep, forward_agent=forward_agent, platform=platform)
     p = subprocess.run(argv, input=script.encode(), capture_output=True, timeout=900)
     return p.returncode, (p.stdout + p.stderr).decode(errors="replace")
 
@@ -509,10 +510,20 @@ def cmd_install(name: str = typer.Argument(None,
                   f"{INVENTORY_PATH.parent / 'config.yaml'}")
         raise typer.Exit(2)
 
+    # Which shell the far side speaks, from the last probe. An unprobed machine reads
+    # POSIX, which is the safe way to be wrong: a POSIX script on Windows fails loudly,
+    # where the reverse can appear to succeed.
+    conn = store.connect()
+    try:
+        _, snap = store.latest(conn, dev.id)
+    finally:
+        conn.close()
+    platform = remote_platform(snap)
+
     console.print(f"[dim]installing fleet on {dev.name} from {url} ({ref})[/dim]")
     code, output = run_installer(sorted(eps, key=lambda e: e.preference)[0],
-                                 install_script(url, ref=ref),
-                                 forward_agent=forward_agent)
+                                 install_script(url, ref=ref, platform=platform),
+                                 forward_agent=forward_agent, platform=platform)
     if code != 0:
         err.print(f"[red]Install failed[/red] (exit {code})\n{output.strip()[-600:]}")
         if code == 90:

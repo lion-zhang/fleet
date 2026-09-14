@@ -24,11 +24,19 @@ from ..probe.runner import run_probe
 from ..ssh.cmd import remote_platform
 from ..ui import console, err
 from . import enrol
+from . import identity
 from .errors import FleetError
 from . import sync
 
-def _across_machines(jobs: list, work, *, workers: int) -> list:
-    """Run `work` over `jobs` concurrently, returning results in the order given.
+def _across_machines(jobs: list, work, *, workers: int) -> list[tuple]:
+    """Run `work` over `jobs` concurrently. Returns one `(value, error)` per job, in order.
+
+    The pairs are the point, not ceremony. A sweep reaches machines that are switched
+    off, rented by the hour, or a NAS that takes longer than the timeout to answer, and
+    one of them raising used to end the whole pass -- which under a fan-out is worse than
+    it sounds, because every result is collected before any is used, so one slow machine
+    would discard what every other machine had just done. A worker that raises returns
+    its exception here and the caller decides what that machine's failure means.
 
     **Across machines only.** `reconcile._remote` passes multiplex=False deliberately --
     sharing one SSH master to the *same* host races on the connection -- and that is
@@ -41,12 +49,18 @@ def _across_machines(jobs: list, work, *, workers: int) -> list:
     Nothing here touches sqlite. The connection is not shared across threads, so the
     workers do the dialling and the caller records what came back.
     """
+    def guarded(job):
+        try:
+            return (work(job), None)
+        except Exception as exc:           # noqa: BLE001 - deliberately everything
+            return (None, exc)
+
     if len(jobs) < 2 or workers < 2:
-        return [work(j) for j in jobs]
+        return [guarded(j) for j in jobs]
     from concurrent.futures import ThreadPoolExecutor
 
     with ThreadPoolExecutor(max_workers=min(workers, len(jobs))) as pool:
-        return list(pool.map(work, jobs))
+        return list(pool.map(guarded, jobs))
 
 
 def endpoint_for(dev, user: str):
@@ -212,8 +226,20 @@ def run(devices) -> None:
             return out, probe
 
         cfg = load_config()
-        for results, probe in _across_machines(list(work.values()), one_machine,
-                                               workers=int(cfg.max_workers)):
+        batches = list(work.values())
+        for batch, (outcome, error) in zip(
+                batches, _across_machines(batches, one_machine,
+                                          workers=int(cfg.max_workers))):
+            if error is not None:
+                # The machine, not the sweep. Every edge in this batch is one machine's,
+                # so they all failed for the same reason and the ledger records it.
+                for st, dev, _ep, _triple, _install, _platform in batch:
+                    st.last_error = f"{type(error).__name__}: {error}"[:200]
+                    failed += 1
+                    console.print(f"[yellow]·[/yellow] {dev.name} not reached "
+                                  f"[dim]({type(error).__name__})[/dim]")
+                continue
+            results, probe = outcome
             if probe is not None:
                 store.record(conn, probe[0], probe[1])
             for st, dev, (src, _dst, _user), install, ok, detail in results:
@@ -256,18 +282,32 @@ def broadcast(devices) -> None:
     """
 
     mine = inv.dumps(inv.load())
+    me = identity.local_device_id()
     routes = []
     for dev in inv.live(devices):
+        # Never the machine this is running on. "No endpoints" used to stand in for "the
+        # center", which held only while the center was a laptop nobody could reach: once
+        # it had an address of its own, the center opened an SSH connection to itself to
+        # hand itself an inventory it had just written. On Windows that one hung with no
+        # timeout and took the sweep with it.
+        if me and dev.id == me:
+            continue
         eps = sorted(inv.endpoints_of(dev), key=lambda e: e.preference)
         if eps:
-            routes.append(eps[0])          # no endpoints: the center itself
+            routes.append(eps[0])
 
     cfg = load_config()
     answers = _across_machines(routes, lambda ep: sync.run_sync(ep, mine),
                                workers=int(cfg.max_workers))
 
     reached = 0
-    for code, output in answers:
+    for answer, error in answers:
+        if error is not None:
+            # A machine that takes longer than the timeout to answer -- a NAS, a rental
+            # that has gone away -- is a machine that did not get the inventory, not a
+            # reason to stop handing it to the others.
+            continue
+        code, output = answer
         if code != 0:
             continue
         try:

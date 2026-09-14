@@ -280,3 +280,56 @@ def test_machines_are_swept_at_once_but_one_machine_is_swept_in_order(fleet_at,
     assert r.exit_code == 0, r.output
     assert len(seen) >= 2, "the sweep never reached two machines"
     assert overlapped, "the machines were dialled one after another, not at once"
+
+
+def test_one_unreachable_machine_does_not_discard_the_others(fleet_at, monkeypatch):
+    """Found on real hardware. A NAS took longer than the sync timeout to answer, the
+    TimeoutExpired came out of the worker, and the whole pass died -- after every other
+    machine had already done its work, because a fan-out collects every result before
+    using any of them. The serial version at least kept what it had merged."""
+    runner, _ = fleet_at
+    seen = []
+
+    def flaky(acc, edge, ep, **kw):
+        seen.append(ep.target)
+        if ep.target == "1.2.3.4":
+            raise TimeoutError("this machine never answered")
+        return True, ""
+
+    monkeypatch.setattr(rec, "apply_edge", flaky)
+    monkeypatch.setattr(enrol, "run_probe", lambda *a, **k: (_ for _ in ()).throw(OSError()))
+    monkeypatch.setattr(sweep, "run_probe", lambda *a, **k: (_ for _ in ()).throw(OSError()))
+
+    r = runner.invoke(cli.app, ["sync"])
+    assert r.exit_code == 0, r.output
+    assert "5.6.7.8" in seen, "the healthy machine was never reached"
+    assert "lin-xps" in r.output, "its result was discarded with the failure"
+    assert "oracle not reached" in r.output
+
+    ledger = rec.load_ledger(acl.LEDGER_PATH)
+    assert ledger[f"{A}>{C}>root"].observed == "present", "the good edge must still land"
+    assert "TimeoutError" in ledger[f"{A}>{B}>root"].last_error
+
+
+def test_the_center_does_not_hand_the_inventory_to_itself(fleet_at, monkeypatch):
+    """`no endpoints` stood in for `the center` and stopped being true the moment the
+    center had an address: it opened an SSH connection to itself to hand itself an
+    inventory it had just written. On Windows that hung with no timeout."""
+    runner, _ = fleet_at
+    # give the center an address of its own, as a listening center has
+    devices = inv.load()
+    for d in devices:
+        if d.id == "id:center":
+            d.endpoints = [{"target": "center.example", "user": "u", "port": 22}]
+    inv.save(devices, inv.INVENTORY_PATH)
+
+    dialled = []
+    monkeypatch.setattr(sync, "run_sync",
+                        lambda ep, *a, **k: dialled.append(ep.target) or (255, ""))
+    monkeypatch.setattr(rec, "apply_edge", lambda *a, **k: (True, ""))
+    monkeypatch.setattr(enrol, "run_probe", lambda *a, **k: (_ for _ in ()).throw(OSError()))
+    monkeypatch.setattr(sweep, "run_probe", lambda *a, **k: (_ for _ in ()).throw(OSError()))
+
+    runner.invoke(cli.app, ["sync"])
+    assert dialled, "the sweep never broadcast at all"
+    assert "center.example" not in dialled, "the center dialled itself"

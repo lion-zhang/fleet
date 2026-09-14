@@ -351,3 +351,45 @@ def test_installing_cannot_promote_a_center(tmp_path, monkeypatch):
     result = runner.invoke(app, ["install", "oracle", "--role", "center"])
     assert result.exit_code == 2
     assert "fleet center" in result.output
+
+
+# --------------------------------------------------------------- any operating system
+
+def test_a_windows_device_gets_powershell_not_sh():
+    """`fleet install` piped every device `sh -s` and a POSIX script. On Windows that is
+    not a refusal -- git ships an sh.exe that very nearly runs it, with $HOME becoming an
+    MSYS path uv may or may not translate -- so the failure mode was a half-finished
+    install. This is why the Windows center had to be set up by hand."""
+    from fleet.ssh.cmd import WINDOWS, Endpoint
+
+    ep = Endpoint(target="box", user="u")
+    assert build_install_argv(ep, platform=WINDOWS)[-1] == "powershell -NoProfile -Command -"
+    assert build_install_argv(ep)[-1] == "sh -s", "POSIX stays the default"
+
+    script = install_script("https://github.com/x/y.git", platform=WINDOWS)
+    assert "$ErrorActionPreference" in script
+    assert "uv tool install --force --reinstall-package fleet-broker" in script
+    assert "crontab" not in script, "Windows never had the timer this cleans up"
+
+
+def test_an_unprobed_machine_is_treated_as_posix():
+    """A POSIX script on Windows fails loudly; the reverse can appear to succeed."""
+    assert "$ErrorActionPreference" not in install_script("r", platform="")
+    assert install_script("r", platform="") == install_script("r")
+
+
+def test_installing_puts_fleet_on_a_later_terminals_path():
+    """The shim lands in a directory nothing has ever added to PATH, so fleet installed
+    correctly and then was not there when the user typed its name."""
+    from fleet.ssh.cmd import WINDOWS
+
+    for script in (install_script("r"), install_script("r", platform=WINDOWS)):
+        assert "uv tool update-shell" in script
+
+
+def test_the_windows_installer_quotes_what_it_is_given():
+    """A repo URL reaches PowerShell as a literal, so a quote in it must not end it."""
+    from fleet.ssh.cmd import WINDOWS
+
+    script = install_script("https://x/y'; rm -rf /; '.git", platform=WINDOWS)
+    assert "'https://x/y''; rm -rf /; ''.git'" in script
