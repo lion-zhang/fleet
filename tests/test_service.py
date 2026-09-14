@@ -163,3 +163,53 @@ def test_windows_clears_a_block_rule_on_its_own_interpreter(monkeypatch):
     # scoped to fleet's own interpreter, not to Python generally: the user may have
     # blocked another one deliberately
     assert "uv" in script and "python.exe" in script
+
+
+# ------------------------------------------------- operations are not command-line shaped
+
+def test_an_operation_reports_failure_without_knowing_about_exit_codes():
+    """`typer.Exit` carries an exit status, which is a fact about a terminal -- so an
+    operation raising it could only ever run in one. That single line was what kept the
+    HTTP center and MCP from calling any of this."""
+    from fleet.ops import FleetError
+
+    exc = FleetError("only the center can hand the role over", code=2)
+    assert str(exc) == "only the center can hand the role over"
+    assert exc.code == 2
+    assert isinstance(exc, RuntimeError), "catchable without importing fleet's CLI"
+
+
+def test_no_operation_raises_typer_exit():
+    """The boundary: commands translate, operations do not. Asserted over the source so
+    the next operation added cannot quietly reach for typer again."""
+    import ast
+    import pathlib
+
+    ops = {"_sweep", "_migrate_passwords", "_dissolve", "_accept_handover", "_handover",
+           "_enrol_unpinned", "_broadcast", "_apply_now", "_install_key",
+           "_register_identity", "_enrol_after_add", "ensure_fresh", "run_sync"}
+    tree = ast.parse((pathlib.Path(__file__).resolve().parent.parent
+                      / "src" / "fleet" / "cli.py").read_text())
+    offenders = []
+    for node in tree.body:
+        if not isinstance(node, ast.FunctionDef) or node.name not in ops:
+            continue
+        for inner in ast.walk(node):
+            if (isinstance(inner, ast.Raise) and isinstance(inner.exc, ast.Call)
+                    and "Exit" in ast.dump(inner.exc.func)):
+                offenders.append(f"{node.name}:{inner.lineno}")
+    assert not offenders, "operations must raise FleetError, not typer.Exit: " + str(offenders)
+
+
+def test_the_consoles_live_in_a_leaf():
+    """ui.py imports nothing from fleet, so anything may import it and the dependency
+    only ever points one way. That is the only reason it is a separate module."""
+    import ast
+    import pathlib
+
+    tree = ast.parse((pathlib.Path(__file__).resolve().parent.parent
+                      / "src" / "fleet" / "ui.py").read_text())
+    for node in ast.walk(tree):
+        if isinstance(node, ast.ImportFrom):
+            assert not (node.level or (node.module or "").startswith("fleet")), \
+                f"ui.py must import no fleet module, but imports {node.module!r}"

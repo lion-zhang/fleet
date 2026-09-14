@@ -366,7 +366,7 @@ def test_a_machine_without_a_pty_says_so_instead_of_crashing(tmp_path, monkeypat
     assert cli._install_key(dev) is False
 
 
-def test_the_cli_forces_utf8_output():
+def test_the_console_forces_utf8_output():
     """A Windows console encodes cp1252 and rich raises rather than degrading, so
     `fleet center --init` created a fleet and then died printing the checkmark that said
     so. The glyphs carry meaning -- which machine is the center, which one is this -- so
@@ -385,12 +385,12 @@ def test_the_cli_forces_utf8_output():
     try:
         sys.stdout = sys.stderr = Cp1252()
         import importlib
-        importlib.reload(importlib.import_module("fleet.cli"))
+        importlib.reload(importlib.import_module("fleet.ui"))
         assert Cp1252.reconfigured.get("encoding") == "utf-8"
     finally:
         sys.stdout, sys.stderr = saved_out, saved_err
         import importlib
-        importlib.reload(importlib.import_module("fleet.cli"))
+        importlib.reload(importlib.import_module("fleet.ui"))
 
 
 def test_the_local_probe_uses_powershell_on_windows():

@@ -32,6 +32,8 @@ from .install import build_install_argv, install_script
 from .keys import (ensure_keypair, install_key,
                    install_key_over_existing_access, pty_available)
 from .models import Device, Kind, Status
+from .ops import FleetError
+from .ui import DOT as _DOT, chatter_to_stderr as _chatter_to_stderr, console, emit as _emit, err
 from .onboard import onboard, onboard_self
 from .probe.runner import (probe_env, probe_many, run_probe, run_probe_local)
 from .setup import TARGETS, detect_targets, fleet_command, install, uninstall
@@ -45,24 +47,23 @@ from .view import Detail, auth_of, device_view, fleet_view, matches_tag
 app = typer.Typer(
     add_completion=False, no_args_is_help=True, rich_markup_mode="rich",
     help="Personal compute inventory, service registry, and resource broker.",)
-# A Windows console encodes as cp1252 by default, which has no glyph for the marks this
-# CLI leans on -- the check, the diamond that names the center, the arrow for "this
-# machine", the box-drawing gutter. rich does not degrade there: it raises
-# UnicodeEncodeError, so `fleet center --init` created the fleet and then died printing
-# that it had. Reconfigure the streams rather than dropping the glyphs, which carry
-# meaning, and which every terminal anyone actually uses renders fine.
-for _stream in (sys.stdout, sys.stderr):
-    if (getattr(_stream, "encoding", "") or "").lower().replace("-", "") != "utf8":
-        with suppress(Exception):       # not reconfigurable under some capture harnesses
-            _stream.reconfigure(encoding="utf-8", errors="replace")
+@contextmanager
+def _as_exit():
+    """Turn an operation's failure into an exit code, at the only layer that has them.
 
-console = Console()
-err = Console(stderr=True)
+    This is the whole point of `FleetError`: the operation says what went wrong and how
+    badly, and each surface decides what that means. Here it is an exit status. In
+    `serve.py` it is an HTTP code, and in `mcp.py` a tool result -- none of which an
+    operation should have to know about.
 
-_DOT = {"ok": "[green]●[/green]", "auth_failed": "[yellow]◐[/yellow]",
-        "timeout": "[dim]○[/dim]", "refused": "[red]○[/red]", "closed": "[red]○[/red]",
-        "unreachable": "[dim]○[/dim]", "host_key_mismatch": "[yellow]◐[/yellow]",
-        "probe_error": "[yellow]◐[/yellow]", "unknown": "[dim]?[/dim]"}
+    Nothing is printed here. The convention is that an operation explains itself as it
+    fails -- it has the context to say it well, and it is already mid-sentence with the
+    user. The message on the exception is for the surfaces that cannot see that output.
+    """
+    try:
+        yield
+    except FleetError as exc:
+        raise typer.Exit(exc.code) from None
 
 
 def _this_machine(devices, what: str):
@@ -79,12 +80,6 @@ def _this_machine(devices, what: str):
         err.print("  [dim]add it with [bold]fleet add --self[/bold][/dim]")
         raise typer.Exit(2)
     return me
-
-
-def _emit(payload, as_json: bool) -> bool:
-    if as_json:
-        console.print_json(jsonlib.dumps(payload, default=str))
-    return as_json
 
 
 def _rows(names: list[str] | None = None, *, refresh: bool = False,
@@ -420,22 +415,6 @@ def cmd_add(ssh_command: str = typer.Argument(None, help='e.g. "ssh -p 58418 roo
            "status": res.status.value, "enrolment": outcome}, json_out)
     if outcome == "failed":
         raise typer.Exit(1)
-
-
-@contextlib.contextmanager
-def _chatter_to_stderr(active: bool):
-    """Keep stdout to one JSON document while side-effectful work reports progress.
-
-    Redirects the stream rather than reassigning `console.file`: rich resolves an unset
-    `file` to `sys.stdout` at print time, so saving and restoring it *pins* the console
-    to whichever stdout happened to be current -- under a test runner, a captured buffer
-    that is dead by the next test. That fails nothing here and 46 tests elsewhere.
-    """
-    if not active:
-        yield
-        return
-    with contextlib.redirect_stdout(sys.stderr):
-        yield
 
 
 def _enrol_after_add(dev, res, *, where: str, this_machine: bool) -> str:
@@ -935,7 +914,8 @@ def cmd_sync(serve: bool = typer.Option(False, "--serve",
     # returns nothing at all on Windows. Ask the one authority.
     try:
         if acl.is_center(acl.load()):
-            _sweep(devices)
+            with _as_exit():
+                _sweep(devices)
             return
     except acl.AccessError:
         pass                               # no access list here: a spoke, or no fleet yet
@@ -949,7 +929,8 @@ def cmd_sync(serve: bool = typer.Option(False, "--serve",
     if center.id and center.id == local_device_id():
         # An inventory that predates the access list, where `role` was the only answer.
         # Kept so `fleet sync` on such a center stays a no-op rather than dialling itself.
-        _sweep(devices)
+        with _as_exit():
+            _sweep(devices)
         return
     eps = inv.endpoints_of(center)
     if not eps:
@@ -1251,7 +1232,7 @@ def _sweep(devices) -> None:
     ledger = rec.plan(acc, rec.load_ledger())
     if why := rec.refuses_to_run(acc, ledger):
         err.print(f"[red]{why}[/red]")
-        raise typer.Exit(2)
+        raise FleetError(why, code=2)
 
     # After the wipe guard, never before it: a sweep that is about to be refused must not
     # first go and put keys on things. Re-plan afterwards, because an enrolment is what
@@ -1623,7 +1604,8 @@ def cmd_access(target: str = typer.Argument(None, help="one machine, instead of 
     from . import reconcile as rec
 
     if migrate:
-        _migrate_passwords()
+        with _as_exit():
+            _migrate_passwords()
         return
 
     try:
@@ -1724,7 +1706,7 @@ def _migrate_passwords() -> None:
         # leaving the user an install command that does not install the reader
         err.print("  [dim]install the reader with [bold]uv tool install "
                   r"'fleet-broker\[migrate]'[/bold][/dim]")
-        raise typer.Exit(2)
+        raise FleetError("the migrate extra is not installed", code=2)
     if not data:
         console.print("[dim]nothing stored -- nothing to migrate[/dim]")
         return
@@ -1748,7 +1730,7 @@ def _migrate_passwords() -> None:
     if failed:
         err.print(f"\n[yellow]Keeping {sec.SECRETS_PATH.name}[/yellow] -- "
                   f"{len(failed)} of {len(data)} could not be migrated.")
-        raise typer.Exit(1)
+        raise FleetError(f"{len(failed)} of {len(data)} could not be migrated", code=1)
     # "removed", not "shredded": os.replace on a journalling filesystem or an SSD does
     # not reliably destroy the old blocks, and saying otherwise would be a lie that
     # outlives whoever wrote it.
@@ -1905,10 +1887,12 @@ def cmd_center(name: str = typer.Argument(None, help="hand the role to this mach
         raise typer.Exit(2)
 
     if dissolve:
-        _dissolve(acc, force=force)
+        with _as_exit():
+            _dissolve(acc, force=force)
         return
     if accept:
-        _accept_handover(acc)
+        with _as_exit():
+            _accept_handover(acc)
         return
     if leave:
         _leave_fleet(acc)
@@ -1917,7 +1901,8 @@ def cmd_center(name: str = typer.Argument(None, help="hand the role to this mach
         print(acl.dumps(acc))
         return
     if name:
-        _handover(acc, name, force=force)
+        with _as_exit():
+            _handover(acc, name, force=force)
         return
 
     # bare: status
@@ -2026,7 +2011,7 @@ def _dissolve(acc, *, force: bool) -> None:
         err.print("[red]Only the center can dissolve the fleet.[/red]")
         err.print("  [dim]to remove just this machine, use [bold]fleet center "
                   "--leave[/bold][/dim]")
-        raise typer.Exit(2)
+        raise FleetError("only the center can dissolve the fleet", code=2)
 
     machines = [m.get("name", fp[:18]) for fp, m in acc.keys.items() if fp != acc.center]
     console.print(f"[yellow]This removes fleet {acc.fleet_id}'s keys from "
@@ -2034,7 +2019,7 @@ def _dissolve(acc, *, force: bool) -> None:
     console.print("[dim]Access granted through this fleet stops working. Keys you "
                   "installed by hand are untouched.[/dim]")
     if not force and not typer.confirm("Dissolve it?"):
-        raise typer.Exit(1)
+        raise FleetError("cancelled", code=1)
 
     # Every edge becomes desired-absent, including the center's own -- which `revoke`
     # refuses to express, and rightly: on any other day it would strand a machine.
@@ -2081,7 +2066,7 @@ def _dissolve(acc, *, force: bool) -> None:
         err.print("\n  [dim]run this again when they are reachable, or [bold]--force"
                   "[/bold] to forget the fleet anyway -- those keys then stay installed "
                   "with nothing left to remove them[/dim]")
-        raise typer.Exit(1)
+        raise FleetError("some machines could not be reached", code=1)
 
     for path in (acl.ACCESS_PATH, acl.LEDGER_PATH, acl.CACHE_PATH, acl.OUTBOX_PATH):
         with suppress(OSError):
@@ -2117,7 +2102,7 @@ def _accept_handover(acc) -> None:
     if mine not in acc.keys:
         err.print("[red]This machine is not in the access list,[/red] so no handover "
                   "could have named it.")
-        raise typer.Exit(2)
+        raise FleetError("this machine is not in the access list", code=2)
 
     devices = {d.id: d for d in inv.live(inv.load())}
     targets = [(fp, m) for fp, m in acc.keys.items() if fp != mine]
@@ -2154,7 +2139,7 @@ def _accept_handover(acc) -> None:
             err.print(f"  {name}: {why}")
         err.print("\n  [dim]the current center still holds the role; fix these and "
                   "run this again[/dim]")
-        raise typer.Exit(2)
+        raise FleetError("the successor cannot write every machine", code=2)
 
     acc.center = mine
     acl.save(acc)
@@ -2190,12 +2175,12 @@ def _handover(acc, name: str, *, force: bool) -> None:
     if not acl.is_center(acc):
         err.print("[red]Only the center can hand the role over.[/red]")
         err.print(f"  [dim]the center is {acc.name_of(acc.center)}[/dim]")
-        raise typer.Exit(2)
+        raise FleetError("only the center can hand the role over", code=2)
     try:
         successor = acl.resolve(acc, _canonical(name))
     except acl.AccessError as exc:
         err.print(f"[red]{exc}[/red]")
-        raise typer.Exit(2)
+        raise FleetError(str(exc), code=2)
     if successor == acc.center:
         console.print(f"[dim]{name} is already the center.[/dim]")
         return
@@ -2208,7 +2193,7 @@ def _handover(acc, name: str, *, force: bool) -> None:
     if not pub:
         err.print(f"[red]No pinned key for {name}.[/red]  Enrol it first:  "
                   f"[bold]fleet sync[/bold]")
-        raise typer.Exit(2)
+        raise FleetError(f"no pinned key for {name}", code=2)
 
     added = 0
     for other in acc.keys:
