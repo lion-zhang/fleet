@@ -1792,8 +1792,12 @@ def _register_identity(dev) -> str:
     if not ok or not pub:
         err.print(f"  [yellow]could not read a key from {dev.name}[/yellow] "
                   f"[dim]{(out or '')[:80]}[/dim]")
-        err.print("  [dim]it is reachable, but cannot be granted access to anything "
-                  "until it has one[/dim]")
+        # Do not claim reachability we have not established: this branch is reached just
+        # as often because the host refused the connection as because it answered and
+        # had no key, and "it is reachable, but..." about a dead rental is a wrong
+        # answer printed confidently.
+        err.print("  [dim]until it has one it cannot be granted access to anything"
+                  "[/dim]")
         return ""
     try:
         fp = acl.enroll(acc, dev.name, pub, dev.id, user=eps[0].user or "root")
