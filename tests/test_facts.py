@@ -402,7 +402,11 @@ def test_the_local_probe_uses_powershell_on_windows():
     seen = {}
 
     def fake_run(argv, **kw):
-        seen["argv"], seen["input"] = argv, kw.get("input", "")
+        # bytes now: text mode would rewrite every \n to \r\n on a Windows center and
+        # the far-side `sh` would answer `Syntax error: "|" unexpected`
+        raw = kw.get("input", b"")
+        assert isinstance(raw, bytes), "the payload must not go through text mode"
+        seen["argv"], seen["input"] = argv, raw.decode()
         raise OSError("stop here; the choice of payload is the thing under test")
 
     import unittest.mock as mock
@@ -502,3 +506,30 @@ def test_reinitialising_does_not_rename_the_center(tmp_path, monkeypatch):
     acc = acl.load(acl.ACCESS_PATH)
     assert acc.name_of(acc.center) == "beelink", "still itself, not beelink-2"
     assert [d.name for d in inv.live(inv.load(inv.INVENTORY_PATH))] == ["beelink"]
+
+
+def test_a_probe_payload_keeps_its_newlines():
+    """Popen's text mode wraps stdin with newline=None, which rewrites \\n to \\r\\n on
+    Windows. A POSIX center therefore sent payload.sh verbatim and a Windows one sent it
+    CRLF, and every remote `sh` answered `Syntax error: "|" unexpected`. There is no
+    newline= on Popen, so the payload is encoded by hand and must stay bytes."""
+    import unittest.mock as mock
+
+    from fleet.probe import runner
+    from fleet.sshcmd import Endpoint
+
+    seen = {}
+
+    class FakeProc:
+        returncode = 0
+
+        def communicate(self, payload=None, timeout=None):
+            seen["payload"] = payload
+            return b"", b""
+
+        def kill(self): pass
+
+    with mock.patch.object(runner.subprocess, "Popen", lambda *a, **k: FakeProc()):
+        runner._run_probe_once(Endpoint(target="h"), timeout=1)
+    assert isinstance(seen["payload"], bytes)
+    assert b"\r\n" not in seen["payload"], "CRLF would break the remote shell"

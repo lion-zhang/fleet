@@ -135,8 +135,8 @@ def run_probe_local(*, mode: str = "full", disk_paths: list[str] | None = None,
     argv = local_shell_argv()
     payload = (PAYLOAD_PS1 if windows else PAYLOAD).read_text()
     try:
-        proc = subprocess.run(argv, input=payload, env=env,
-                              capture_output=True, text=True, timeout=timeout)
+        proc = subprocess.run(argv, input=payload.encode(), env=env,
+                              capture_output=True, timeout=timeout)
     except subprocess.TimeoutExpired:
         return ProbeResult(status=Status.TIMEOUT, error_class="timeout",
                            error_detail=f"local probe exceeded {timeout:.0f}s",
@@ -146,13 +146,15 @@ def run_probe_local(*, mode: str = "full", disk_paths: list[str] | None = None,
         return ProbeResult(status=Status.PROBE_ERROR, error_class="probe_error",
                            error_detail=str(exc)[:200], endpoint_used="local")
     elapsed = int((time.monotonic() - started) * 1000)
+    out = proc.stdout.decode(errors="replace")
     try:
-        snap = parse_payload(proc.stdout)
+        snap = parse_payload(out)
     except MissingSentinel as exc:
         return ProbeResult(status=Status.PROBE_ERROR, error_class="probe_error",
                            error_detail=str(exc), endpoint_used="local",
                            latency_ms=elapsed,
-                           stderr_tail=scrub_stderr(proc.stderr)[-400:])
+                           stderr_tail=scrub_stderr(
+                               proc.stderr.decode(errors="replace"))[-400:])
     return ProbeResult(status=Status.OK, snapshot=snap, endpoint_used="local",
                        latency_ms=elapsed)
 
@@ -202,8 +204,13 @@ def _run_probe_once(ep: Endpoint, *, mode: str = "full", timeout: float = 20.0,
         argv = build_argv(ep, connect_timeout=connect_timeout, multiplex=multiplex,
                           remote="sh -s", env=env)
     started = time.monotonic()
+    # Bytes, not text. `text=True` wraps stdin in a TextIOWrapper with newline=None,
+    # which rewrites every \n to \r\n on Windows -- so a POSIX center sent payload.sh
+    # verbatim and a Windows one sent it CRLF, and the far-side `sh` answered
+    # `Syntax error: "|" unexpected`. There is no `newline=` on Popen to ask for
+    # otherwise, so the script is encoded here and the output decoded back.
     popen_kw: dict = {"stdin": subprocess.PIPE, "stdout": subprocess.PIPE,
-                      "stderr": subprocess.PIPE, "text": True}
+                      "stderr": subprocess.PIPE}
     if IS_WINDOWS:
         popen_kw["creationflags"] = subprocess.CREATE_NEW_PROCESS_GROUP  # type: ignore[attr-defined]
     else:
@@ -211,7 +218,9 @@ def _run_probe_once(ep: Endpoint, *, mode: str = "full", timeout: float = 20.0,
 
     proc = subprocess.Popen(argv, **popen_kw)
     try:
-        stdout, stderr = proc.communicate(payload, timeout=timeout)
+        raw_out, raw_err = proc.communicate(payload.encode(), timeout=timeout)
+        stdout = raw_out.decode(errors="replace")
+        stderr = raw_err.decode(errors="replace")
     except subprocess.TimeoutExpired:
         _kill(proc)
         try:
