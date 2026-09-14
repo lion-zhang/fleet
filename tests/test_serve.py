@@ -183,52 +183,52 @@ def a_spoke(tmp_path, monkeypatch):
 
 def test_a_fresh_copy_is_not_refetched(a_spoke, monkeypatch):
     """Lazy means lazy: inside the TTL a read costs nothing at all."""
-    from fleet import cli
+    from fleet.ops import sync
 
     acl.note_center_seen(acl.CACHE_PATH)
-    monkeypatch.setattr(cli, "_post", lambda *a, **k: pytest.fail("should not have asked"))
-    cli.ensure_fresh()
+    monkeypatch.setattr(sync, "post", lambda *a, **k: pytest.fail("should not have asked"))
+    sync.ensure_fresh()
 
 
 def test_a_stale_copy_is_refetched(a_spoke, monkeypatch):
-    from fleet import cli
+    from fleet.ops import sync
 
     asked = []
-    monkeypatch.setattr(cli, "_post", lambda url, payload, **k: asked.append(url) or None)
-    cli.ensure_fresh()                       # never synced: seen_at is 0
+    monkeypatch.setattr(sync, "post", lambda url, payload, **k: asked.append(url) or None)
+    sync.ensure_fresh()                       # never synced: seen_at is 0
     assert asked == ["http://hub.example/sync"]
 
 
 def test_a_center_that_is_down_costs_freshness_and_nothing_else(a_spoke, monkeypatch):
     """Every command that refreshes already works from local state, and the design's own
     rule is that a sync outage must not become a fleet outage."""
-    from fleet import cli
+    from fleet.ops import sync
 
-    monkeypatch.setattr(cli, "_post", lambda *a, **k: None)
-    cli.ensure_fresh()                       # must not raise
+    monkeypatch.setattr(sync, "post", lambda *a, **k: None)
+    sync.ensure_fresh()                       # must not raise
     assert [d.name for d in inv.live(inv.load(inv.INVENTORY_PATH))] == ["me"]
 
 
 def test_a_reply_not_signed_by_the_pinned_center_is_ignored(a_spoke, monkeypatch, tmp_path):
     """The machine pinned a key at enrolment. Anything else answering on that address is
     a stranger, however well-formed its envelope."""
-    from fleet import cli
+    from fleet.ops import sync
 
     other, _ = _keypair(tmp_path, "impostor")
     forged = acl.seal(inv.dumps([Device(id="id:evil", name="evil", kind=Kind.PERMANENT)]),
                       key_path=other)
-    monkeypatch.setattr(cli, "_post", lambda *a, **k: forged)
-    cli.ensure_fresh()
+    monkeypatch.setattr(sync, "post", lambda *a, **k: forged)
+    sync.ensure_fresh()
     assert "evil" not in {d.name for d in inv.live(inv.load(inv.INVENTORY_PATH))}
 
 
 def test_a_machine_that_was_never_told_where_to_look_stays_quiet(tmp_path, monkeypatch):
-    from fleet import cli
+    from fleet.ops import sync
 
     for n in ("ACCESS_PATH", "LEDGER_PATH", "CACHE_PATH", "OUTBOX_PATH"):
         monkeypatch.setattr(acl, n, tmp_path / getattr(acl, n).name)
-    monkeypatch.setattr(cli, "_post", lambda *a, **k: pytest.fail("nowhere to ask"))
-    cli.ensure_fresh()
+    monkeypatch.setattr(sync, "post", lambda *a, **k: pytest.fail("nowhere to ask"))
+    sync.ensure_fresh()
 
 
 # ------------------------------------------------------------------ grants apply themselves

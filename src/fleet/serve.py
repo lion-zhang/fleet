@@ -25,7 +25,9 @@ import json
 import threading
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
-DEFAULT_PORT = 7373
+from .config import DEFAULT_PORT
+from .ops.sync import record_relayed, telemetry_to_relay
+
 MAX_BODY = 8 * 1024 * 1024                 # an inventory, not a payload to be generous to
 
 
@@ -112,16 +114,10 @@ def exchange(raw: str) -> tuple[int, str]:
         return 400, f"unreadable inventory: {exc}\n"
 
     merged, _ = inv.update(lambda current: inv.merge(current, incoming))
-    telemetry = note["telemetry"]
-    if telemetry:
-        from .cli import _record_relayed
-
-        _record_relayed(telemetry)
-
-    from .cli import _telemetry_to_relay
-
-    return 200, acl.seal(inv.dumps(merged), telemetry=_telemetry_to_relay(),
-                              center_url=current_url())
+    if note["telemetry"]:
+        record_relayed(note["telemetry"])
+    return 200, acl.seal(inv.dumps(merged), telemetry=telemetry_to_relay(),
+                         center_url=current_url())
 
 
 _URL = {"value": ""}

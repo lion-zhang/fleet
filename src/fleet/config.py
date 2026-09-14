@@ -22,6 +22,12 @@ FLEET_KEY = CONFIG_DIR / "id_ed25519"
 CONFIG_PATH = CONFIG_DIR / "config.yaml"
 DB_PATH = STATE_DIR / "cache.db"
 
+# The port a listening centre binds, and the one machines are told to dial.
+# Here rather than in serve.py so that asking "where is the centre" does not
+# require importing the server -- which is how the one import cycle in this
+# package was shaped in the first place.
+DEFAULT_PORT = 7373
+
 DEFAULTS: dict = {
     "telemetry_ttl_s": 60,      # how long a probe result is considered fresh
     # How stale this machine's copy of the fleet may get before a read refreshes it from

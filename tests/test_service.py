@@ -213,3 +213,45 @@ def test_the_consoles_live_in_a_leaf():
         if isinstance(node, ast.ImportFrom):
             assert not (node.level or (node.module or "").startswith("fleet")), \
                 f"ui.py must import no fleet module, but imports {node.module!r}"
+
+
+def test_nothing_but_the_cli_imports_the_cli():
+    """The one real import cycle in this package was `serve.py` reaching back into
+    `cli.py` for the sync helpers -- the HTTP centre depending on the argument parser.
+    Both sides were deferred inside functions to hide it. Asserted over the source so it
+    cannot quietly come back."""
+    import ast
+    import pathlib
+
+    root = pathlib.Path(__file__).resolve().parent.parent / "src" / "fleet"
+    offenders = []
+    for path in root.rglob("*.py"):
+        if path.name == "cli.py":
+            continue
+        tree = ast.parse(path.read_text())
+        for node in ast.walk(tree):
+            if isinstance(node, ast.ImportFrom) and (node.module or "").endswith("cli"):
+                offenders.append(f"{path.relative_to(root)}:{node.lineno}")
+            if isinstance(node, ast.Import):
+                for a in node.names:
+                    if a.name.endswith(".cli"):
+                        offenders.append(f"{path.relative_to(root)}:{node.lineno}")
+    assert not offenders, "only cli.py may import cli: " + str(offenders)
+
+
+def test_operations_do_not_import_a_surface():
+    """`ops/` is what the surfaces sit on. If it reaches back up to one of them, it has
+    stopped being a layer and become another name for the CLI."""
+    import ast
+    import pathlib
+
+    ops = pathlib.Path(__file__).resolve().parent.parent / "src" / "fleet" / "ops"
+    surfaces = {"cli", "serve", "mcpserver"}
+    offenders = []
+    for path in ops.rglob("*.py"):
+        for node in ast.walk(ast.parse(path.read_text())):
+            if isinstance(node, ast.ImportFrom):
+                tail = (node.module or "").rsplit(".", 1)[-1]
+                if tail in surfaces:
+                    offenders.append(f"{path.name}:{node.lineno} -> {node.module}")
+    assert not offenders, "ops must not import a surface: " + str(offenders)

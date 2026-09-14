@@ -37,9 +37,9 @@ def _sandbox_fleet_state(tmp_path_factory, monkeypatch):
 
     # Belt and braces for the one that reaches the network: a command that refreshes
     # itself must not dial anything real, even if some path above is missed.
-    from fleet import cli
+    from fleet.ops import sync
 
-    monkeypatch.setattr(cli, "_post", lambda *a, **k: None, raising=False)
+    monkeypatch.setattr(sync, "post", lambda *a, **k: None, raising=False)
     return root
 
 
