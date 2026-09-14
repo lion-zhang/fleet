@@ -35,7 +35,8 @@ from .models import Device, Kind, Status
 from .onboard import onboard, onboard_self
 from .probe.runner import (probe_env, probe_many, run_probe, run_probe_local)
 from .setup import TARGETS, detect_targets, fleet_command, install, uninstall
-from .sshcmd import remote_platform, build_argv, remote_command, resolve_command
+from .sshcmd import (build_argv, local_platform, local_shell_argv, remote_command,
+                     remote_platform, resolve_command)
 from .top import (Schedule, device_lines, disk_cell, gpu_cells_compact,
                   name_cell, render_device, render_fleet)
 from . import view as view_mod
@@ -1878,11 +1879,9 @@ def _leave_fleet(acc) -> None:
     # Local, not remote: this edits the file on the machine you are standing on. So the
     # platform is ours, not a probed host's -- and on Windows there is no `sh` at all,
     # which made leaving a fleet impossible from the very machines most likely to want to.
-    windows = sys.platform == "win32"
-    shell = (["powershell", "-NoProfile", "-Command", "-"] if windows else ["sh", "-s"])
+    shell = local_shell_argv()
     for fp in acc.keys:
-        script = sync_command(acc.fleet_id, fp, pubkey=None,
-                              platform="windows" if windows else "posix")
+        script = sync_command(acc.fleet_id, fp, pubkey=None, platform=local_platform())
         subprocess.run(shell, input=script, capture_output=True, text=True)
     console.print(f"[green]✓[/green] removed fleet {acc.fleet_id}'s keys from this machine.")
     console.print("  [dim]the center will see this as unreachable until you tell it[/dim]")

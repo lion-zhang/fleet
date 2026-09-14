@@ -19,7 +19,8 @@ import time
 from pathlib import Path
 
 from ..models import ProbeResult, Snapshot, Status
-from ..sshcmd import IS_WINDOWS, Endpoint, build_argv
+from ..sshcmd import (IS_WINDOWS, WINDOWS, Endpoint, build_argv,
+                      local_platform, local_shell_argv)
 from .parse import MissingSentinel, parse_payload
 
 PAYLOAD = Path(__file__).with_name("payload.sh")
@@ -125,8 +126,16 @@ def run_probe_local(*, mode: str = "full", disk_paths: list[str] | None = None,
     """
     started = time.monotonic()
     env = {**os.environ, **probe_env(mode, disk_paths)}
+    # The same choice the remote path makes, for the same reason. Without it a center on
+    # Windows probed itself with payload.sh through whatever `sh` Git happened to
+    # install, found no /etc/machine-id, and fell back to the `net:localhost:22` id that
+    # means "never probed" -- so the machine the access list pins as the center had the
+    # one identity that is not stable.
+    windows = local_platform() == WINDOWS
+    argv = local_shell_argv()
+    payload = (PAYLOAD_PS1 if windows else PAYLOAD).read_text()
     try:
-        proc = subprocess.run(["sh", "-s"], input=PAYLOAD.read_text(), env=env,
+        proc = subprocess.run(argv, input=payload, env=env,
                               capture_output=True, text=True, timeout=timeout)
     except subprocess.TimeoutExpired:
         return ProbeResult(status=Status.TIMEOUT, error_class="timeout",

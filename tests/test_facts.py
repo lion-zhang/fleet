@@ -391,3 +391,43 @@ def test_the_cli_forces_utf8_output():
         sys.stdout, sys.stderr = saved_out, saved_err
         import importlib
         importlib.reload(importlib.import_module("fleet.cli"))
+
+
+def test_the_local_probe_uses_powershell_on_windows():
+    """A center probes itself. On Windows the POSIX payload finds no /etc/machine-id, so
+    `derive_id` fell back to `net:localhost:22` -- the id that means "never probed" --
+    and the access list pinned the center under the one identity that is not stable."""
+    from fleet.probe import runner
+
+    seen = {}
+
+    def fake_run(argv, **kw):
+        seen["argv"], seen["input"] = argv, kw.get("input", "")
+        raise OSError("stop here; the choice of payload is the thing under test")
+
+    import unittest.mock as mock
+    for platform, expect in (("windows", "powershell"), ("posix", "sh")):
+        with mock.patch.object(runner, "local_platform", lambda p=platform: p), \
+             mock.patch.object(runner, "local_shell_argv",
+                               lambda p=platform: ["powershell", "-NoProfile", "-Command", "-"]
+                               if p == "windows" else ["sh", "-s"]), \
+             mock.patch.object(runner.subprocess, "run", fake_run):
+            runner.run_probe_local()
+        assert seen["argv"][0] == expect
+        assert "FLEET" in seen["input"]
+
+
+def test_one_function_answers_which_os_this_is():
+    """There were three separate `sys.platform == "win32"` tests and they had already
+    drifted in shape, which is how the local probe kept running the POSIX payload on a
+    Windows center. Local and remote now answer in the same vocabulary."""
+    from fleet.sshcmd import POSIX, WINDOWS, local_platform, local_shell_argv, remote_platform
+
+    assert local_platform() in (POSIX, WINDOWS)
+    assert local_shell_argv()[0] in ("sh", "powershell")
+    # uname_s is preferred over the marketing string, and the sniff remains for
+    # snapshots taken before it was parsed
+    assert remote_platform({"uname_s": "Windows"}) == WINDOWS
+    assert remote_platform({"uname_s": "Linux", "os": "Microsoft Windows 11 Pro"}) == POSIX
+    assert remote_platform({"os": "Microsoft Windows 11 Pro"}) == WINDOWS
+    assert remote_platform(None) == POSIX

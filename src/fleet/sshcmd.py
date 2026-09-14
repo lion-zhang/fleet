@@ -16,7 +16,7 @@ from dataclasses import dataclass, field
 
 from .config import FLEET_KEY
 
-IS_WINDOWS = sys.platform == "win32"
+IS_WINDOWS = sys.platform == "win32"     # see local_platform(); kept for hot paths
 
 # ssh flags that take a value; anything else single-letter is a boolean switch.
 _VALUE_FLAGS = frozenset("bcDEeFIiJLlmOopQRSWw")
@@ -184,8 +184,32 @@ def remote_platform(snapshot: dict | None) -> str:
     POSIX, which is both the common case and the safe way to be wrong: a POSIX command
     on Windows fails loudly, where the reverse can appear to succeed.
     """
+    # `uname_s` first: both payloads send it and it is a clean Linux/Darwin/Windows
+    # token, where `os` is marketing text ("Microsoft Windows 11 Pro", "Ubuntu 26.04
+    # LTS") that has to be sniffed. Snapshots taken before it was parsed have neither,
+    # so the sniff stays as the fallback.
+    if uname_s := str((snapshot or {}).get("uname_s") or ""):
+        return WINDOWS if uname_s.lower() == "windows" else POSIX
     os_name = str((snapshot or {}).get("os") or "")
     return WINDOWS if os_name.lower().startswith(("windows", "microsoft windows")) else POSIX
+
+
+def local_platform() -> str:
+    """Which shell *this* machine speaks. The twin of `remote_platform`, same vocabulary.
+
+    Worth a function rather than a scattered `sys.platform == "win32"`: there were three
+    such tests and they had already drifted apart in shape, which is how the local probe
+    kept running the POSIX payload on a Windows center. One name, one answer, and the
+    same two constants the remote side uses -- so a caller choosing a shell asks the same
+    question whichever end it is talking to.
+    """
+    return WINDOWS if sys.platform == "win32" else POSIX
+
+
+def local_shell_argv() -> list[str]:
+    """How to hand this machine a script on stdin, whatever it runs."""
+    return (["powershell", "-NoProfile", "-Command", "-"] if local_platform() == WINDOWS
+            else ["sh", "-s"])
 
 
 def remote_command(args: list[str], *, windows: bool = False) -> str:
