@@ -182,14 +182,45 @@ def test_installing_twice_changes_nothing_the_second_time(tmp_path):
 
 
 def test_install_preserves_a_users_existing_agents_file(tmp_path):
-    """AGENTS.md belongs to the user. We may add a region; we may not rewrite the file."""
-    (tmp_path / ".codex").mkdir()
-    agents = tmp_path / ".codex" / "AGENTS.md"
+    """A file the user owns belongs to them. We may add a region; we may not rewrite it.
+
+    Codex moved to a skill, so the home-level example here is GEMINI.md -- the rule is
+    about ownership, not about which agent happens to use a shared file this month."""
+    (tmp_path / ".gemini").mkdir()
+    agents = tmp_path / ".gemini" / "GEMINI.md"
     agents.write_text("# My rules\n\nPrefer small commits.\n")
-    install(tmp_path, ["codex"], "fleet")
+    install(tmp_path, ["gemini"], "fleet")
     text = agents.read_text()
     assert "Prefer small commits." in text
     assert BEGIN in text
+
+
+def test_a_project_agents_file_is_still_a_shared_region(tmp_path):
+    """Inside a repo several agents share AGENTS.md; that is the cross-vendor
+    convention and the reason install() dedupes by path rather than by agent."""
+    agents = tmp_path / "AGENTS.md"
+    agents.write_text("# House style\n")
+    changes = install(tmp_path, ["codex", "hermes"], "fleet", project=True)
+    text = agents.read_text()
+    assert "House style" in text and BEGIN in text
+    assert len([c for c in changes if c.path == agents]) == 1, "one file, one change"
+
+
+def test_moving_codex_to_a_skill_takes_the_old_block_back_out(tmp_path):
+    """A stale region in ~/.codex/AGENTS.md would keep being read into every
+    conversation -- which is the cost the move to a skill exists to avoid."""
+    from fleet.setup import agents_block, apply_block
+
+    (tmp_path / ".codex").mkdir()
+    old = tmp_path / ".codex" / "AGENTS.md"
+    # exactly what the previous version of fleet left there
+    old.write_text(apply_block("# Mine\n", agents_block("fleet")))
+    assert BEGIN in old.read_text()
+
+    install(tmp_path, ["codex"], "fleet")
+    assert (tmp_path / ".codex" / "skills" / "fleet" / "SKILL.md").exists()
+    assert BEGIN not in old.read_text(), "the old region is gone"
+    assert "# Mine" in old.read_text(), "and the user's own text is not"
 
 
 def test_dry_run_reports_the_change_without_touching_the_disk(tmp_path):
@@ -528,3 +559,86 @@ def test_the_flag_exclusions_do_not_outlive_their_flags():
                              env=env).stdout
         seen |= set(re.findall(r"(--[a-z][a-z-]+)", out))
     assert set(FLAGS_NOT_FOR_AGENTS) <= seen, f"stale: {set(FLAGS_NOT_FOR_AGENTS) - seen}"
+
+
+# ----------------------------------------------------- the registry stays honest
+
+def test_every_agent_entry_is_well_formed():
+    """Adding an agent is one line in AGENTS, which is the point -- but a wrong line is
+    a file written into somebody's home directory, so the shape is checked here rather
+    than discovered there."""
+    from fleet.setup import AGENTS, TARGETS
+
+    assert len({a.name for a in AGENTS}) == len(AGENTS), "names must be unique"
+    assert TARGETS == tuple(a.name for a in AGENTS), "TARGETS is derived, not repeated"
+    for a in AGENTS:
+        assert a.name.isidentifier() and a.name.islower(), a.name
+        for field in (a.home, a.project):
+            assert field and not field.startswith("/"), f"{a.name}: {field} must be relative"
+            assert ".." not in field.split("/"), f"{a.name}: {field} escapes the root"
+        assert a.marker.startswith("."), f"{a.name}: detect must be a dotdir"
+        assert a.skill in ("std", "hermes"), a.name
+
+
+def test_a_file_we_do_not_own_is_never_written_wholesale():
+    """The one rule that must never be got wrong, asserted across the whole table: only
+    a SKILL.md is ours outright. Anything else is the user's and gets a marked region,
+    so a new entry pointing at someone's config cannot quietly start overwriting it."""
+    from fleet.setup import AGENTS
+
+    for a in AGENTS:
+        for field in (a.home, a.project):
+            owned = field.rsplit("/", 1)[-1] == "SKILL.md"
+            assert owned or field.endswith(".md"), (
+                f"{a.name}: {field} is neither a skill we own nor a markdown file we "
+                "can safely mark a region in")
+
+
+def test_the_full_command_surface_reaches_every_agent():
+    """One body for all of them; an agent uses the parts it can. Tailoring per agent
+    would mean an agent that gained a capability silently kept the trimmed text."""
+    from fleet.setup import agents_block, hermes_skill_text, skill_text
+
+    bodies = [skill_text("fleet"), hermes_skill_text("fleet"), agents_block("fleet")]
+    for command in ("fleet ls", "fleet ssh", "fleet access", "fleet sync", "fleet top"):
+        for body in bodies:
+            assert command in body, f"{command} missing from one of the agent bodies"
+
+
+def test_uninstall_removes_every_skill_we_own(tmp_path):
+    """Ownership is read from the filename, not from the agent's name. Dispatching on
+    the name meant uninstalling Hermes left its skill file on disk, because only Claude
+    Code was named -- and Codex would have joined it on moving to a skill."""
+    from fleet.setup import install, plan, uninstall
+
+    for name in ("claude", "codex", "hermes"):
+        (tmp_path / f".{name}").mkdir()
+    install(tmp_path, ["claude", "codex", "hermes"], "fleet")
+    paths = plan(tmp_path)
+    assert all(paths[n].exists() for n in ("claude", "codex", "hermes"))
+
+    uninstall(tmp_path, ["claude", "codex", "hermes"])
+    for name in ("claude", "codex", "hermes"):
+        assert not paths[name].exists(), f"{name}'s skill survived uninstall"
+
+
+def test_an_emptied_legacy_file_is_not_left_behind(tmp_path):
+    """If our region was all that was ever in it, the file existed because fleet made
+    it. Leaving a one-byte husk is litter rather than caution."""
+    from fleet.setup import agents_block, apply_block, install
+
+    (tmp_path / ".codex").mkdir()
+    old = tmp_path / ".codex" / "AGENTS.md"
+    old.write_text(apply_block("", agents_block("fleet")))
+    install(tmp_path, ["codex"], "fleet")
+    assert not old.exists()
+
+
+def test_a_legacy_file_with_the_users_own_text_survives(tmp_path):
+    from fleet.setup import agents_block, apply_block, install
+
+    (tmp_path / ".codex").mkdir()
+    old = tmp_path / ".codex" / "AGENTS.md"
+    old.write_text(apply_block("# Mine\n", agents_block("fleet")))
+    install(tmp_path, ["codex"], "fleet")
+    assert old.exists() and "# Mine" in old.read_text()

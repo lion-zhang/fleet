@@ -53,8 +53,57 @@ def fleet_command() -> str:
 # tooling is skills/devops/<name>/. fleet is inventory and remote execution, so devops.
 HERMES_CATEGORY = "devops"
 
+
+@dataclass(frozen=True, slots=True)
+class Agent:
+    """One coding agent, as data rather than a branch.
+
+    Supporting a new one is an entry in AGENTS below. Only four things actually vary:
+    where its file lives in a home directory, where it lives inside a repo, whether
+    fleet owns that file outright or must merge into one the user owns, and how to tell
+    the agent is installed at all. Everything else -- the text, the marker region, the
+    dedupe, the uninstall -- is already shared.
+
+    Ownership is read from the filename rather than declared: a SKILL.md is ours to
+    write wholesale, anything else is the user's and gets a marked region. That rule
+    predates this table and is the one thing that must never be got wrong, so it stays
+    in one place.
+    """
+
+    name: str
+    home: str                              # path under the home root, "/"-separated
+    project: str                           # path under a repo root
+    skill: str = "std"                     # frontmatter dialect when the file is a SKILL.md
+    detect: str = ""                       # directory meaning "installed"; default .<name>
+    legacy: tuple[str, ...] = ()           # paths we used to write and must now clean up
+
+    @property
+    def marker(self) -> str:
+        return self.detect or f".{self.name}"
+
+
+AGENTS = (
+    Agent("claude", home=".claude/skills/fleet/SKILL.md",
+          project=".claude/skills/fleet/SKILL.md"),
+    # A skill, not ~/.codex/AGENTS.md. Codex grew a skills directory -- ~/.codex/skills,
+    # same frontmatter as Claude Code's -- and AGENTS.md is read into every conversation
+    # whether or not it is about machines. That is the reasoning the hermes entry below
+    # already applies to SOUL.md; it holds here for the same reason. The old file is
+    # listed as legacy so the block we left in it is taken back out.
+    Agent("codex", home=".codex/skills/fleet/SKILL.md", project="AGENTS.md",
+          legacy=(".codex/AGENTS.md",)),
+    # Not SOUL.md: that is Hermes's system prompt, so a block there would cost tokens in
+    # every conversation. Skills load only when a task needs them.
+    Agent("hermes", home=f".hermes/skills/{HERMES_CATEGORY}/fleet/SKILL.md",
+          project="AGENTS.md", skill="hermes"),
+    # GEMINI.md belongs to the user, so it gets a marked region like AGENTS.md rather
+    # than being written wholesale.
+    Agent("gemini", home=".gemini/GEMINI.md", project="GEMINI.md"),
+)
+
 # The one list. cli.py validates against this rather than repeating it.
-TARGETS = ("claude", "codex", "hermes")
+TARGETS = tuple(a.name for a in AGENTS)
+BY_NAME = {a.name: a for a in AGENTS}
 
 
 def package_version() -> str:
@@ -227,34 +276,39 @@ class Change:
 
 
 def plan(root: Path, *, project: bool = False) -> dict[str, Path]:
-    """Which file each agent reads.
+    """Which file each agent reads. Straight off the table.
 
-    Claude Code's layout is the same either way. Codex and Hermes differ: in a repo the
-    convention for both is a top-level AGENTS.md, not a nested dot-directory -- which is
-    why install() dedupes by path.
+    Several agents share AGENTS.md inside a repo -- that is the cross-vendor convention,
+    and it is why install() dedupes by path rather than by agent.
     """
-    shared = root / "AGENTS.md"
-    return {
-        "claude": root / ".claude" / "skills" / "fleet" / "SKILL.md",
-        "codex": shared if project else (root / ".codex" / "AGENTS.md"),
-        # Not SOUL.md: that is Hermes's system prompt, so a block there would cost
-        # tokens in every conversation. Skills load only when a task needs them.
-        "hermes": shared if project
-        else root / ".hermes" / "skills" / HERMES_CATEGORY / "fleet" / "SKILL.md",
-    }
+    return {a.name: root.joinpath(*(a.project if project else a.home).split("/"))
+            for a in AGENTS}
+
+
+def legacy_paths(root: Path) -> dict[str, list[Path]]:
+    """Files an agent used to read, which we may still have a region in.
+
+    Moving where we write is not finished until the old copy is gone: a stale block in
+    ~/.codex/AGENTS.md would keep being loaded into every conversation, which is the
+    cost the move exists to avoid, and it would document a command surface that drifts.
+    """
+    return {a.name: [root.joinpath(*p.split("/")) for p in a.legacy] for a in AGENTS}
 
 
 def detect_targets(root: Path) -> list[str]:
     """Only agents that are actually installed. Creating ~/.codex for someone who does
     not use Codex would be litter, not setup."""
-    return [t for t in TARGETS if (root / f".{t}").is_dir()]
+    return [a.name for a in AGENTS if (root / a.marker).is_dir()]
 
 
 def _desired(target: str, path: Path, cmd: str) -> str:
     # A SKILL.md is a file fleet owns outright; anything else belongs to the user and
-    # gets a marked region.
+    # gets a marked region. Read from the filename rather than declared per agent,
+    # because it is the one rule that must never be got wrong.
     if path.name == "SKILL.md":
-        return hermes_skill_text(cmd) if target == "hermes" else skill_text(cmd)
+        agent = BY_NAME.get(target)
+        return (hermes_skill_text(cmd) if agent and agent.skill == "hermes"
+                else skill_text(cmd))
     existing = path.read_text() if path.exists() else ""
     return apply_block(existing, agents_block(cmd))
 
@@ -280,7 +334,36 @@ def install(root: Path, targets: list[str], cmd: str, *,
             path.parent.mkdir(parents=True, exist_ok=True)
             path.write_text(desired)
         changes.append(Change(target, path, action))
+        changes += _drop_legacy(root, target, seen, dry_run=dry_run)
     return changes
+
+
+def _drop_legacy(root: Path, target: str, seen: set[Path], *, dry_run: bool) -> list[Change]:
+    """Take our region back out of anywhere this agent used to read.
+
+    Only ever removes a marked region, never a file: these are the user's files, and the
+    rule that we touch no byte we did not write does not stop applying because we have
+    changed our minds about where to write. A file we never marked comes back identical,
+    so this is silent in the ordinary case.
+    """
+    out: list[Change] = []
+    for path in legacy_paths(root).get(target, []):
+        if path in seen or not path.exists():
+            continue
+        current = path.read_text()
+        stripped = remove_block(current)
+        if stripped == current:
+            continue
+        seen.add(path)
+        if not dry_run:
+            # Nothing but our region was ever in it -- that file existed because fleet
+            # made it -- so leaving an empty one behind is litter, not caution.
+            if stripped.strip():
+                path.write_text(stripped)
+            else:
+                path.unlink()
+        out.append(Change(target, path, "removed"))
+    return out
 
 
 def uninstall(root: Path, targets: list[str], *,
@@ -299,7 +382,10 @@ def uninstall(root: Path, targets: list[str], *,
         if not path.exists():
             changes.append(Change(target, path, "unchanged"))
             continue
-        if target == "claude":
+        # Ownership is read from the filename, exactly as _desired reads it. Dispatching
+        # on the agent's name instead meant uninstalling Hermes left its skill file on
+        # disk -- it writes a SKILL.md too, and only Claude Code was named here.
+        if path.name == "SKILL.md":
             if not dry_run:
                 path.unlink()
                 # our own directory, safe to drop once empty; never touch skills/ itself
