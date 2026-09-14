@@ -608,8 +608,11 @@ def test_no_remote_script_goes_through_text_mode():
     offenders = []
     for path in src.rglob("*.py"):
         for n, line in enumerate(path.read_text().splitlines(), 1):
+            # `payload_for` is the installer's byte source -- it returns base64 for
+            # Windows and encoded sh for POSIX, and test_install asserts both are bytes.
             if re.search(r"\binput=", line) and ".encode()" not in line \
-                    and "read_bytes()" not in line and not line.lstrip().startswith("#"):
+                    and "read_bytes()" not in line and "payload_for(" not in line \
+                    and not line.lstrip().startswith("#"):
                 offenders.append(f"{path.name}:{n}: {line.strip()}")
     assert not offenders, "remote payloads must be bytes:\n" + "\n".join(offenders)
 

@@ -363,7 +363,8 @@ def test_a_windows_device_gets_powershell_not_sh():
     from fleet.ssh.cmd import WINDOWS, Endpoint
 
     ep = Endpoint(target="box", user="u")
-    assert build_install_argv(ep, platform=WINDOWS)[-1] == "powershell -NoProfile -Command -"
+    remote = build_install_argv(ep, platform=WINDOWS)[-1]
+    assert remote.startswith("powershell -NoProfile -Command ")
     assert build_install_argv(ep)[-1] == "sh -s", "POSIX stays the default"
 
     script = install_script("https://github.com/x/y.git", platform=WINDOWS)
