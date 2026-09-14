@@ -44,6 +44,17 @@ from .view import Detail, auth_of, device_view, fleet_view, matches_tag
 app = typer.Typer(
     add_completion=False, no_args_is_help=True, rich_markup_mode="rich",
     help="Personal compute inventory, service registry, and resource broker.",)
+# A Windows console encodes as cp1252 by default, which has no glyph for the marks this
+# CLI leans on -- the check, the diamond that names the center, the arrow for "this
+# machine", the box-drawing gutter. rich does not degrade there: it raises
+# UnicodeEncodeError, so `fleet center --init` created the fleet and then died printing
+# that it had. Reconfigure the streams rather than dropping the glyphs, which carry
+# meaning, and which every terminal anyone actually uses renders fine.
+for _stream in (sys.stdout, sys.stderr):
+    if (getattr(_stream, "encoding", "") or "").lower().replace("-", "") != "utf8":
+        with suppress(Exception):       # not reconfigurable under some capture harnesses
+            _stream.reconfigure(encoding="utf-8", errors="replace")
+
 console = Console()
 err = Console(stderr=True)
 
