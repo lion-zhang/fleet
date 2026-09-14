@@ -277,6 +277,13 @@ def test_key_install_uses_the_fleet_key_not_a_personal_one(tmp_path, monkeypatch
                         lambda *a, **k: (False, "Permission denied (publickey)."))
     monkeypatch.setattr(cli.getpass, "getpass", lambda *a: "hunter2")
     monkeypatch.setattr(cli.sys.stdin, "isatty", lambda: True, raising=False)
+    # _install_key re-probes on success, to prove the key actually works rather than
+    # trusting an append that exited 0. That probe is a real connection, and unlike the
+    # sweep's it is not wrapped in suppress() -- so it has to return, not raise.
+    from fleet.models import ProbeResult, Status
+
+    monkeypatch.setattr(cli, "run_probe",
+                        lambda *a, **k: ProbeResult(status=Status.OK))
 
     from fleet.models import Device, Kind
     dev = Device(id="net:1.2.3.4:22", name="box", kind=Kind.RENTAL,

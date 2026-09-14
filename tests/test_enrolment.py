@@ -165,6 +165,8 @@ def test_the_sweep_enrols_a_machine_that_has_no_pinned_key(tmp_path, monkeypatch
     monkeypatch.setattr(cli, "_register_identity",
                         lambda d: enrolled.append(d.name) or "SHA256:new")
     monkeypatch.setattr(cli, "run_probe", lambda *a, **k: (_ for _ in ()).throw(OSError()))
+    # the sweep ends by handing the inventory to every machine, which is one ssh each
+    monkeypatch.setattr(cli, "run_sync", lambda *a, **k: (255, ""))
 
     r = runner.invoke(cli.app, ["sync"])
     assert r.exit_code == 0, r.output
