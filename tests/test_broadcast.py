@@ -31,7 +31,8 @@ def test_telemetry_rides_the_sealed_envelope(sandbox):
     rows = [{"device_id": "id:far", "status": "ok", "probed_at": 1,
              "snapshot": {"hostname": "far"}}]
     sealed = acl.seal("devices: []\n", key_path=key, telemetry=rows)
-    inventory, relayed = acl.unseal_with_telemetry(sealed, pub)
+    note = acl.unseal(sealed, pub)
+    inventory, relayed = note["inventory"], note["telemetry"]
     assert inventory == "devices: []\n"
     assert relayed[0]["device_id"] == "id:far"
 
@@ -41,7 +42,7 @@ def test_tampering_with_the_telemetry_breaks_the_seal(sandbox):
     sealed = acl.seal("devices: []\n", key_path=key,
                       telemetry=[{"device_id": "id:far", "status": "ok"}])
     with pytest.raises(acl.AccessError):
-        acl.unseal_with_telemetry(sealed.replace("id:far", "id:evil"), pub)
+        acl.unseal(sealed.replace("id:far", "id:evil"), pub)
 
 
 def test_a_relayed_row_never_displaces_one_we_measured(sandbox):

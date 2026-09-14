@@ -179,14 +179,12 @@ class Device:
     tags: list[str] = field(default_factory=list)
     notes: str = ""
     endpoints: list[dict] = field(default_factory=list)
-    declared_services: list[dict] = field(default_factory=list)
     # Who authorizes ssh here: "" not yet asked, "keys" we manage authorized_keys,
     # "external" the network does and we must not. A property of the server, not
     # of the address -- see sshauth.
     ssh_auth: str = ""
     mesh: dict = field(default_factory=dict)   # optional, informational
     provider: str = ""
-    provider_instance_id: str = ""
     cost: dict = field(default_factory=dict)
     disk_paths: list[str] = field(default_factory=list)   # empty = autodetect mounts
     # this machine's fleet SSH public key, published so others can see it. Informational

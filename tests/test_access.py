@@ -198,7 +198,7 @@ def test_an_empty_signature_is_not_a_pass(tmp_path):
 def test_a_sealed_inventory_round_trips(tmp_path):
     path, pub = _keypair(tmp_path)
     body = "devices:\n- name: oracle\n"
-    assert access.unseal(access.seal(body, key_path=path), pub) == body
+    assert access.unseal(access.seal(body, key_path=path), pub)["inventory"] == body
 
 
 def test_an_unsigned_payload_is_refused(tmp_path):
@@ -211,11 +211,13 @@ def test_an_unsigned_payload_is_refused(tmp_path):
 
 def test_a_payload_signed_by_someone_else_is_refused(tmp_path):
     """The attack: a grant is a key on the spoke, so any granted peer can reach it and
-    run the sync filter there claiming to be the center."""
+    run the sync filter there claiming to be the center. The same check now guards the
+    listening center against a machine claiming to be one it has pinned, which is why
+    the refusal names the key rather than the center."""
     theirs, _ = _keypair(tmp_path, "theirs")
     _, centers_pub = _keypair(tmp_path, "center")
     sealed = access.seal("devices: []\n", key_path=theirs)
-    with pytest.raises(AccessError, match="not signed by the center"):
+    with pytest.raises(AccessError, match="not signed by the key we trust"):
         access.unseal(sealed, centers_pub)
 
 

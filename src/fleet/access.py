@@ -291,33 +291,39 @@ PROTOCOL = 2
 
 
 def seal(inventory_yaml: str, *, key_path: Path | None = None,
-         telemetry: list | None = None) -> str:
+         telemetry: list | None = None, center_url: str = "") -> str:
     """Wrap an inventory in a signature the receiver can check.
 
     The inventory is not incidental cargo: it holds the endpoints that decide where
-    `fleet ssh oracle` actually dials. Under center-dials-spokes the sync filter runs on
-    the *spoke*, and a grant is a key on that spoke, so any granted peer can reach it and
-    push whatever it likes. Signing the access list and leaving this unsigned would have
-    protected the policy and left the routing wide open -- and `inventory.merge` unions
-    endpoints unconditionally, with no timestamp contest and no way to delete one, so an
-    injected low-preference route would win and could never be removed.
+    `fleet ssh oracle` actually dials. The sync filter runs on a machine every granted
+    peer holds a key for, so any of them could push whatever it liked. Signing the access
+    list and leaving this unsigned would have protected the policy and left the routing
+    wide open -- and `inventory.merge` unions endpoints unconditionally, with no timestamp
+    contest and no way to delete one, so an injected low-preference route would win and
+    could never be removed.
+
+    `center_url` rides inside the signed body because a machine pins the center's key
+    long before it knows the center's address: arriving here means it arrives over a
+    channel the machine already verifies, from a key it has already pinned.
+
+    The signature covers the telemetry too. Relayed readings decide where work gets sent,
+    so an unsigned one is a way to steer a job onto a machine of the sender's choosing.
     """
     key_path = key_path or FLEET_KEY
-    body = yaml.safe_dump({"inventory": inventory_yaml,
-                           "telemetry": telemetry or []}, sort_keys=False)
+    body = yaml.safe_dump({"inventory": inventory_yaml, "telemetry": telemetry or [],
+                           "center_url": center_url}, sort_keys=False)
     return yaml.safe_dump({
         "protocol": PROTOCOL,
+        # named for the common case; it is simply whoever signed, and a listening center
+        # checks it against the keys it has pinned before reading anything else
         "center_pubkey": key_path.with_suffix(".pub").read_text().strip(),
-        # The signature covers the telemetry as well as the inventory. Relayed readings
-        # decide where work gets sent, so an unsigned one is a way to steer a job onto a
-        # machine of the sender's choosing.
         "signature": sign(body, key_path),
         "body": body,
     }, sort_keys=False)
 
 
-def unseal(payload: str, signer_pubkey: str) -> str:
-    """Return the inventory inside, or raise. Never returns unverified content.
+def unseal(payload: str, signer_pubkey: str) -> dict:
+    """The verified body: inventory, telemetry and center_url. Raises, never guesses.
 
     An unsigned or unsealed payload is refused outright rather than accepted as a legacy
     format: "old peer" and "hostile peer" look identical from here, and one of them must
@@ -327,28 +333,16 @@ def unseal(payload: str, signer_pubkey: str) -> str:
         env = yaml.safe_load(payload) or {}
     except yaml.YAMLError as exc:
         raise AccessError(f"unreadable sync payload: {exc}") from exc
-    return _open(env, signer_pubkey)[0]
-
-
-def _open(env, signer_pubkey: str):
-    """Verify and split a sealed envelope into (inventory, telemetry)."""
     if not isinstance(env, dict) or "body" not in env:
         raise AccessError("unsigned sync payload -- refusing it")
     if int(env.get("protocol") or 0) != PROTOCOL:
         raise AccessError(f"sync protocol {env.get('protocol')!r} is not {PROTOCOL}")
-    body = env["body"]
-    if not verify(body, env.get("signature") or "", signer_pubkey):
-        raise AccessError("sync payload is not signed by the center we trust")
-    inner = yaml.safe_load(body) or {}
-    return inner.get("inventory", ""), list(inner.get("telemetry") or [])
-
-
-def unseal_with_telemetry(payload: str, signer_pubkey: str):
-    try:
-        env = yaml.safe_load(payload) or {}
-    except yaml.YAMLError as exc:
-        raise AccessError(f"unreadable sync payload: {exc}") from exc
-    return _open(env, signer_pubkey)
+    if not verify(env["body"], env.get("signature") or "", signer_pubkey):
+        raise AccessError("sync payload is not signed by the key we trust")
+    inner = yaml.safe_load(env["body"]) or {}
+    return {"inventory": inner.get("inventory", ""),
+            "telemetry": list(inner.get("telemetry") or []),
+            "center_url": str(inner.get("center_url") or "")}
 
 
 def claimed_signer(payload: str) -> str:
@@ -369,44 +363,6 @@ def claimed_signer(payload: str) -> str:
 def is_pinned(acc: Access, pubkey: str) -> bool:
     """Whether this key is one the fleet already knows. The listener's whole gate."""
     return bool(pubkey) and fingerprint(pubkey) in acc.keys
-
-
-def seal_note(inventory_yaml: str, *, key_path: Path | None = None,
-              telemetry: list | None = None, center_url: str = "") -> str:
-    """`seal`, plus where to reach the center next time.
-
-    A spoke pins the center's key but has never known its address, so it could only ever
-    be told by being dialled. Carrying it inside the signed body means the address
-    arrives over a channel the spoke already verifies, from a key it has already pinned
-    -- which is what keeps a listening center from being something anyone can claim to be.
-    """
-    key_path = key_path or FLEET_KEY
-    body = yaml.safe_dump({"inventory": inventory_yaml, "telemetry": telemetry or [],
-                           "center_url": center_url}, sort_keys=False)
-    return yaml.safe_dump({
-        "protocol": PROTOCOL,
-        "center_pubkey": key_path.with_suffix(".pub").read_text().strip(),
-        "signature": sign(body, key_path),
-        "body": body,
-    }, sort_keys=False)
-
-
-def unseal_note(payload: str, signer_pubkey: str) -> dict:
-    """The whole inner body, verified. Returns inventory, telemetry and center_url."""
-    try:
-        env = yaml.safe_load(payload) or {}
-    except yaml.YAMLError as exc:
-        raise AccessError(f"unreadable sync payload: {exc}") from exc
-    if not isinstance(env, dict) or "body" not in env:
-        raise AccessError("unsigned sync payload -- refusing it")
-    if int(env.get("protocol") or 0) != PROTOCOL:
-        raise AccessError(f"sync protocol {env.get('protocol')!r} is not {PROTOCOL}")
-    if not verify(env["body"], env.get("signature") or "", signer_pubkey):
-        raise AccessError("sync payload is not signed by the key we trust")
-    inner = yaml.safe_load(env["body"]) or {}
-    return {"inventory": inner.get("inventory", ""),
-            "telemetry": list(inner.get("telemetry") or []),
-            "center_url": str(inner.get("center_url") or "")}
 
 
 def center_url(cache_path: Path | None = None) -> str:
@@ -481,9 +437,12 @@ def unseal_first_contact(payload: str) -> str:
     pub = str(env.get("center_pubkey") or "")
     if not pub:
         raise AccessError("sealed payload carries no center key to pin")
-    inventory, _ = _open(env, pub)
+    # Verified against the key the payload itself carries -- which proves possession of
+    # that key and nothing about whose it is. Pinning is what makes every later payload
+    # meaningful; this one is taken on trust by construction.
+    note = unseal(payload, pub)
     pin_center_pubkey(pub)
-    return inventory
+    return note["inventory"]
 
 
 # --------------------------------------------------------------- is the center about

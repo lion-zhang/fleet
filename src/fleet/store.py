@@ -125,12 +125,6 @@ def get_meta(conn: sqlite3.Connection, key: str) -> str | None:
     return row["value"] if row else None
 
 
-def set_meta(conn: sqlite3.Connection, key: str, value: str) -> None:
-    conn.execute("INSERT INTO meta (key,value) VALUES (?,?) "
-                 "ON CONFLICT(key) DO UPDATE SET value=excluded.value", (key, value))
-    conn.commit()
-
-
 def rename_device(conn: sqlite3.Connection, old_id: str, new_id: str) -> None:
     """Carry a device's cached rows to a new identity.
 

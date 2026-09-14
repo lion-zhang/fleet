@@ -101,7 +101,7 @@ def exchange(raw: str) -> tuple[int, str]:
         return 403, "not a machine this fleet knows\n"
 
     try:
-        note = acl.unseal_note(raw, signer)
+        note = acl.unseal(raw, signer)
     except acl.AccessError as exc:
         return 400, f"{exc}\n"
 
@@ -120,7 +120,7 @@ def exchange(raw: str) -> tuple[int, str]:
 
     from .cli import _telemetry_to_relay
 
-    return 200, acl.seal_note(inv.dumps(merged), telemetry=_telemetry_to_relay(),
+    return 200, acl.seal(inv.dumps(merged), telemetry=_telemetry_to_relay(),
                               center_url=current_url())
 
 

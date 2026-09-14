@@ -18,7 +18,6 @@ dependencies = [
 # Deliberately not dropped in the same release that added the migration: that would
 # strand the data behind a dependency you can no longer install.
 migrate = ["pyrage>=1.1"]
-web = ["fastapi>=0.111", "uvicorn[standard]>=0.30", "jinja2>=3.1", "httpx>=0.27"]
 mcp = ["mcp>=2"]
 
 [dependency-groups]

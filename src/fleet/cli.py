@@ -776,7 +776,7 @@ def run_sync(ep, payload: str) -> tuple[int, str]:
         url = center_advertise_url(acl.load())
     except acl.AccessError:
         url = ""                           # not a center; nothing to advertise
-    sealed = acl.seal_note(payload, telemetry=_telemetry_to_relay(), center_url=url)
+    sealed = acl.seal(payload, telemetry=_telemetry_to_relay(), center_url=url)
     p = subprocess.run(argv, input=sealed.encode(), capture_output=True, timeout=180)
     out = p.stdout.decode(errors="replace")
     return p.returncode, (out if p.returncode == 0 else out + p.stderr.decode(errors="replace"))
@@ -900,7 +900,7 @@ def cmd_sync(serve: bool = typer.Option(False, "--serve",
         url = ""
         try:
             if pinned:
-                note = acl.unseal_note(raw, pinned)
+                note = acl.unseal(raw, pinned)
                 body, relayed, url = note["inventory"], note["telemetry"], note["center_url"]
             else:
                 body = acl.unseal_first_contact(raw)
@@ -1131,7 +1131,7 @@ def ensure_fresh(*, force: bool = False) -> None:
     if body is None:
         return
     try:
-        note = acl.unseal_note(body, pinned)
+        note = acl.unseal(body, pinned)
         incoming = inv.loads(note["inventory"])
     except Exception:
         return                             # unsigned, or not from the center we pinned

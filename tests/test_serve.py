@@ -98,7 +98,7 @@ def test_an_unsigned_payload_is_refused(a_center):
 def test_a_pinned_machine_gets_a_signed_inventory_back(a_center):
     code, body = serve.exchange(_sealed(a_center["skey"]))
     assert code == 200
-    note = acl.unseal_note(body, a_center["cpub"])
+    note = acl.unseal(body, a_center["cpub"])
     names = {d.name for d in inv.loads(note["inventory"])}
     assert {"hub", "box"} <= names
 
@@ -117,7 +117,7 @@ def test_the_reply_carries_where_to_come_back_to(a_center, monkeypatch):
     monkeypatch.setattr(serve, "_URL", {"value": "http://hub.example:7373/sync"})
     code, body = serve.exchange(_sealed(a_center["skey"]))
     assert code == 200
-    assert acl.unseal_note(body, a_center["cpub"])["center_url"] == \
+    assert acl.unseal(body, a_center["cpub"])["center_url"] == \
         "http://hub.example:7373/sync"
 
 
@@ -140,7 +140,7 @@ def test_end_to_end_over_http(a_center):
         with urllib.request.urlopen(req, timeout=10) as resp:
             body = resp.read().decode()
         assert resp.status == 200
-        assert "hub" in acl.unseal_note(body, a_center["cpub"])["inventory"]
+        assert "hub" in acl.unseal(body, a_center["cpub"])["inventory"]
     finally:
         httpd.shutdown()
         httpd.server_close()
