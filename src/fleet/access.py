@@ -460,7 +460,8 @@ def bootstrap(name: str, pubkey: str, device_id: str = "", *,
     return acc
 
 
-def enroll(acc: Access, name: str, pubkey: str, device_id: str = "") -> str:
+def enroll(acc: Access, name: str, pubkey: str, device_id: str = "",
+           user: str = "") -> str:
     """Pin a machine's key, learned over the center's own connection.
 
     Pinned rather than taken from `Device.pubkey`, which rides `inventory.merge` and can
@@ -477,8 +478,15 @@ def enroll(acc: Access, name: str, pubkey: str, device_id: str = "") -> str:
                 "That is either a rebuilt machine or an impersonation; re-pin it "
                 "deliberately if you know which.")
     if known is None:
+        # `user` is whose authorized_keys the center must write to reach this machine,
+        # taken from the endpoint it actually connected on. Without it `edges()` fell
+        # back to root for everything, so the center kept trying to write root's file on
+        # hosts we only ever reach as an ordinary user -- and every such grant sat
+        # pending on a permission denial that named the wrong account.
         acc.keys[fp] = {"name": name, "pubkey": pubkey.strip(), "device_id": device_id,
-                        "pinned_at": int(time.time())}
+                        "user": user or "root", "pinned_at": int(time.time())}
+    elif user and not known.get("user"):
+        known["user"] = user               # backfill a pin made before this was recorded
     return fp
 
 

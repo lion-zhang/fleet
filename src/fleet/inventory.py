@@ -31,6 +31,19 @@ def _lock(path: Path) -> FileLock:
     return FileLock(str(path) + ".lock", timeout=10)
 
 
+def _identity(raw: str) -> str:
+    """An identity path, but only if it exists here.
+
+    `identity` is a filename on whichever machine recorded the endpoint, and the
+    inventory syncs. Handing ssh `-i /Users/lin/.ssh/id_ed25519` on a Windows center
+    fails the whole connection with "not accessible: No such file or directory" -- so a
+    path this machine does not have is worse than no path at all, which just falls back
+    to the fleet key.
+    """
+    path = os.path.expanduser(raw or "")
+    return path if path and Path(path).exists() else ""
+
+
 def _via(raw: str, target: str = "") -> str:
     """Normalise the route kind. See sshcmd.route_of for why it lives there."""
     return route_of(raw, target)
@@ -41,7 +54,7 @@ def endpoints_of(dev: Device) -> list[Endpoint]:
     for i, e in enumerate(dev.endpoints):
         out.append(Endpoint(
             target=e.get("target", ""), user=e.get("user", ""),
-            port=int(e.get("port", 22) or 22), identity=os.path.expanduser(e.get("identity", "") or ""),
+            port=int(e.get("port", 22) or 22), identity=_identity(e.get("identity", "")),
             jump=e.get("jump", "") or "", name=e.get("name", f"ep{i}"),
             preference=int(e.get("preference", 10)),
             via=_via(e.get("via", ""), e.get("target", "")),

@@ -1720,7 +1720,7 @@ def _register_identity(dev) -> str:
                   "until it has one[/dim]")
         return ""
     try:
-        fp = acl.enroll(acc, dev.name, pub, dev.id)
+        fp = acl.enroll(acc, dev.name, pub, dev.id, user=eps[0].user or "root")
     except acl.AccessError as exc:
         err.print(f"  [red]{exc}[/red]")
         return ""

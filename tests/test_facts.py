@@ -431,3 +431,43 @@ def test_one_function_answers_which_os_this_is():
     assert remote_platform({"uname_s": "Linux", "os": "Microsoft Windows 11 Pro"}) == POSIX
     assert remote_platform({"os": "Microsoft Windows 11 Pro"}) == WINDOWS
     assert remote_platform(None) == POSIX
+
+
+def test_enrolment_records_whose_authorized_keys_to_write():
+    """`edges()` fell back to root for every machine, so a center kept trying to write
+    root's file on hosts only ever reached as an ordinary user, and every grant sat
+    pending behind a permission denial naming the wrong account."""
+    from fleet import access as acl
+
+    # Built in memory, never via bootstrap(): that resolves the real ACCESS_PATH and
+    # would pin a center into this machine's actual config directory.
+    acc = acl.Access(fleet_id="7f3a9c", center="SHA256:center",
+                     keys={"SHA256:center": {"name": "center", "pubkey": "x"}})
+    # Distinct base64 blobs, not distinct comments: a fingerprint hashes the key itself,
+    # so `ssh-ed25519 AAAA n` and `ssh-ed25519 AAAA v` are the same key wearing two names.
+    fp = acl.enroll(acc, "nas", "ssh-ed25519 AAAB", "id:n", user="lin")
+    assert acc.keys[fp]["user"] == "lin"
+    assert (acc.center, fp, "lin") in acc.edges()
+
+    # unspecified still means root, which is the old behaviour and the common case
+    fp2 = acl.enroll(acc, "vm", "ssh-ed25519 AAAC", "id:v")
+    assert fp2 != fp
+    assert (acc.center, fp2, "root") in acc.edges()
+
+
+def test_an_identity_path_from_another_machine_is_ignored(tmp_path):
+    """`identity` is a filename on whichever machine recorded the endpoint, and the
+    inventory syncs. Handing ssh a path this machine does not have fails the whole
+    connection, where no path at all just falls back to the fleet key."""
+    from fleet import inventory as inv
+    from fleet.models import Device, Kind
+
+    real = tmp_path / "id_ed25519"
+    real.write_text("x")
+    dev = Device(id="id:a", name="a", kind=Kind.PERMANENT, endpoints=[
+        {"target": "h1", "identity": "/nowhere/this/does/not/exist"},
+        {"target": "h2", "identity": str(real)},
+    ])
+    got = {e.target: e.identity for e in inv.endpoints_of(dev)}
+    assert got["h1"] == "", "a foreign path must not reach ssh"
+    assert got["h2"] == str(real), "a real one still does"
