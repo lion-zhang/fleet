@@ -12,7 +12,7 @@ not to hammer, and would redial a dead host hundreds of times an hour.
 from __future__ import annotations
 
 from fleet.models import Device, Kind
-from fleet.top import (EMPTY, FILLED, Schedule, cpu_pct, device_lines, disk_cell,
+from fleet.render.top import (EMPTY, FILLED, Schedule, cpu_pct, device_lines, disk_cell,
                        gpu_cells, gpu_cells_compact, gpu_pct, meter, name_cell,
                        render_fleet, staleness)
 
@@ -394,7 +394,7 @@ def test_a_relayed_row_says_where_it_came_from():
     """Under the access list a machine reaches only what it is granted, so the center
     relays the rest. Worth showing -- it beats a blank row -- but not as though we had
     just measured it."""
-    from fleet.top import provenance
+    from fleet.render.top import provenance
 
     assert provenance(_row()) == "", "our own probe needs no attribution"
     assert provenance(_row(source="broadcast", probed_by="macbook")) == "via macbook"
@@ -409,7 +409,7 @@ def test_the_table_attributes_a_relayed_row():
 def test_the_center_is_marked_in_the_table():
     """It only appeared in --json, which stops being tenable once "is the center
     reachable" decides whether a grant happens now or waits."""
-    from fleet.top import name_cell
+    from fleet.render.top import name_cell
 
     assert "◆" in name_cell(_row(name="macbook", role="center"))
     assert "◆" not in name_cell(_row(name="oracle"))

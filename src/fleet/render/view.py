@@ -12,9 +12,9 @@ import time
 from enum import StrEnum
 from typing import Any
 
-from .models import Device, Kind, Status
-from .ssh.cmd import route_of
-from .state.store import age_s
+from ..models import Device, Kind, Status
+from ..ssh.cmd import route_of
+from ..state.store import age_s
 
 
 class Detail(StrEnum):
@@ -413,7 +413,7 @@ def connect_view(dev: Device, state: dict | None = None) -> dict[str, Any]:
     a log nobody will remember to scrub, and the agent gains nothing: it does not need to
     see the credential, only for the connection to work.
     """
-    from .state.inventory import endpoints_of
+    from ..state.inventory import endpoints_of
     eps = sorted(endpoints_of(dev), key=lambda e: e.preference)
     if not eps:
         return {"ssh_command": None, "auth": "none", "hint": "no endpoint recorded"}

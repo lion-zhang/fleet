@@ -14,7 +14,7 @@ import pytest
 from fleet.models import Device, Kind, Status
 from fleet.ops import identity
 from fleet.probe.runner import run_probe_local
-from fleet.view import Detail, device_view
+from fleet.render.view import Detail, device_view
 
 pytestmark = pytest.mark.skipif(sys.platform == "win32", reason="payload is POSIX sh")
 

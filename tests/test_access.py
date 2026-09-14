@@ -11,6 +11,7 @@ import subprocess
 import pytest
 
 from fleet.state import access
+from fleet.render.staleness import staleness_note
 from fleet.state.access import Access, AccessError, Edge
 
 A = "SHA256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
@@ -245,16 +246,16 @@ def test_a_quiet_center_is_a_note_not_a_refusal(tmp_path):
     import time as _t
 
     p = tmp_path / "access-cache.yaml"
-    assert access.staleness_note(p) == "", "never contacted: say nothing, do not nag"
+    assert staleness_note(p) == "", "never contacted: say nothing, do not nag"
     access.note_center_seen(p)
-    assert access.staleness_note(p) == "", "fresh"
+    assert staleness_note(p) == "", "fresh"
 
     import yaml as _y
     _y.safe_dump  # noqa: B018
     data = _y.safe_load(p.read_text())
     data["seen_at"] = int(_t.time()) - 30 * 86400
     p.write_text(_y.safe_dump(data))
-    note = access.staleness_note(p)
+    note = staleness_note(p)
     assert "30d" in note and "queued" in note
     assert "denied" not in note and "refus" not in note
 
@@ -263,4 +264,4 @@ def test_a_corrupt_cache_reads_as_never_seen(tmp_path):
     p = tmp_path / "access-cache.yaml"
     p.write_text("{{{ not yaml")
     assert access.center_last_seen(p) == 0
-    assert access.staleness_note(p) == ""
+    assert staleness_note(p) == ""

@@ -16,11 +16,11 @@ import pathlib
 
 import pytest
 
-from fleet import view
+from fleet.render import view
 from fleet.models import Device, Kind
 from fleet.ops import identity
 from fleet.probe.parse import parse_payload
-from fleet.view import _CORES, _RAM_GIB, _SLACK, _STORAGE_TIB, _VRAM_GIB, facts, matches_tag
+from fleet.render.view import _CORES, _RAM_GIB, _SLACK, _STORAGE_TIB, _VRAM_GIB, facts, matches_tag
 from fleet.ops import enrol
 from fleet.ops import sweep
 from fleet.ops import sync

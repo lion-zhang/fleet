@@ -17,7 +17,7 @@ from typing import Any
 from rich.markup import escape
 from rich.table import Table
 
-from .models import Device, Kind
+from ..models import Device, Kind
 
 # Block characters, not "#": rich parses a leading "#" inside brackets as a hex colour
 # tag and silently eats the whole bar. Every meter is also escape()d at the render site,

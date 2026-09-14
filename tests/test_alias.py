@@ -148,7 +148,7 @@ def test_an_unset_alias_writes_nothing():
 
 
 def test_the_alias_is_shown_beside_the_name():
-    from fleet.top import name_cell
+    from fleet.render.top import name_cell
 
     assert "(x)" in name_cell({"name": "lin-xps", "alias": "x"})
     assert "(" not in name_cell({"name": "lin-xps", "alias": ""})

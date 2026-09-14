@@ -218,7 +218,7 @@ def test_an_older_snapshot_without_the_field_is_assumed_writable():
 
 def test_a_full_read_only_volume_raises_no_alert():
     from fleet.models import Device, Kind
-    from fleet.view import Detail, device_view
+    from fleet.render.view import Detail, device_view
 
     snap = {"disks": [{"mount": "/Volumes/App", "total_kb": 100, "used_kb": 100,
                        "avail_kb": 0, "writable": False}]}
@@ -231,7 +231,7 @@ def test_a_full_read_only_volume_raises_no_alert():
 def test_a_full_writable_volume_still_raises_one():
     """The filter must not silence the disks that actually matter."""
     from fleet.models import Device, Kind
-    from fleet.view import Detail, device_view
+    from fleet.render.view import Detail, device_view
 
     snap = {"disks": [{"mount": "/workspace", "total_kb": 100, "used_kb": 96,
                        "avail_kb": 4, "writable": True}]}
@@ -249,7 +249,7 @@ def test_list_views_carry_every_mount_not_just_the_roomiest():
     small for the agents that read it.
     """
     from fleet.models import Device, Kind
-    from fleet.view import Detail, device_view
+    from fleet.render.view import Detail, device_view
 
     gb = 1048576  # df reports kb, and free_gb rounds -- toy numbers all collapse to 0.0
     snap = {"disks": [{"mount": "/", "total_kb": 40 * gb, "used_kb": 38 * gb,
@@ -268,7 +268,7 @@ def test_list_views_carry_every_mount_not_just_the_roomiest():
 def test_a_read_only_volume_is_still_listed_in_full_detail():
     """Skipping the alert is not the same as hiding the disk."""
     from fleet.models import Device, Kind
-    from fleet.view import Detail, device_view
+    from fleet.render.view import Detail, device_view
 
     snap = {"disks": [{"mount": "/Volumes/App", "total_kb": 100, "used_kb": 100,
                        "avail_kb": 0, "writable": False}]}

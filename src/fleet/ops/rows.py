@@ -21,7 +21,7 @@ from ..state import inventory as inv
 from ..state import store
 from ..config import load_config
 from ..probe.runner import probe_many, run_probe_local
-from ..view import Detail, device_view
+from ..render.view import Detail, device_view
 from . import identity
 
 

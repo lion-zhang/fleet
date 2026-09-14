@@ -473,25 +473,6 @@ def note_center_seen(cache_path: Path | None = None) -> None:
     os.replace(tmp, path)
 
 
-def staleness_note(cache_path: Path | None = None) -> str:
-    """A line for `ls` and `top` when the center has been quiet, or "".
-
-    Deliberately a note and never a refusal. Everything already granted keeps working
-    with the center switched off -- the keys are in authorized_keys and sshd enforces
-    them without consulting fleet at all -- so treating a quiet center as a loss of
-    access would turn a closed laptop into a fleet outage, which is precisely backwards.
-    """
-    seen = center_last_seen(cache_path)
-    if not seen:
-        return ""
-    age = int(time.time()) - seen
-    if age < STALE_AFTER_S:
-        return ""
-    days = age // 86400
-    return (f"the center has not swept this machine for {days}d -- grants and revokes "
-            "are queued until it does")
-
-
 def bootstrap(name: str, pubkey: str, device_id: str = "", *,
               fleet_id: str = "", path: Path | None = None) -> Access:
     """Start a fleet, with this machine as its center. Refuses to overwrite one."""

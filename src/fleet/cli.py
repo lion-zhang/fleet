@@ -59,10 +59,11 @@ from .probe.runner import (probe_env, probe_many, run_probe, run_probe_local)
 from .setup import TARGETS, detect_targets, fleet_command, install, uninstall
 from .ssh.cmd import (build_argv, local_platform, local_shell_argv, remote_command,
                      remote_platform, resolve_command)
-from .top import (Schedule, device_lines, disk_cell, gpu_cells_compact,
+from .render.top import (Schedule, device_lines, disk_cell, gpu_cells_compact,
                   name_cell, render_device, render_fleet)
-from . import view as view_mod
-from .view import Detail, auth_of, device_view, fleet_view, matches_tag
+from .render import view as view_mod
+from .render.staleness import staleness_note
+from .render.view import Detail, auth_of, device_view, fleet_view, matches_tag
 
 app = typer.Typer(
     add_completion=False, no_args_is_help=True, rich_markup_mode="rich",
@@ -170,7 +171,7 @@ def cmd_ls(names: list[str] = typer.Argument(None, help="only these devices"),
                   age, note)
     console.print(t)
     from .state import access as acl
-    if note := acl.staleness_note():
+    if note := staleness_note():
         console.print(f"[yellow]![/yellow] [dim]{note}[/dim]")
     s = view["summary"]
     console.print(f"\n[dim]{s['online']}/{s['total']} online · {s['gpus_free']} free GPU(s)"
@@ -1250,7 +1251,7 @@ def cmd_center(name: str = typer.Argument(None, help="hand the role to this mach
         else:
             console.print("[yellow]![/yellow] not serving; machines wait to be swept "
                           "-- [bold]fleet service install[/bold]")
-    if note := acl.staleness_note():
+    if note := staleness_note():
         console.print(f"[yellow]![/yellow] {note}")
     if not centre:
         console.print("\n[dim]Changes are made on the center. Losing it means "

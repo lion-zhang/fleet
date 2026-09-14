@@ -8,7 +8,7 @@ import pathlib
 
 from fleet.models import Device, Kind
 from fleet.probe.parse import parse_payload
-from fleet.view import Detail, auth_of, connect_view, device_view, fleet_view
+from fleet.render.view import Detail, auth_of, connect_view, device_view, fleet_view
 
 FIX = pathlib.Path(__file__).parent / "fixtures" / "probe"
 
