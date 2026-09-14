@@ -223,7 +223,22 @@ def ensure_remote_keypair_command(*, platform: str = "posix") -> str:
             "Get-Content -LiteralPath \"$k.pub\""
         )
     return (
-        'd="$HOME/.config/fleet"; mkdir -p "$d"; k="$d/id_ed25519"; '
+        # Where *that machine* will look for its own key, which is not the same
+        # directory on every POSIX system: platformdirs puts a user config under
+        # ~/.config on Linux and under ~/Library/Application Support on macOS.
+        # Hardcoding the Linux path meant the center created and pinned a key on every
+        # Mac that the Mac itself never used -- invisible for as long as only the center
+        # ever dialled, and an instant 403 the moment a machine had to prove it is itself.
+        'case "$(uname -s)" in '
+        'Darwin) d="$HOME/Library/Application Support/fleet" ;; '
+        '*) d="$HOME/.config/fleet" ;; '
+        'esac; mkdir -p "$d"; k="$d/id_ed25519"; '
+        # An earlier fleet wrote it under ~/.config everywhere. Move it rather than make
+        # a new one: a new key orphans every authorized_keys entry already placed for
+        # this machine, with nothing left to match them by.
+        'legacy="$HOME/.config/fleet/id_ed25519"; '
+        'if [ ! -f "$k.pub" ] && [ -f "$legacy.pub" ] && [ "$k" != "$legacy" ]; then '
+        'mv "$legacy" "$k" 2>/dev/null; mv "$legacy.pub" "$k.pub" 2>/dev/null; fi; '
         # the .pub is the test, not the private half: an interrupted keygen leaves the
         # private key alone and ssh-keygen then refuses to overwrite it, forever
         'if [ ! -f "$k.pub" ]; then rm -f "$k"; '

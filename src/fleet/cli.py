@@ -771,9 +771,13 @@ def run_sync(ep, payload: str) -> tuple[int, str]:
     argv = build_argv(ep, remote=remote)
     # Sealed, because the far side runs this filter for anyone holding a key on it.
     from . import access as acl
-    p = subprocess.run(argv,
-                       input=acl.seal(payload, telemetry=_telemetry_to_relay()).encode(),
-                       capture_output=True, timeout=180)
+
+    try:
+        url = center_advertise_url(acl.load())
+    except acl.AccessError:
+        url = ""                           # not a center; nothing to advertise
+    sealed = acl.seal_note(payload, telemetry=_telemetry_to_relay(), center_url=url)
+    p = subprocess.run(argv, input=sealed.encode(), capture_output=True, timeout=180)
     out = p.stdout.decode(errors="replace")
     return p.returncode, (out if p.returncode == 0 else out + p.stderr.decode(errors="replace"))
 
@@ -893,15 +897,20 @@ def cmd_sync(serve: bool = typer.Option(False, "--serve",
         # and left the routes open, so the whole envelope is checked.
         pinned = acl.trusted_center_pubkey()
         relayed = []
+        url = ""
         try:
             if pinned:
-                body, relayed = acl.unseal_with_telemetry(raw, pinned)
+                note = acl.unseal_note(raw, pinned)
+                body, relayed, url = note["inventory"], note["telemetry"], note["center_url"]
             else:
                 body = acl.unseal_first_contact(raw)
         except acl.AccessError as exc:
             err.print(f"[red]{exc}[/red]")
             raise typer.Exit(2)
         acl.note_center_seen()
+        # Learned here, over a payload already signed by the key this machine pinned at
+        # enrolment. After this it can refresh itself and stop waiting to be swept.
+        acl.note_center_url(url)
         if relayed:
             _record_relayed(relayed)
         try:
@@ -1064,6 +1073,20 @@ def _apply_now(acc, src: str, dst: str, user: str, *, install: bool) -> None:
     rec.save_ledger(ledger)
 
 
+def center_advertise_url(acc, port: int = 0) -> str:
+    """Where this center tells machines to come back to.
+
+    Computed whether or not the listener is running, because the sweep is how a machine
+    first learns the address: it arrives inside a payload already signed by a key the
+    machine has pinned, which is the only channel that can carry it safely. A machine
+    that finds nothing listening there falls back to being swept, at the cost of one
+    refused connection.
+    """
+    from .serve import DEFAULT_PORT
+
+    return f"http://{_this_host(acc)}:{port or DEFAULT_PORT}/sync"
+
+
 def _this_host(acc) -> str:
     """The address machines already reach this machine on, for --listen to advertise.
 
@@ -1119,7 +1142,7 @@ def ensure_fresh(*, force: bool = False) -> None:
     acl.note_center_url(note["center_url"] or url)
 
 
-def _post(url: str, payload: str, timeout: float = 15.0) -> str | None:
+def _post(url: str, payload: str, timeout: float = 8.0) -> str | None:
     """One request to the center. None on any failure, which is never fatal here."""
     import urllib.error
     import urllib.request
@@ -1811,7 +1834,7 @@ def cmd_center(name: str = typer.Argument(None, help="hand the role to this mach
             err.print("[red]Only the center can serve the fleet.[/red]")
             raise typer.Exit(2)
         where = port or DEFAULT_PORT
-        url = advertise or f"http://{_this_host(acc)}:{where}/sync"
+        url = advertise or center_advertise_url(acc, where)
         console.print(f"[green]✓[/green] serving fleet {acc.fleet_id} on port {where}")
         console.print(f"  [dim]machines are told to dial {url}[/dim]")
         console.print("  [dim]only keys this fleet has pinned are answered; "

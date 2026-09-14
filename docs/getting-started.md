@@ -207,17 +207,37 @@ fleet sync                                 # apply it
 fleet access                               # who may reach what, and what is pending
 ```
 
-`fleet access` records the decision; `fleet sync` installs the key. Until the sweep
-reaches the machine the grant shows as pending, with an age — never as done. Revoking is
-the same shape and the same honesty:
+The grant is applied on the spot — there is no second command to remember. If the machine
+is switched off it stays pending, with an age, and fleet says so rather than reporting
+success; `fleet sync` retries it.
 
 ```bash
-fleet access machine_A --deny machine_B
-fleet sync
+fleet access machine_A --deny machine_B    # applied immediately too
 ```
 
-If the machine is switched off, its key is still on it, and fleet says so rather than
-reporting success. It retries on the next sync.
+Revoking is pushed rather than waited for, deliberately: a machine that waited to be asked
+would keep the key until it next happened to sync, which for an idle machine is never —
+while the machine losing access carried on using it.
+
+## Letting machines keep themselves current
+
+Run this on the center and nobody has to type `fleet sync` again:
+
+```bash
+fleet center --listen
+```
+
+Machines then refresh from it when they read the fleet and their copy has gone stale —
+`fleet ls`, `fleet show`. Lazy on purpose: a machine nobody is using does not need fresh
+data, and the moment someone uses it, it gets some.
+
+It is a much narrower thing than opening SSH on the center: one verb, no shell, and every
+byte in and out is signed by a key the fleet already pinned. A machine it has not pinned
+is refused before its payload is read, and enrolment stays the only way in — the listener
+never accepts a stranger on first contact.
+
+A center that is switched off costs freshness and nothing else. Every command still works
+from local state, which is the rule a sync outage must never break.
 
 ## What needs the center
 

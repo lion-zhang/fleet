@@ -325,7 +325,38 @@ def test_a_machine_with_no_keypair_gets_one(tmp_path):
     assert p.returncode == 0, p.stderr
     assert p.stdout.strip().startswith("ssh-ed25519 ")
     assert "fleet:" in p.stdout, "the comment says what put it there"
-    assert (tmp_path / ".config" / "fleet" / "id_ed25519").exists()
+    # Wherever *that machine* will look for it, which is not one path on every POSIX
+    # system: platformdirs uses ~/.config on Linux and ~/Library/Application Support on
+    # macOS. The hardcoded Linux path meant the center pinned a key every Mac ignored.
+    assert list(tmp_path.rglob("fleet/id_ed25519")), "no key anywhere under HOME"
+    expected = ("Library/Application Support/fleet" if sys.platform == "darwin"
+                else ".config/fleet")
+    assert (tmp_path / expected / "id_ed25519").exists(), f"not at {expected}"
+
+
+def test_a_key_written_by_an_older_fleet_is_moved_not_replaced(tmp_path):
+    """Earlier versions wrote it under ~/.config on every platform. Regenerating would
+    orphan every authorized_keys entry already placed for that machine, with nothing
+    left to match them by -- so the key moves and keeps its fingerprint."""
+    import subprocess
+
+    from fleet.keys import ensure_remote_keypair_command
+
+    if sys.platform != "darwin":
+        pytest.skip("only macOS changed where the key belongs")
+    legacy = tmp_path / ".config" / "fleet"
+    legacy.mkdir(parents=True)
+    subprocess.run(["ssh-keygen", "-t", "ed25519", "-N", "", "-q",
+                    "-f", str(legacy / "id_ed25519")], check=True)
+    before = (legacy / "id_ed25519.pub").read_text().split()[1]
+
+    env = {"HOME": str(tmp_path), "PATH": "/usr/bin:/bin:/usr/local/bin"}
+    p = subprocess.run(["sh", "-c", ensure_remote_keypair_command()], env=env,
+                       capture_output=True, text=True)
+    assert p.returncode == 0, p.stderr
+    assert p.stdout.split()[1] == before, "the same key, not a new one"
+    assert (tmp_path / "Library/Application Support/fleet/id_ed25519").exists()
+    assert not (legacy / "id_ed25519").exists(), "and it is not left in both places"
 
 
 def test_it_never_replaces_a_key_the_machine_already_has(tmp_path):
