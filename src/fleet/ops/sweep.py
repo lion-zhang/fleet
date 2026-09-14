@@ -19,12 +19,35 @@ from ..state import access as acl
 from ..state import inventory as inv
 from .. import reconcile as rec
 from ..state import store
+from ..config import load_config
 from ..probe.runner import run_probe
 from ..ssh.cmd import remote_platform
 from ..ui import console, err
 from . import enrol
 from .errors import FleetError
 from . import sync
+
+def _across_machines(jobs: list, work, *, workers: int) -> list:
+    """Run `work` over `jobs` concurrently, returning results in the order given.
+
+    **Across machines only.** `reconcile._remote` passes multiplex=False deliberately --
+    sharing one SSH master to the *same* host races on the connection -- and that is
+    untouched by dialling different hosts at once. Each job here is one machine's worth
+    of work, run start to finish on one thread, so a device's own edges stay serial.
+
+    Results come back in input order rather than as they complete, so the sweep still
+    reads top to bottom. The network work is what was slow; the printing never was.
+
+    Nothing here touches sqlite. The connection is not shared across threads, so the
+    workers do the dialling and the caller records what came back.
+    """
+    if len(jobs) < 2 or workers < 2:
+        return [work(j) for j in jobs]
+    from concurrent.futures import ThreadPoolExecutor
+
+    with ThreadPoolExecutor(max_workers=min(workers, len(jobs))) as pool:
+        return list(pool.map(work, jobs))
+
 
 def endpoint_for(dev, user: str):
     """The device's best route, dialled as the user this edge is about.
@@ -138,12 +161,15 @@ def run(devices) -> None:
     conn = store.connect()
     done = failed = 0
     try:
+        # Resolve every edge first, in this thread: what device it is about, which route
+        # to dial, and what the last probe says the far side runs. All of that reads the
+        # inventory and the store, and neither is safe to touch from a worker.
+        work: dict[str, list] = {}
         for key, st in pending:
             src, dst, user = key.split(">")
             # the ledger's copy first: a revoke usually runs *because* the machine was
             # dropped from the list, so the pin is often already gone
             dev = by_id.get(st.dst_device or (acc.keys.get(dst) or {}).get("device_id", ""))
-            install = st.desired == "present"
             st.attempts += 1
             st.last_attempt_at = int(time.time())
             if dev is None:
@@ -156,25 +182,52 @@ def run(devices) -> None:
                 failed += 1
                 continue
             _, snap = store.latest(conn, dev.id)
-            ok, out = rec.apply_edge(acc, (src, dst, user), ep, install=install,
-                                     platform=remote_platform(snap))
-            if ok:
-                st.observed, st.last_error = st.desired, ""
-                done += 1
-                verb = "installed on" if install else "removed from"
-                console.print(f"[green]✓[/green] {acc.name_of(src)}'s key {verb} {dev.name}")
+            work.setdefault(dev.id, []).append(
+                (st, dev, ep, (src, dst, user), st.desired == "present",
+                 remote_platform(snap)))
+
+        def one_machine(batch):
+            """Every edge on one machine, in order, then a probe if anything landed.
+
+            Grouped by device rather than by edge so that two edges on the same host stay
+            serial -- they edit the same authorized_keys, and interleaving them is how a
+            marker block gets written twice or lost.
+            """
+            out = []
+            touched = None
+            for st, dev, ep, triple, install, platform in batch:
+                ok, detail = rec.apply_edge(acc, triple, ep, install=install,
+                                            platform=platform)
+                out.append((st, dev, triple, install, ok, detail))
+                if ok:
+                    touched = (dev, ep)
+            probe = None
+            if touched is not None:
                 # While we are connected anyway: a machine that cannot reach this one
                 # will otherwise have no telemetry for it at all.
+                dev, ep = touched
                 with suppress(Exception):
-                    store.record(conn, dev.id,
-                                 run_probe(ep, mode=dev.probe_mode,
-                                           disk_paths=dev.disk_paths))
-            else:
-                st.last_error = out
-                failed += 1
-                # Not an error: a device that is off is an edge that has not converged.
-                console.print(f"[yellow]·[/yellow] {dev.name} not reached "
-                              f"[dim]({out[:60]})[/dim]")
+                    probe = (dev.id, run_probe(ep, mode=dev.probe_mode,
+                                               disk_paths=dev.disk_paths))
+            return out, probe
+
+        cfg = load_config()
+        for results, probe in _across_machines(list(work.values()), one_machine,
+                                               workers=int(cfg.max_workers)):
+            if probe is not None:
+                store.record(conn, probe[0], probe[1])
+            for st, dev, (src, _dst, _user), install, ok, detail in results:
+                if ok:
+                    st.observed, st.last_error = st.desired, ""
+                    done += 1
+                    verb = "installed on" if install else "removed from"
+                    console.print(f"[green]✓[/green] {acc.name_of(src)}'s key {verb} {dev.name}")
+                else:
+                    st.last_error = detail
+                    failed += 1
+                    # Not an error: a device that is off is an edge that has not converged.
+                    console.print(f"[yellow]·[/yellow] {dev.name} not reached "
+                                  f"[dim]({detail[:60]})[/dim]")
     finally:
         conn.close()
         rec.save_ledger(ledger)
@@ -203,12 +256,18 @@ def broadcast(devices) -> None:
     """
 
     mine = inv.dumps(inv.load())
-    reached = 0
+    routes = []
     for dev in inv.live(devices):
         eps = sorted(inv.endpoints_of(dev), key=lambda e: e.preference)
-        if not eps:
-            continue                       # the center itself
-        code, output = sync.run_sync(eps[0], mine)
+        if eps:
+            routes.append(eps[0])          # no endpoints: the center itself
+
+    cfg = load_config()
+    answers = _across_machines(routes, lambda ep: sync.run_sync(ep, mine),
+                               workers=int(cfg.max_workers))
+
+    reached = 0
+    for code, output in answers:
         if code != 0:
             continue
         try:
@@ -217,6 +276,8 @@ def broadcast(devices) -> None:
             continue                       # not fleet on the far side, or an old one
         # Merged against what the file holds *now*, not the list we started the sweep
         # with: the round trips take a while and a `fleet add` may have landed since.
+        # Still one at a time, and still here rather than in a worker -- merging is the
+        # part that writes.
         inv.update(lambda current: inv.merge(current, returned, authoritative=False))
         reached += 1
     if reached:

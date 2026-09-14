@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import pathlib
 import subprocess
 
 import pytest
@@ -110,9 +111,13 @@ def test_nothing_promotes_a_center_except_a_handover(two_machines):
 
 def test_no_code_path_produces_a_backup_role():
     """It meant a second machine holding a key on every device, forever."""
-    import pathlib
+    import fleet
 
-    src = pathlib.Path(cli.__file__).parent
+    # `fleet.__path__`, not `cli.__file__`: the package is what is being searched, and
+    # deriving its directory from one module's location made this test quietly depend on
+    # cli.py staying at the root. It does, but that is a packaging decision -- the
+    # console script names it -- and not something a test about roles should assert.
+    src = pathlib.Path(fleet.__path__[0])
     for f in src.rglob("*.py"):
         text = f.read_text()
         assert 'role = "backup"' not in text, f"{f.name} still assigns the role"

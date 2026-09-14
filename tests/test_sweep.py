@@ -226,3 +226,57 @@ def test_paths_names_every_file_and_the_shared_directory(fleet_at):
     for expected in ("inventory", "fleet key", "access", "ledger", "outbox", "cache"):
         assert expected in out
     assert "same directory" in out
+
+
+# ------------------------------------------------------ one machine at a time
+
+def test_machines_are_swept_at_once_but_one_machine_is_swept_in_order(fleet_at,
+                                                                     monkeypatch):
+    """A sweep opened up to four SSH handshakes per machine and did it serially, so the
+    slowest box set the pace for the whole fleet. Fanning out across machines is safe;
+    fanning out *within* one is not -- two edges on the same host edit the same
+    authorized_keys, and interleaving them is how a marker block gets written twice or
+    lost. reconcile passes multiplex=False for the same reason.
+
+    Both halves are asserted, because a fan-out that quietly stopped fanning out would
+    pass a test that only checked the serial half.
+    """
+    import threading
+    import time as _time
+
+    runner, _ = fleet_at
+    # The center's edges to oracle and lin-xps come for free. Add lin-xps -> oracle so
+    # that oracle has two edges of its own: without a host that is named twice, the
+    # serial half of this test would have nothing to catch.
+    acc = acl.load(acl.ACCESS_PATH)
+    acc.allow.append(acl.Edge(src=C, dst=B, user="root"))
+    acl.save(acc, acl.ACCESS_PATH)
+
+    live = {}
+    overlapped = set()
+    seen = []
+    lock = threading.Lock()
+
+    def slow_edge(acc, edge, ep, **kw):
+        host = ep.target
+        with lock:
+            seen.append(host)
+            for other in live:
+                if other != host:
+                    overlapped.add(frozenset((other, host)))
+                else:
+                    raise AssertionError(f"two edges on {host} ran at the same time")
+            live[host] = True
+        _time.sleep(0.05)
+        with lock:
+            del live[host]
+        return True, ""
+
+    monkeypatch.setattr(rec, "apply_edge", slow_edge)
+    monkeypatch.setattr(enrol, "run_probe", lambda *a, **k: (_ for _ in ()).throw(OSError()))
+    monkeypatch.setattr(sweep, "run_probe", lambda *a, **k: (_ for _ in ()).throw(OSError()))
+
+    r = runner.invoke(cli.app, ["sync"])
+    assert r.exit_code == 0, r.output
+    assert len(seen) >= 2, "the sweep never reached two machines"
+    assert overlapped, "the machines were dialled one after another, not at once"
