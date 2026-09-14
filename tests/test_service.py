@@ -133,4 +133,7 @@ def test_the_installer_stops_the_service_before_replacing_it():
 
     sc = install_script("git@example.com:x/y.git")
     assert sc.index("service stop") < sc.index("uv tool install") < sc.index("service start")
-    assert "--reinstall" in sc, "--force alone reuses a cached wheel and ships stale code"
+    # --force alone reuses a cached wheel and ships stale code; --reinstall rebuilds
+    # every dependency, which turns a deploy into a download of the world
+    assert "--reinstall-package fleet-broker" in sc
+    assert "--reinstall " not in sc

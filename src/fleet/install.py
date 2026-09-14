@@ -56,7 +56,10 @@ fi
 # because a machine that is not a center has nothing to stop.
 PATH="$HOME/.local/bin:$PATH" fleet service stop >/dev/null 2>&1 || true
 
-uv tool install --force --reinstall --quiet "$DIR"
+# --reinstall-package, not --reinstall: the problem is uv reusing a cached build of
+# fleet when the version has not changed, and rebuilding every dependency to fix that
+# turns a deploy into a download of the world.
+uv tool install --force --reinstall-package fleet-broker --quiet "$DIR"
 PATH="$HOME/.local/bin:$PATH" fleet --version
 
 # Back up if it was there. `install` is idempotent, so this must not start a service on a

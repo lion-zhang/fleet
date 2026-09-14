@@ -167,13 +167,36 @@ def _windows_install(cmd: str, port: int) -> str:
     if p.returncode != 0:
         return f"could not register it: {(p.stderr or p.stdout).strip()[:160]}"
     _run(["schtasks", "/run", "/tn", TASK])
-    return f"running, and again at logon (scheduled task {TASK})"
+    opened = _windows_open_port(port)
+    return (f"running, and again at logon (scheduled task {TASK})"
+            + (f"; {opened}" if opened else ""))
+
+
+FIREWALL_RULE = "fleet center"
+
+
+def _windows_open_port(port: int) -> str:
+    """Let the fleet actually reach it.
+
+    Windows Firewall blocks inbound by default, and its rules are per *program path* --
+    so a listener started by hand from one install and one started by the scheduler from
+    another are two different programs as far as it is concerned. Binding the port then
+    looks completely healthy from the machine itself and is invisible from everywhere
+    else, which is the worst way for this to fail.
+    """
+    _run(["netsh", "advfirewall", "firewall", "delete", "rule", f"name={FIREWALL_RULE}"])
+    p = _run(["netsh", "advfirewall", "firewall", "add", "rule",
+              f"name={FIREWALL_RULE}", "dir=in", "action=allow",
+              "protocol=TCP", f"localport={port}"])
+    return (f"opened TCP {port} inbound" if p.returncode == 0
+            else f"could not open TCP {port}: machines will not reach it")
 
 
 def _windows_remove() -> str:
     _windows_stop()
     _run(["schtasks", "/delete", "/tn", TASK, "/f"])
-    return "removed"
+    _run(["netsh", "advfirewall", "firewall", "delete", "rule", f"name={FIREWALL_RULE}"])
+    return "removed, and the firewall rule with it"
 
 
 def _windows_status() -> str:
@@ -216,8 +239,27 @@ def remove() -> str:
     return _impl()[1]()
 
 
-def status() -> str:
-    return _impl()[2]()
+def status(port: int = 0) -> str:
+    """Whether it is installed, and whether it is actually serving.
+
+    The platform's own answer is not enough: a scheduled task reported `Running` while
+    the process it started sat behind a closed firewall port, reachable from nowhere.
+    So a claim of running is checked against the port before it is repeated.
+    """
+    state = _impl()[2]()
+    if state == RUNNING and port and not _answers(port):
+        return INSTALLED
+    return state
+
+
+def _answers(port: int, timeout: float = 1.5) -> bool:
+    import socket
+
+    try:
+        with socket.create_connection(("127.0.0.1", port), timeout=timeout):
+            return True
+    except OSError:
+        return False
 
 
 def stop() -> None:
