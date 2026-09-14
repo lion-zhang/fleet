@@ -306,6 +306,43 @@ def test_stopping_never_kills_every_pythonw_on_the_machine(monkeypatch, tmp_path
 
     assert not any("/im" in f and "pythonw" in f for f in flat), \
         "an image-name kill would take out unrelated programs"
-    targeted = [f for f in flat if "pythonw.exe" in f]
+    kills = [f for f in flat if "Stop-Process" in f or "taskkill" in f]
+    targeted = [f for f in kills if "pythonw.exe" in f]
     assert targeted, "the windowless center must still be stopped"
-    assert all("CommandLine" in f and "ProcessId" in f for f in targeted)
+    assert all("CommandLine" in f and "ProcessId" in f for f in targeted), \
+        "a kill that names pythonw must select it by command line, then by pid"
+
+
+def test_stopping_waits_for_windows_to_let_go_of_the_files(monkeypatch):
+    """Asking Windows to end a process returns before it has released its files, and
+    `uv tool install` then fails half way through with "Access is denied" on the Scripts
+    directory -- leaving no working fleet on the machine at all, because by then it has
+    deleted most of it. Updating stops the service precisely to avoid that, so returning
+    early defeats the point. Found by it happening."""
+    answers = iter(["2", "1", "0"])
+    calls = []
+
+    def fake_run(argv, **k):
+        calls.append(argv)
+        joined = " ".join(argv)
+        if "Measure-Object" in joined:
+            return _ok(next(answers, "0"))
+        return _ok()
+
+    monkeypatch.setattr(service, "_run", fake_run)
+    monkeypatch.setattr(service.time, "sleep", lambda s: None)
+    service._windows_stop()
+
+    polls = [c for c in calls if "Measure-Object" in " ".join(c)]
+    assert len(polls) == 3, "it stopped asking before the count reached zero"
+
+
+def test_stopping_gives_up_rather_than_hanging(monkeypatch):
+    """A process that never dies must not wedge an update forever."""
+    monkeypatch.setattr(service, "_run",
+                        lambda argv, **k: _ok("1") if "Measure-Object" in " ".join(argv)
+                        else _ok())
+    monkeypatch.setattr(service.time, "sleep", lambda s: None)
+    clock = iter([0.0] + [i * 4.0 for i in range(1, 20)])
+    monkeypatch.setattr(service.time, "monotonic", lambda: next(clock))
+    assert service._windows_await_exit(timeout_s=10.0) is False

@@ -21,6 +21,7 @@ from __future__ import annotations
 import os
 import subprocess
 import sys
+import time
 from pathlib import Path
 
 from .ssh.cmd import WINDOWS, local_platform
@@ -283,6 +284,29 @@ def _windows_stop() -> None:
           "Get-CimInstance Win32_Process -Filter \"Name='pythonw.exe'\" | "
           "Where-Object { $_.CommandLine -like '*-m*fleet*center*--listen*' } | "
           "ForEach-Object { Stop-Process -Id $_.ProcessId -Force }"])
+    _windows_await_exit()
+
+
+def _windows_await_exit(timeout_s: float = 10.0) -> bool:
+    """Wait until nothing fleet started is still running. Returns whether it settled.
+
+    Asking Windows to end a process returns before the process has let go of its files,
+    and `uv tool install` then fails half way through with "failed to remove directory
+    ...\\Scripts: Access is denied" -- which leaves no working `fleet` on the machine at
+    all, because by then it has deleted most of it. That is the whole reason updating
+    stops the service first, so returning early defeats the point.
+    """
+    deadline = time.monotonic() + timeout_s
+    while time.monotonic() < deadline:
+        p = _run(["powershell", "-NoProfile", "-Command",
+                  "@(Get-Process fleet -ErrorAction SilentlyContinue) + "
+                  "@(Get-CimInstance Win32_Process -Filter \"Name='pythonw.exe'\" | "
+                  "Where-Object { $_.CommandLine -like '*-m*fleet*center*--listen*' }) "
+                  "| Measure-Object | ForEach-Object { $_.Count }"])
+        if (p.stdout or "").strip() in ("0", ""):
+            return True
+        time.sleep(0.5)
+    return False
 
 
 def _windows_start() -> None:
