@@ -150,6 +150,16 @@ MCP_CLIENTS = (
               linux=".config/Claude/claude_desktop_config.json"),
     McpClient("cursor", key="mcpServers", macos=".cursor/mcp.json",
               windows=".cursor/mcp.json", linux=".cursor/mcp.json"),
+    # VS Code names the object `servers`, not `mcpServers`, which is why the key is a
+    # field here rather than a constant.
+    McpClient("vscode", key="servers",
+              macos="Library/Application Support/Code/User/mcp.json",
+              windows="AppData/Roaming/Code/User/mcp.json",
+              linux=".config/Code/User/mcp.json"),
+    McpClient("windsurf", key="mcpServers",
+              macos=".codeium/windsurf/mcp_config.json",
+              windows=".codeium/windsurf/mcp_config.json",
+              linux=".codeium/windsurf/mcp_config.json"),
 )
 
 
@@ -451,6 +461,12 @@ def install_mcp(root: Path, clients: list[str], cmd: str, *,
             continue
         current = path.read_text() if path.exists() else ""
         desired = apply_mcp(current, client.key, cmd)
+        if desired == current and current.strip() and "fleet" not in current:
+            # apply_mcp returns the file untouched when it cannot parse it, which is the
+            # right thing to do to someone else's config and the wrong thing to report
+            # as "unchanged" -- that reads as already set up.
+            changes.append(Change(client.name, path, "unreadable"))
+            continue
         action = ("unchanged" if desired == current
                   else "created" if not current else "updated")
         if action != "unchanged" and not dry_run:

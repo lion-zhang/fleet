@@ -107,9 +107,11 @@ costs nothing until a task actually needs a machine. Where fleet owns the file i
 the whole thing; where you own it (`AGENTS.md`, `GEMINI.md`) it marks a region and leaves
 every other byte alone.
 
-**Desktop clients have no shell**, so instructions are useless to them. They get `fleet
-mcp` registered as an MCP server instead — Claude Desktop and Cursor, merged into their
-own config beside whatever servers are already there. That half needs the optional extra:
+**Clients without a shell** get `fleet mcp` registered as an MCP server instead, merged
+into their own config beside whatever servers are already there — Claude Desktop, VS Code,
+Cursor and Windsurf. Only the ones actually installed are touched, and a config fleet
+cannot parse is left alone and reported rather than rewritten. That half needs the
+optional extra:
 
 ```bash
 uv tool install --force 'fleet-broker[mcp]'

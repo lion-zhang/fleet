@@ -139,3 +139,50 @@ def test_a_failing_command_comes_back_as_a_value(monkeypatch):
     monkeypatch.setattr(mcpserver, "_fleet", lambda: "/nonexistent/fleet")
     out = mcpserver._run(["ls", "--json"])
     assert "error" in out and "not installed" in out["error"]
+
+
+# ------------------------------------------------------------- more clients
+
+def test_vscode_uses_its_own_key_name(tmp_path):
+    """VS Code names the object `servers`, where everyone else says `mcpServers`. That
+    is why the key is a field on the record rather than a constant."""
+    import json
+
+    cfg = tmp_path / "Library" / "Application Support" / "Code" / "User"
+    cfg.mkdir(parents=True)
+    st.install_mcp(tmp_path, ["vscode"], "/bin/fleet", platform="darwin")
+    doc = json.loads((cfg / "mcp.json").read_text())
+    assert doc["servers"]["fleet"]["args"] == ["mcp"]
+    assert "mcpServers" not in doc
+
+
+def test_every_client_has_a_path_for_every_platform():
+    """A missing path is a client that silently does nothing on someone's machine."""
+    for c in st.MCP_CLIENTS:
+        for platform in ("darwin", "win32", "linux"):
+            rel = {"darwin": c.macos, "win32": c.windows}.get(platform, c.linux)
+            assert rel, f"{c.name} has no path for {platform}"
+            assert not rel.startswith("/"), f"{c.name}: {rel} must be relative to home"
+            assert ".." not in rel.split("/"), f"{c.name}: {rel} escapes the home root"
+
+
+def test_a_config_we_cannot_read_says_so_rather_than_unchanged(tmp_path):
+    """`apply_mcp` returns someone else's unparseable config untouched, which is right.
+    Reporting that as "unchanged" is wrong: it reads as already set up."""
+    cfg = tmp_path / "Library" / "Application Support" / "Claude"
+    cfg.mkdir(parents=True)
+    (cfg / "claude_desktop_config.json").write_text("{ this is not json")
+    changes = st.install_mcp(tmp_path, ["claude-desktop"], "/bin/fleet", platform="darwin")
+    assert [c.action for c in changes] == ["unreadable"]
+
+
+def test_an_empty_config_is_still_written(tmp_path):
+    """VS Code ships an empty mcp.json; there is nothing to preserve in it."""
+    import json
+
+    cfg = tmp_path / "Library" / "Application Support" / "Code" / "User"
+    cfg.mkdir(parents=True)
+    (cfg / "mcp.json").write_text("")
+    changes = st.install_mcp(tmp_path, ["vscode"], "/bin/fleet", platform="darwin")
+    assert [c.action for c in changes] == ["created"]
+    assert json.loads((cfg / "mcp.json").read_text())["servers"]["fleet"]
