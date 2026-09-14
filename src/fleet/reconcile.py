@@ -104,7 +104,13 @@ def _remote(ep: Endpoint, script: str, *, platform: str = "posix",
               else "sh -s")
     argv = build_argv(ep, remote=remote, multiplex=False, connect_timeout=10)
     try:
-        p = subprocess.run(argv, input=script, capture_output=True, text=True,
+        # Bytes: text mode rewrites \n to \r\n on Windows, and a CRLF-mangled script
+        # half-executes -- it wrote the replacement authorized_keys to a temp file,
+        # never reached the `mv`, and left the temp behind. Had that `mv` run, the file
+        # would have been replaced by the block alone, losing every key we did not
+        # write. The promise never to touch a line outside our own block depends on the
+        # script arriving intact.
+        p = subprocess.run(argv, input=script.encode(), capture_output=True,
                            timeout=timeout)
     except subprocess.TimeoutExpired:
         return False, "timed out"
@@ -112,8 +118,8 @@ def _remote(ep: Endpoint, script: str, *, platform: str = "posix",
         return False, str(exc)
     if capture:
         # Callers that need what the far side *said*, not just whether it worked.
-        return p.returncode == 0, (p.stdout or p.stderr or "")
-    return p.returncode == 0, (p.stderr or p.stdout or "").strip()[-300:]
+        return p.returncode == 0, (p.stdout or p.stderr or b"").decode(errors="replace")
+    return p.returncode == 0, (p.stderr or p.stdout or b"").decode(errors="replace").strip()[-300:]
 
 
 def apply_edge(acc: Access, edge: tuple[str, str, str], ep: Endpoint, *,

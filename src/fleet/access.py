@@ -251,12 +251,17 @@ def sign(payload: str, key_path: Path | None = None) -> str:
     try:
         p = subprocess.run(
             ["ssh-keygen", "-Y", "sign", "-f", str(key_path), "-n", SIGN_NAMESPACE, "-"],
-            input=payload, capture_output=True, text=True, check=True)
+            # Bytes both ways. Text mode would hand ssh-keygen CRLF on a Windows center,
+            # so the signature would cover bytes no spoke ever sees -- every verify on
+            # the LF original would fail, and the fleet would reject its own center.
+            input=payload.encode(), capture_output=True, check=True)
     except FileNotFoundError as exc:
         raise AccessError("ssh-keygen not found -- install OpenSSH") from exc
     except subprocess.CalledProcessError as exc:
-        raise AccessError(f"could not sign: {(exc.stderr or '').strip()[:200]}") from exc
-    return p.stdout
+        raise AccessError(
+            f"could not sign: {(exc.stderr or b'').decode(errors='replace').strip()[:200]}"
+        ) from exc
+    return p.stdout.decode()
 
 
 def verify(payload: str, signature: str, signer_pubkey: str) -> bool:
@@ -274,7 +279,7 @@ def verify(payload: str, signature: str, signer_pubkey: str) -> bool:
             subprocess.run(
                 ["ssh-keygen", "-Y", "verify", "-f", str(allowed), "-I", "center",
                  "-n", SIGN_NAMESPACE, "-s", str(sig)],
-                input=payload, capture_output=True, text=True, check=True)
+                input=payload.encode(), capture_output=True, check=True)
         except (OSError, subprocess.CalledProcessError):
             return False
     return True

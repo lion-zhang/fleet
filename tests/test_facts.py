@@ -584,3 +584,26 @@ def test_init_marks_the_center_in_the_inventory_too(tmp_path, monkeypatch):
 
     assert CliRunner().invoke(cli.app, ["center", "--init"]).exit_code == 0
     assert inv.find_exact(inv.load(inv.INVENTORY_PATH), "hub").role == "center"
+
+
+def test_no_remote_script_goes_through_text_mode():
+    """Popen and run() wrap stdin with newline=None in text mode, rewriting \\n to \\r\\n
+    on Windows. That broke three things at once from the new Windows center: the probe
+    payload (`sh: Syntax error: "|" unexpected`), the authorized_keys edit (which wrote
+    its replacement to a temp file and never reached the `mv` -- had it, the file would
+    have been replaced by our block alone), and SSHSIG signing (covering bytes no spoke
+    ever sees, so every verify would fail).
+
+    A source guard rather than a behaviour test: the next `input=` added without
+    `.encode()` is the one that breaks a fleet nobody is watching."""
+    import pathlib
+    import re
+
+    src = pathlib.Path(__file__).resolve().parent.parent / "src" / "fleet"
+    offenders = []
+    for path in src.rglob("*.py"):
+        for n, line in enumerate(path.read_text().splitlines(), 1):
+            if re.search(r"\binput=", line) and ".encode()" not in line \
+                    and "read_bytes()" not in line and not line.lstrip().startswith("#"):
+                offenders.append(f"{path.name}:{n}: {line.strip()}")
+    assert not offenders, "remote payloads must be bytes:\n" + "\n".join(offenders)

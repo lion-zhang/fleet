@@ -644,8 +644,8 @@ def configured_repo() -> str:
 
 def run_installer(ep, script: str, *, forward_agent: bool = True) -> tuple[int, str]:
     argv = build_install_argv(ep, forward_agent=forward_agent)
-    p = subprocess.run(argv, input=script, capture_output=True, text=True, timeout=900)
-    return p.returncode, (p.stdout + p.stderr)
+    p = subprocess.run(argv, input=script.encode(), capture_output=True, timeout=900)
+    return p.returncode, (p.stdout + p.stderr).decode(errors="replace")
 
 
 @app.command("install")
@@ -769,9 +769,11 @@ def run_sync(ep, payload: str) -> tuple[int, str]:
     argv = build_argv(ep, remote=remote)
     # Sealed, because the far side runs this filter for anyone holding a key on it.
     from . import access as acl
-    p = subprocess.run(argv, input=acl.seal(payload, telemetry=_telemetry_to_relay()),
-                       capture_output=True, text=True, timeout=180)
-    return p.returncode, (p.stdout if p.returncode == 0 else p.stdout + p.stderr)
+    p = subprocess.run(argv,
+                       input=acl.seal(payload, telemetry=_telemetry_to_relay()).encode(),
+                       capture_output=True, timeout=180)
+    out = p.stdout.decode(errors="replace")
+    return p.returncode, (out if p.returncode == 0 else out + p.stderr.decode(errors="replace"))
 
 
 def _show_version(value: bool):
@@ -1362,8 +1364,8 @@ def cmd_probe(name: str = typer.Argument(None, help="defaults to this machine"),
         from .sshcmd import build_argv
         argv = build_argv(sorted(eps, key=lambda e: e.preference)[0],
                           remote="sh -s", env=probe_env(dev.probe_mode, dev.disk_paths))
-        p = subprocess.run(argv, input=PAYLOAD.read_text(), capture_output=True, text=True)
-        sys.stdout.write(p.stdout)
+        p = subprocess.run(argv, input=PAYLOAD.read_bytes(), capture_output=True)
+        sys.stdout.write(p.stdout.decode(errors="replace"))
         raise typer.Exit(0 if p.returncode == 0 else 1)
     res = run_probe(sorted(eps, key=lambda e: e.preference)[0], mode=dev.probe_mode,
                     disk_paths=dev.disk_paths)
@@ -1931,7 +1933,7 @@ def _leave_fleet(acc) -> None:
     shell = local_shell_argv()
     for fp in acc.keys:
         script = sync_command(acc.fleet_id, fp, pubkey=None, platform=local_platform())
-        subprocess.run(shell, input=script, capture_output=True, text=True)
+        subprocess.run(shell, input=script.encode(), capture_output=True)
     console.print(f"[green]✓[/green] removed fleet {acc.fleet_id}'s keys from this machine.")
     console.print("  [dim]the center will see this as unreachable until you tell it[/dim]")
 
