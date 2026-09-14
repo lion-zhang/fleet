@@ -1615,7 +1615,17 @@ def cmd_center(name: str = typer.Argument(None, help="hand the role to this mach
     if init:
         key_path, pub = ensure_keypair()
         devices = inv.load()
-        dev, res = onboard_self(taken_names={d.name for d in devices})
+        dev, res = onboard_self()
+        # Re-running --init must not rename this machine. Passing every existing name as
+        # taken counted its *own* record among them, so a second --init came back as
+        # "<name>-2" and pinned that into the access list while the inventory kept the
+        # first -- the exact name split seeding both from one object exists to prevent.
+        if existing := inv.find_exact(devices, dev.id):
+            dev.name = existing.name
+        else:
+            taken, base, n = inv.handles(devices), dev.name, 2
+            while dev.name in taken:
+                dev.name, n = f"{base}-{n}", n + 1
         try:
             acc = acl.bootstrap(dev.name, pub, dev.id)
         except acl.AccessError as exc:

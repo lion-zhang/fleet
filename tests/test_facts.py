@@ -471,3 +471,34 @@ def test_an_identity_path_from_another_machine_is_ignored(tmp_path):
     got = {e.target: e.identity for e in inv.endpoints_of(dev)}
     assert got["h1"] == "", "a foreign path must not reach ssh"
     assert got["h2"] == str(real), "a real one still does"
+
+
+def test_reinitialising_does_not_rename_the_center(tmp_path, monkeypatch):
+    """--init counted the machine's own inventory record among the taken names, so a
+    second run came back as "<name>-2" and pinned that into the access list while the
+    inventory kept the first."""
+    from typer.testing import CliRunner
+
+    from fleet import access as acl, cli, inventory as inv, store
+    from fleet.models import Device, Kind, ProbeResult, Status
+
+    for n in ("ACCESS_PATH", "LEDGER_PATH", "CACHE_PATH", "OUTBOX_PATH"):
+        monkeypatch.setattr(acl, n, tmp_path / getattr(acl, n).name)
+    monkeypatch.setattr(inv, "INVENTORY_PATH", tmp_path / "inventory.yaml")
+    monkeypatch.setattr(store, "DB_PATH", tmp_path / "cache.db")
+    key = tmp_path / "k"
+    import subprocess
+    subprocess.run(["ssh-keygen", "-t", "ed25519", "-N", "", "-q", "-f", str(key)], check=True)
+    pub = key.with_suffix(".pub").read_text().strip()
+    monkeypatch.setattr(cli, "ensure_keypair", lambda *a, **k: (key, pub))
+    monkeypatch.setattr(cli, "onboard_self", lambda **k: (
+        Device(id="id:me", name="beelink", kind=Kind.PERMANENT), ProbeResult(status=Status.OK)))
+
+    runner = CliRunner()
+    assert runner.invoke(cli.app, ["center", "--init"]).exit_code == 0
+    acl.ACCESS_PATH.unlink()                       # as --dissolve leaves it
+    assert runner.invoke(cli.app, ["center", "--init"]).exit_code == 0
+
+    acc = acl.load(acl.ACCESS_PATH)
+    assert acc.name_of(acc.center) == "beelink", "still itself, not beelink-2"
+    assert [d.name for d in inv.live(inv.load(inv.INVENTORY_PATH))] == ["beelink"]
