@@ -1182,6 +1182,44 @@ def _sweep(devices) -> None:
     console.print(f"\n[dim]{done} applied, {failed} still pending[/dim]"
                   + ("  [dim]-- `fleet access` shows what is outstanding[/dim]"
                      if failed else ""))
+    _broadcast(devices)
+
+
+def _broadcast(devices) -> None:
+    """Hand every machine that runs fleet the current inventory, and with it the center.
+
+    The center dials out and nothing dials in, so without this a spoke never learns who
+    the center is. It ends up holding our key in its authorized_keys with no idea where
+    the key came from: `fleet ls` there cannot mark the center, `fleet sync` there has
+    nobody to ask, and a machine added from that spoke never reaches anyone.
+
+    `run_sync` already does the work -- seal, hand over, take back the merge -- and was
+    only ever called from the spoke half of `fleet sync`, which under center-dials-spokes
+    nothing reaches.
+
+    A machine without fleet installed simply fails this; that is the ordinary case for a
+    managed target and is not worth a line of output. The inventory is not the authority
+    on anything security-relevant -- the access list is, and it is signed -- so a spoke
+    declining to answer costs nothing.
+    """
+    reached = 0
+    for dev in inv.live(devices):
+        eps = sorted(inv.endpoints_of(dev), key=lambda e: e.preference)
+        if not eps:
+            continue                       # the center itself
+        code, output = run_sync(eps[0], inv.dumps(inv.load()))
+        if code != 0:
+            continue
+        try:
+            returned = inv.loads(output)
+        except Exception:
+            continue                       # not fleet on the far side, or an old one
+        # Merged against what the file holds *now*, not the list we started the sweep
+        # with: the round trips take a while and a `fleet add` may have landed since.
+        inv.update(lambda current: inv.merge(current, returned, authoritative=False))
+        reached += 1
+    if reached:
+        console.print(f"[dim]· inventory handed to {reached} machine(s)[/dim]")
 
 
 @app.command("top")

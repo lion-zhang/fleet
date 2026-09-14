@@ -28,6 +28,9 @@ def fleet_at(tmp_path, monkeypatch):
     monkeypatch.setattr(inv, "INVENTORY_PATH", tmp_path / "inventory.yaml")
     monkeypatch.setattr(store, "DB_PATH", tmp_path / "cache.db")
     monkeypatch.setattr(cli, "local_device_id", lambda: "id:center")
+    # the sweep hands the inventory to every machine at the end; that is a real
+    # ssh per device, and these tests are about the reconciler
+    monkeypatch.setattr(cli, "run_sync", lambda *a, **k: (255, ""))
 
     devices = [
         Device(id="id:center", name="macbook", kind=Kind.PERMANENT, role="center"),

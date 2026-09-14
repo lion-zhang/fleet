@@ -607,3 +607,55 @@ def test_no_remote_script_goes_through_text_mode():
                     and "read_bytes()" not in line and not line.lstrip().startswith("#"):
                 offenders.append(f"{path.name}:{n}: {line.strip()}")
     assert not offenders, "remote payloads must be bytes:\n" + "\n".join(offenders)
+
+
+def test_the_sweep_hands_the_inventory_to_every_machine(tmp_path, monkeypatch):
+    """The center dials out and nothing dials in, so a spoke only ever learns who the
+    center is if the center tells it. Without this it held our key with no idea where it
+    came from: `fleet ls` there could not mark the center, and `fleet sync` there had
+    nobody to ask."""
+    from typer.testing import CliRunner
+
+    from fleet import access as acl, cli, inventory as inv, reconcile as rec, store
+    from fleet.models import Device, Kind
+
+    for n in ("ACCESS_PATH", "LEDGER_PATH", "CACHE_PATH", "OUTBOX_PATH"):
+        monkeypatch.setattr(acl, n, tmp_path / getattr(acl, n).name)
+    monkeypatch.setattr(inv, "INVENTORY_PATH", tmp_path / "inventory.yaml")
+    monkeypatch.setattr(store, "DB_PATH", tmp_path / "cache.db")
+    monkeypatch.setattr(cli, "local_device_id", lambda: "id:center")
+
+    devices = [
+        Device(id="id:center", name="hub", kind=Kind.PERMANENT, role="center"),
+        Device(id="id:a", name="a", kind=Kind.PERMANENT,
+               endpoints=[{"target": "1.2.3.4", "user": "root", "port": 22}]),
+    ]
+    inv.save(devices, inv.INVENTORY_PATH)
+    acc = acl.Access(fleet_id="7f3a9c", center="SHA256:c", keys={
+        "SHA256:c": {"name": "hub", "pubkey": "x", "device_id": "id:center"},
+        "SHA256:a": {"name": "a", "pubkey": "y", "device_id": "id:a", "user": "root"},
+    })
+    acl.save(acc, acl.ACCESS_PATH)
+
+    monkeypatch.setattr(rec, "apply_edge", lambda *a, **k: (True, ""))
+    monkeypatch.setattr(cli, "run_probe", lambda *a, **k: (_ for _ in ()).throw(OSError()))
+    handed = []
+    monkeypatch.setattr(cli, "run_sync",
+                        lambda ep, payload: handed.append(ep.target) or (0, payload))
+
+    assert CliRunner().invoke(cli.app, ["sync"]).exit_code == 0
+    assert handed == ["1.2.3.4"], "every machine with an endpoint, and only those"
+
+
+def test_a_machine_without_fleet_is_not_an_error(tmp_path, monkeypatch):
+    """Most managed targets have nothing installed. The handover failing there is the
+    ordinary case, not a fault worth a line of output."""
+    from fleet import cli, inventory as inv
+    from fleet.models import Device, Kind
+
+    monkeypatch.setattr(inv, "INVENTORY_PATH", tmp_path / "inventory.yaml")
+    devices = [Device(id="id:a", name="a", kind=Kind.PERMANENT,
+                      endpoints=[{"target": "1.2.3.4", "user": "root", "port": 22}])]
+    inv.save(devices, inv.INVENTORY_PATH)
+    monkeypatch.setattr(cli, "run_sync", lambda *a, **k: (127, "fleet: command not found"))
+    cli._broadcast(devices)                # must not raise
