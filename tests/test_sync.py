@@ -9,6 +9,7 @@ from __future__ import annotations
 
 from fleet.inventory import merge, touch
 from fleet.models import Device, Kind
+from fleet.ops import identity
 from fleet.ops import sweep
 from fleet.ops import sync
 
@@ -245,7 +246,7 @@ def test_sync_on_the_center_itself_is_a_no_op_not_an_error(tmp_path, monkeypatch
     from fleet.cli import app
 
     runner, _ = _serve_env(tmp_path, monkeypatch, [_dev("me", role="center")])
-    monkeypatch.setattr("fleet.cli.local_device_id", lambda: "linux:machine-id:me")
+    monkeypatch.setattr("fleet.ops.identity.local_device_id", lambda: "linux:machine-id:me")
     result = runner.invoke(app, ["sync"])
     assert result.exit_code == 0
 
@@ -482,7 +483,7 @@ def test_sync_does_not_erase_a_device_added_while_it_was_running(tmp_path, monke
     inv.save([_dev("hub", role="center")], path)
     monkeypatch.setattr(inv, "INVENTORY_PATH", path)
     monkeypatch.setattr(store, "DB_PATH", tmp_path / "cache.db")
-    monkeypatch.setattr(cli, "local_device_id", lambda: "linux:machine-id:laptop")
+    monkeypatch.setattr(identity, "local_device_id", lambda: "linux:machine-id:laptop")
 
     def racing_center(ep, payload):
         """The center answers -- and `fleet add` commits while we are waiting."""

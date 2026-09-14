@@ -27,6 +27,7 @@ FIXTURES = ["gpu-box", "vm-a", "vm-b", "macos-laptop"]
 def seeded(tmp_path, monkeypatch):
     """A fleet whose devices each carry a real captured snapshot."""
     from fleet import cli, inventory as inv, store
+    from fleet.ops import rows
 
     devices = [
         Device(id=f"linux:machine-id:{name}", name=name, kind=Kind.PERMANENT,
@@ -37,7 +38,7 @@ def seeded(tmp_path, monkeypatch):
     inv.save(devices, path)
     monkeypatch.setattr(inv, "INVENTORY_PATH", path)
     monkeypatch.setattr(store, "DB_PATH", tmp_path / "cache.db")
-    monkeypatch.setattr(cli, "probe_many", lambda jobs, **kw: {})
+    monkeypatch.setattr(rows, "probe_many", lambda jobs, **kw: {})
     monkeypatch.setenv("COLUMNS", "200")   # else rich truncates names to "macos-lap…"
 
     conn = store.connect(tmp_path / "cache.db")

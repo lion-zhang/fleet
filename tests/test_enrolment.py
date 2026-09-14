@@ -20,6 +20,7 @@ from typer.testing import CliRunner
 
 from fleet import access as acl
 from fleet import cli
+from fleet.ops import identity
 from fleet import inventory as inv
 from fleet import store
 from fleet.models import Device, Kind, ProbeResult, Status
@@ -158,7 +159,7 @@ def test_the_sweep_enrols_a_machine_that_has_no_pinned_key(tmp_path, monkeypatch
     enrolment was interrupted, is reachable and ungrantable until the center pins it."""
     runner = _sandbox(tmp_path, monkeypatch)
     _, pub = _keypair(tmp_path, monkeypatch)
-    monkeypatch.setattr(cli, "local_device_id", lambda: "id:me")
+    monkeypatch.setattr(identity, "local_device_id", lambda: "id:me")
     acc = acl.bootstrap("macbook", pub, "id:me")
     acl.save(acc, acl.ACCESS_PATH)
     inv.save([Device(id="id:me", name="macbook", kind=Kind.PERMANENT, role="center"),
@@ -181,7 +182,7 @@ def test_the_sweep_never_asks_for_a_password(tmp_path, monkeypatch):
     about -- the way out is `fleet center --pubkey`, not finding someone to type."""
     runner = _sandbox(tmp_path, monkeypatch)
     _, pub = _keypair(tmp_path, monkeypatch)
-    monkeypatch.setattr(cli, "local_device_id", lambda: "id:me")
+    monkeypatch.setattr(identity, "local_device_id", lambda: "id:me")
     acl.save(acl.bootstrap("macbook", pub, "id:me"), acl.ACCESS_PATH)
     inv.save([Device(id="id:me", name="macbook", kind=Kind.PERMANENT, role="center"),
               _a_host()], inv.INVENTORY_PATH)

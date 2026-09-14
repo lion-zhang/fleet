@@ -91,6 +91,7 @@ def test_devices_with_different_disk_paths_are_probed_in_separate_groups(tmp_pat
     """The sweep batches devices to share one SSH fan-out. Batching by mode alone would
     hand one device's configured paths to every other device in the batch."""
     from fleet import cli, inventory as inv, store
+    from fleet.ops import rows
     from fleet.models import Device, Kind
 
     devices = [
@@ -110,7 +111,7 @@ def test_devices_with_different_disk_paths_are_probed_in_separate_groups(tmp_pat
         calls.append((frozenset(jobs), tuple(kw.get("disk_paths") or ())))
         return {}
 
-    monkeypatch.setattr(cli, "probe_many", fake_probe_many)
+    monkeypatch.setattr(rows, "probe_many", fake_probe_many)
     cli._rows(refresh=True)
 
     assert (frozenset({"a"}), ("/a",)) in calls

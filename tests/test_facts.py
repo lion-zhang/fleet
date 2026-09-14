@@ -18,6 +18,7 @@ import pytest
 
 from fleet import view
 from fleet.models import Device, Kind
+from fleet.ops import identity
 from fleet.probe.parse import parse_payload
 from fleet.view import _CORES, _RAM_GIB, _SLACK, _STORAGE_TIB, _VRAM_GIB, facts, matches_tag
 from fleet.ops import enrol
@@ -258,7 +259,7 @@ def _cli(tmp_path, monkeypatch, devices):
     inv.save(devices, path)
     monkeypatch.setattr(inv, "INVENTORY_PATH", path)
     monkeypatch.setattr(store, "DB_PATH", tmp_path / "cache.db")
-    monkeypatch.setattr(cli, "local_device_id", lambda: "")
+    monkeypatch.setattr(identity, "local_device_id", lambda: "")
     return CliRunner(), cli
 
 
@@ -546,22 +547,20 @@ def test_a_windows_machine_knows_its_own_id(monkeypatch):
     import sys
     import types
 
-    from fleet import cli
-
     fake = types.SimpleNamespace(
         HKEY_LOCAL_MACHINE=object(),
         OpenKey=lambda *a: __import__("contextlib").nullcontext(),
         QueryValueEx=lambda key, name: ("665aebe1-5029-45c5-adae-035a2b4fada7", 1),
     )
     monkeypatch.setitem(sys.modules, "winreg", fake)
-    monkeypatch.setattr(cli, "local_platform", lambda: "windows")
+    monkeypatch.setattr(identity, "local_platform", lambda: "windows")
     # lru_cache(maxsize=1): without clearing on both sides this answer leaks into every
     # test that runs after it, and the failure surfaces somewhere else entirely.
-    cli.local_device_id.cache_clear()
+    identity.local_device_id.cache_clear()
     try:
-        assert cli.local_device_id() == "linux:machine-id:665aebe1-5029-45c5-adae-035a2b4fada7"
+        assert identity.local_device_id() == "linux:machine-id:665aebe1-5029-45c5-adae-035a2b4fada7"
     finally:
-        cli.local_device_id.cache_clear()
+        identity.local_device_id.cache_clear()
 
 
 def test_init_marks_the_center_in_the_inventory_too(tmp_path, monkeypatch):
@@ -626,7 +625,7 @@ def test_the_sweep_hands_the_inventory_to_every_machine(tmp_path, monkeypatch):
         monkeypatch.setattr(acl, n, tmp_path / getattr(acl, n).name)
     monkeypatch.setattr(inv, "INVENTORY_PATH", tmp_path / "inventory.yaml")
     monkeypatch.setattr(store, "DB_PATH", tmp_path / "cache.db")
-    monkeypatch.setattr(cli, "local_device_id", lambda: "id:center")
+    monkeypatch.setattr(identity, "local_device_id", lambda: "id:center")
 
     devices = [
         Device(id="id:center", name="hub", kind=Kind.PERMANENT, role="center"),
@@ -677,7 +676,7 @@ def test_a_settled_fleet_still_hands_the_inventory_round(tmp_path, monkeypatch):
         monkeypatch.setattr(acl, n, tmp_path / getattr(acl, n).name)
     monkeypatch.setattr(inv, "INVENTORY_PATH", tmp_path / "inventory.yaml")
     monkeypatch.setattr(store, "DB_PATH", tmp_path / "cache.db")
-    monkeypatch.setattr(cli, "local_device_id", lambda: "id:center")
+    monkeypatch.setattr(identity, "local_device_id", lambda: "id:center")
 
     devices = [Device(id="id:center", name="hub", kind=Kind.PERMANENT, role="center"),
                Device(id="id:a", name="a", kind=Kind.PERMANENT,

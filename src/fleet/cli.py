@@ -33,6 +33,8 @@ from .keys import (ensure_keypair, install_key,
                    install_key_over_existing_access, pty_available)
 from .models import Device, Kind, Status
 from .ops import FleetError
+from .ops import identity
+from .ops.rows import snapshot as _rows, tick as _live_tick
 from .ops import sync as _sync
 from .ops.sweep import (apply_now as _apply_now, broadcast as _broadcast,
                         endpoint_for as _endpoint_for,
@@ -91,65 +93,13 @@ def _this_machine(devices, what: str):
     offered everywhere: `fleet ssh` to yourself is what a terminal already is, and a
     destructive command must never guess which machine it is about.
     """
-    me = inv.find(devices, local_device_id()) if local_device_id() else None
+    me = inv.find(devices, identity.local_device_id()) if identity.local_device_id() else None
     if me is None:
         err.print(f"[red]This machine is not in the inventory,[/red] so there is nothing "
                   f"to {what}.")
         err.print("  [dim]add it with [bold]fleet add --self[/bold][/dim]")
         raise typer.Exit(2)
     return me
-
-
-def _rows(names: list[str] | None = None, *, refresh: bool = False,
-          detail: Detail = Detail.COMPACT) -> list[dict]:
-    cfg = load_config()
-    devices = inv.live(inv.load())
-    if names:
-        # By handle, not by name: `ls`, `show` and `top` all filter through here, so an
-        # alias that worked for `ssh` and `edit` but not for looking at the machine would
-        # be a handle you cannot use for the thing you do most.
-        wanted = {d.id for d in (inv.find(devices, n) for n in names) if d}
-        devices = [d for d in devices if d.id in wanted]
-    conn = store.connect()
-
-    stale = []
-    for d in devices:
-        st, _ = store.latest(conn, d.id)
-        eligible = d.probeable or (bool(names) and d.probe_policy != "never")
-        if eligible and (refresh or not store.is_fresh(st, int(cfg.telemetry_ttl_s))):
-            stale.append(d)
-    if stale:
-        # probe_many applies one set of options to a whole batch, so devices are grouped
-        # by everything that varies per device: mode (a shared host gets the polite
-        # probe) and disk paths (one device's paths must not leak into another's probe).
-        me = local_device_id()
-        groups: dict[tuple[str, tuple[str, ...]], dict[str, list]] = {}
-        for d in stale:
-            if me and d.id == me:
-                # no ssh, no key, no network to look at the machine we are running on
-                store.record(conn, d.id, run_probe_local(mode=d.probe_mode,
-                                                         disk_paths=d.disk_paths))
-                continue
-            key = (d.probe_mode, tuple(d.disk_paths))
-            groups.setdefault(key, {})[d.id] = inv.endpoints_of(d)
-        for (mode, paths), subset in groups.items():
-            results = probe_many(subset, mode=mode, disk_paths=list(paths),
-                                 timeout=float(cfg.probe_timeout_s),
-                                 connect_timeout=int(cfg.connect_timeout_s),
-                                 max_workers=int(cfg.max_workers))
-            for dev_id, res in results.items():
-                store.record(conn, dev_id, res)
-        # A host that only accepts a password stays auth_failed forever otherwise. This
-        # is a fallback rather than part of the sweep: the fan-out stays untouched, and
-        # only the handful that actually failed pay for a second, serial attempt.
-    
-    out = []
-    self_id = local_device_id()
-    for d in devices:
-        st, sn = store.latest(conn, d.id)
-        out.append(device_view(d, st, sn, detail, self_id=self_id))
-    conn.close()
-    return out
 
 
 @app.command("ls")
@@ -581,46 +531,6 @@ def cmd_install(name: str = typer.Argument(None,
                   f"{output.strip().splitlines()[-1] if output.strip() else 'installed'}")
 
 
-@lru_cache(maxsize=1)
-def local_device_id() -> str:
-    """This machine's identity, in the same shape onboard.py stamps on a probed device.
-
-    Used only to notice that we ARE the center, so `fleet sync` can be safe to run
-    everywhere rather than being a command you must remember not to run in one place.
-    """
-    if local_platform() == "windows":
-        # The same registry value payload.ps1 reads, so this agrees with the id
-        # `derive_id` stamps from a probe -- which is the whole point: without it a
-        # Windows center did not recognise its own row, tried to ssh to itself, and
-        # reported "device has no endpoints" about the machine it was running on.
-        try:
-            import winreg
-
-            with winreg.OpenKey(winreg.HKEY_LOCAL_MACHINE,
-                                r"SOFTWARE\Microsoft\Cryptography") as key:
-                guid = str(winreg.QueryValueEx(key, "MachineGuid")[0]).strip()
-            if guid:
-                # `linux:machine-id:` is what derive_id stamps for anything not macOS.
-                # Misleading on Windows, but the two must agree, and they are opaque.
-                return f"linux:machine-id:{guid}"
-        except (ImportError, OSError):
-            pass
-    for candidate in ("/etc/machine-id", "/var/lib/dbus/machine-id"):
-        try:
-            value = Path(candidate).read_text().strip()
-        except OSError:
-            continue
-        if value:
-            return f"linux:machine-id:{value}"
-    try:
-        out = subprocess.run(["ioreg", "-rd1", "-c", "IOPlatformExpertDevice"],
-                             capture_output=True, text=True, timeout=5)
-        found = re.search(r'"IOPlatformUUID"\s*=\s*"([^"]+)"', out.stdout)
-        if found:
-            return f"darwin:hwuuid:{found.group(1)}"
-    except (OSError, subprocess.SubprocessError):
-        pass
-    return ""
 
 
 def _show_version(value: bool):
@@ -679,7 +589,7 @@ def cmd_update(name: str = typer.Argument(None, help="defaults to this machine")
     else:
         targets = []
 
-    me = local_device_id()
+    me = identity.local_device_id()
     script = install_script(url, ref=ref)
     ok = failed = 0
 
@@ -771,7 +681,7 @@ def cmd_sync(serve: bool = typer.Option(False, "--serve",
 
     # Whether this machine is the center is settled by the access list -- possession of
     # the signing key -- not by `Device.role`. role rides `inventory.merge`, where a peer
-    # with a fast clock could flip it, and comparing `local_device_id()` adds a third way
+    # with a fast clock could flip it, and comparing `identity.local_device_id()` adds a third way
     # to be wrong: it shells out to `ioreg` on macOS, which is not on cron's PATH, and
     # returns nothing at all on Windows. Ask the one authority.
     try:
@@ -788,7 +698,7 @@ def cmd_sync(serve: bool = typer.Option(False, "--serve",
         err.print("  [dim]start one here with [bold]fleet center --init[/bold], or let "
                   "the center reach this machine once[/dim]")
         raise typer.Exit(2)
-    if center.id and center.id == local_device_id():
+    if center.id and center.id == identity.local_device_id():
         # An inventory that predates the access list, where `role` was the only answer.
         # Kept so `fleet sync` on such a center stays a no-op rather than dialling itself.
         with _as_exit():
@@ -822,57 +732,6 @@ def cmd_sync(serve: bool = typer.Option(False, "--serve",
         console.print(f"  {line}")
     if not changes:
         console.print("  [dim]already up to date.[/dim]")
-
-
-def _live_tick(conn, devices, schedule: Schedule, cfg, detail: Detail) -> list[dict]:
-    """Probe whatever is due, then render every device from the cache.
-
-    The probe is wrapped because one unreachable host must not end the session:
-    probe_many already isolates failures inside the sweep, and the loop around it has
-    to do the same or a dropped network takes the whole view down.
-    """
-    now = time.monotonic()
-    me = local_device_id()
-    due = [d for d in schedule.due(devices, now) if d.probeable]
-    if due:
-        groups: dict[tuple[str, tuple[str, ...]], dict[str, list]] = {}
-        for d in due:
-            if me and d.id == me:
-                res = run_probe_local(mode=d.probe_mode, disk_paths=d.disk_paths)
-                store.record(conn, d.id, res)
-                schedule.record(d.id, ok=res.ok, now=now)
-                continue
-            groups.setdefault((d.probe_mode, tuple(d.disk_paths)), {})[d.id] = \
-                inv.endpoints_of(d)
-        for (mode, paths), subset in groups.items():
-            try:
-                results = probe_many(subset, mode=mode, disk_paths=list(paths),
-                                     timeout=float(cfg.probe_timeout_s),
-                                     connect_timeout=int(cfg.connect_timeout_s),
-                                     max_workers=int(cfg.max_workers))
-            except Exception:
-                for dev_id in subset:
-                    schedule.record(dev_id, ok=False, now=now)
-                continue
-            for dev_id, res in results.items():
-                store.record(conn, dev_id, res)
-                schedule.record(dev_id, ok=res.ok, now=now)
-
-    rows = []
-    for d in devices:
-        st, sn = store.latest(conn, d.id)
-        rows.append(device_view(d, st, sn, detail, self_id=me))
-    return rows
-
-
-
-
-
-
-
-
-
-
 
 
 @app.command("top")
@@ -987,7 +846,7 @@ def cmd_rm(name: str, yes: bool = typer.Option(False, "--yes", "-y")):
     # Removing a machine revokes its keys everywhere, which only the center can do.
     # Removing *yourself* is a different act -- leaving -- and needs nobody's permission,
     # because you own the machine you are standing on.
-    itself = bool(dev.id) and dev.id == local_device_id()
+    itself = bool(dev.id) and dev.id == identity.local_device_id()
     if not itself:
         try:
             if not acl.is_center(acl.load()):

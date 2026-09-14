@@ -342,11 +342,13 @@ def _cli(tmp_path, monkeypatch, devices):
 
     from fleet import cli, inventory as inv, store
 
+    from fleet.ops import rows
+
     path = tmp_path / "inventory.yaml"
     inv.save(devices, path)
     monkeypatch.setattr(inv, "INVENTORY_PATH", path)
     monkeypatch.setattr(store, "DB_PATH", tmp_path / "cache.db")
-    monkeypatch.setattr(cli, "probe_many", lambda jobs, **kw: {})
+    monkeypatch.setattr(rows, "probe_many", lambda jobs, **kw: {})
     return CliRunner()
 
 
@@ -372,6 +374,7 @@ def test_a_probe_that_blows_up_does_not_take_the_view_down(tmp_path, monkeypatch
     """One unreachable host must not end the session -- probe_many already isolates
     failures inside the sweep, and the loop around it has to do the same."""
     from fleet import cli
+    from fleet.ops import rows
     from fleet.cli import app
 
     runner = _cli(tmp_path, monkeypatch, [_dev("a")])
@@ -379,7 +382,7 @@ def test_a_probe_that_blows_up_does_not_take_the_view_down(tmp_path, monkeypatch
     def boom(*a, **k):
         raise OSError("network gone")
 
-    monkeypatch.setattr(cli, "probe_many", boom)
+    monkeypatch.setattr(rows, "probe_many", boom)
     result = runner.invoke(app, ["top"])
     assert result.exit_code == 0, result.output
 

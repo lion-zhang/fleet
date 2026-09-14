@@ -16,6 +16,7 @@ import pytest
 from typer.testing import CliRunner
 
 from fleet import cli
+from fleet.ops import identity
 from fleet import inventory as inv
 from fleet import store
 from fleet.edit import apply_edits
@@ -158,13 +159,13 @@ def test_looking_at_a_machine_by_its_alias(tmp_path, monkeypatch):
     only -- so the alias worked for `ssh` and `edit` and not for the thing you do most.
     Found by using it, not by testing the units it is made of."""
     _cli(tmp_path, monkeypatch)
-    monkeypatch.setattr(cli, "local_device_id", lambda: "")
+    monkeypatch.setattr(identity, "local_device_id", lambda: "")
     rows = cli._rows(["x"], refresh=False)
     assert [r["name"] for r in rows] == ["lin-xps"]
 
 
 def test_a_name_and_an_alias_can_be_mixed_in_one_filter(tmp_path, monkeypatch):
     _cli(tmp_path, monkeypatch)
-    monkeypatch.setattr(cli, "local_device_id", lambda: "")
+    monkeypatch.setattr(identity, "local_device_id", lambda: "")
     rows = cli._rows(["x", "lin-workstation"], refresh=False)
     assert {r["name"] for r in rows} == {"lin-xps", "lin-workstation"}

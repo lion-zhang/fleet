@@ -12,6 +12,7 @@ import sys
 import pytest
 
 from fleet.models import Device, Kind, Status
+from fleet.ops import identity
 from fleet.probe.runner import run_probe_local
 from fleet.view import Detail, device_view
 
@@ -84,6 +85,8 @@ def test_the_current_machine_is_not_probed_over_ssh(tmp_path, monkeypatch):
     from typer.testing import CliRunner
 
     from fleet import cli, inventory as inv, store
+
+    from fleet.ops import rows
     from fleet.cli import app
 
     devices = [_dev("me", "linux:machine-id:me"), _dev("other", "linux:machine-id:other")]
@@ -93,13 +96,13 @@ def test_the_current_machine_is_not_probed_over_ssh(tmp_path, monkeypatch):
     inv.save(devices, path)
     monkeypatch.setattr(inv, "INVENTORY_PATH", path)
     monkeypatch.setattr(store, "DB_PATH", tmp_path / "cache.db")
-    monkeypatch.setattr(cli, "local_device_id", lambda: "linux:machine-id:me")
+    monkeypatch.setattr(identity, "local_device_id", lambda: "linux:machine-id:me")
 
     over_ssh = []
-    monkeypatch.setattr(cli, "probe_many",
+    monkeypatch.setattr(rows, "probe_many",
                         lambda jobs, **kw: over_ssh.extend(jobs) or {})
     locally = []
-    monkeypatch.setattr(cli, "run_probe_local",
+    monkeypatch.setattr(rows, "run_probe_local",
                         lambda **kw: locally.append(1) or ProbeResultOK())
 
     CliRunner().invoke(app, ["ls", "--refresh"])
@@ -129,7 +132,7 @@ def test_the_machine_can_record_itself_without_ssh():
 def test_the_self_id_matches_what_the_cli_calls_this_machine():
     """These are derived by different code -- ioreg here, the probe payload there -- and
     if they disagree the center never recognises its own record."""
-    from fleet.cli import local_device_id
+    from fleet.ops.identity import local_device_id
     from fleet.onboard import onboard_self
 
     assert onboard_self()[0].id == local_device_id()
@@ -158,7 +161,7 @@ def test_show_defaults_to_this_machine(tmp_path, monkeypatch):
 
     monkeypatch.setattr(inv, "INVENTORY_PATH", tmp_path / "inventory.yaml")
     monkeypatch.setattr(store, "DB_PATH", tmp_path / "cache.db")
-    monkeypatch.setattr(cli, "local_device_id", lambda: "id:me")
+    monkeypatch.setattr(identity, "local_device_id", lambda: "id:me")
     inv.save([Device(id="id:me", name="macbook", kind=Kind.PERMANENT),
               Device(id="id:other", name="oracle", kind=Kind.PERMANENT)],
              inv.INVENTORY_PATH)
@@ -175,7 +178,7 @@ def test_a_machine_not_in_the_inventory_is_told_what_to_run(tmp_path, monkeypatc
 
     monkeypatch.setattr(inv, "INVENTORY_PATH", tmp_path / "inventory.yaml")
     monkeypatch.setattr(store, "DB_PATH", tmp_path / "cache.db")
-    monkeypatch.setattr(cli, "local_device_id", lambda: "id:me")
+    monkeypatch.setattr(identity, "local_device_id", lambda: "id:me")
     inv.save([], inv.INVENTORY_PATH)
 
     r = CliRunner().invoke(cli.app, ["show"])

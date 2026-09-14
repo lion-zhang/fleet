@@ -12,6 +12,7 @@ import pytest
 from typer.testing import CliRunner
 
 from fleet import cli
+from fleet.ops import identity
 from fleet import inventory as inv
 from fleet import store
 from fleet.models import Device, Kind
@@ -21,7 +22,7 @@ from fleet.models import Device, Kind
 def fleet_of(tmp_path, monkeypatch):
     monkeypatch.setattr(inv, "INVENTORY_PATH", tmp_path / "inventory.yaml")
     monkeypatch.setattr(store, "DB_PATH", tmp_path / "cache.db")
-    monkeypatch.setattr(cli, "local_device_id", lambda: "id:me")
+    monkeypatch.setattr(identity, "local_device_id", lambda: "id:me")
     monkeypatch.setattr(cli, "configured_repo", lambda: "git@example.com:me/fleet.git")
     inv.save([
         Device(id="id:me", name="macbook", kind=Kind.PERMANENT,

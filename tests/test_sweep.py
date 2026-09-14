@@ -11,6 +11,7 @@ from typer.testing import CliRunner
 
 from fleet import access as acl
 from fleet import cli
+from fleet.ops import identity
 from fleet import inventory as inv
 from fleet import reconcile as rec
 from fleet import store
@@ -30,7 +31,7 @@ def fleet_at(tmp_path, monkeypatch):
         monkeypatch.setattr(acl, name, tmp_path / getattr(acl, name).name)
     monkeypatch.setattr(inv, "INVENTORY_PATH", tmp_path / "inventory.yaml")
     monkeypatch.setattr(store, "DB_PATH", tmp_path / "cache.db")
-    monkeypatch.setattr(cli, "local_device_id", lambda: "id:center")
+    monkeypatch.setattr(identity, "local_device_id", lambda: "id:center")
     # the sweep hands the inventory to every machine at the end; that is a real
     # ssh per device, and these tests are about the reconciler
     monkeypatch.setattr(sync, "run_sync", lambda *a, **k: (255, ""))
@@ -150,7 +151,7 @@ def test_the_sweep_refuses_to_strip_everything_at_once(fleet_at, monkeypatch):
 
 def test_a_machine_that_is_not_the_center_does_not_sweep(fleet_at, monkeypatch):
     runner, _ = fleet_at
-    monkeypatch.setattr(cli, "local_device_id", lambda: "id:oracle")
+    monkeypatch.setattr(identity, "local_device_id", lambda: "id:oracle")
     monkeypatch.setattr(rec, "apply_edge",
                         lambda *a, **k: pytest.fail("a spoke must never reconcile"))
     runner.invoke(cli.app, ["sync"])
@@ -161,7 +162,7 @@ def test_a_machine_that_is_not_the_center_does_not_sweep(fleet_at, monkeypatch):
 def test_a_spoke_cannot_remove_another_machine(fleet_at, monkeypatch):
     """Removing a machine revokes its keys everywhere, which only the center can do."""
     runner, _ = fleet_at
-    monkeypatch.setattr(cli, "local_device_id", lambda: "id:oracle")
+    monkeypatch.setattr(identity, "local_device_id", lambda: "id:oracle")
     r = runner.invoke(cli.app, ["rm", "lin-xps", "-y"])
     assert r.exit_code == 2
     assert "Only the center" in r.output
@@ -172,7 +173,7 @@ def test_a_machine_can_always_remove_itself(fleet_at, monkeypatch):
     """That is leaving, and it needs nobody's permission: you own the machine you are
     standing on."""
     runner, _ = fleet_at
-    monkeypatch.setattr(cli, "local_device_id", lambda: "id:oracle")
+    monkeypatch.setattr(identity, "local_device_id", lambda: "id:oracle")
     r = runner.invoke(cli.app, ["rm", "oracle", "-y"])
     assert r.exit_code == 0, r.output
     assert inv.find(inv.load(inv.INVENTORY_PATH), "oracle") is None
