@@ -13,7 +13,6 @@ process on the machine via `ps`.
 from __future__ import annotations
 
 import os
-import pty
 import re
 import select
 import shlex
@@ -129,12 +128,33 @@ def build_password_argv(ep: Endpoint, *, timeout: int = 15) -> list[str]:
     return argv
 
 
+def pty_available() -> bool:
+    """Whether this machine can drive a password prompt at all.
+
+    Windows has no `pty`: it imports `tty`, which imports `termios`, which does not
+    exist there. That is a real limitation of the machine rather than a missing feature,
+    and it is checkable in advance -- which matters, because the caller can offer
+    `fleet center --pubkey` instead of failing halfway through an enrolment.
+    """
+    try:
+        import pty  # noqa: F401
+    except ImportError:
+        return False
+    return True
+
+
 def run_with_password(argv: list[str], password: str, *, timeout: float = 20.0) -> tuple[int, str]:
     """Run a command under a pty, answering the first password prompt.
 
     Returns (exit_code, output) with the password scrubbed from the output -- the
     caller prints that output on failure, and it must be safe to show.
+
+    Imported here rather than at module scope so that a center running on Windows can
+    still start. Everything else in fleet is portable; this one function is not, and a
+    top-level import would take the whole CLI down with it.
     """
+    import pty
+
     pid, fd = pty.fork()
     if pid == 0:                                    # child: becomes the command
         try:

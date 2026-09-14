@@ -30,7 +30,7 @@ from .config import DB_PATH, FLEET_KEY, INVENTORY_PATH, load_config
 from .edit import apply_edits
 from .install import build_install_argv, install_script
 from .keys import (ensure_keypair, install_key,
-                   install_key_over_existing_access)
+                   install_key_over_existing_access, pty_available)
 from .models import Device, Kind, Status
 from .onboard import onboard, onboard_self
 from .probe.runner import (probe_env, probe_many, run_probe, run_probe_local)
@@ -506,6 +506,16 @@ def _install_key(dev, *, quiet: bool = False) -> bool:
                       "over access it already accepted.")
         return True
 
+    if not pty_available():
+        # A center running on Windows. Everything else in fleet is portable; driving a
+        # password prompt is not, because there is no pty there. Say so as a property of
+        # this machine rather than of the host we are enrolling, and name the way round
+        # it -- which needs no password anywhere.
+        msg = (f"  [dim]{dev.name} accepts no key of ours, and this machine cannot type "
+               "a password (no pty on Windows). Put [bold]fleet center --pubkey[/bold] "
+               "on it and add it again.[/dim]")
+        (console if quiet else err).print(msg)
+        return False
     if not sys.stdin.isatty():
         # Hanging on a prompt would be bad; capturing the password into whatever called
         # us would be worse. Refuse, and say exactly what to do instead.

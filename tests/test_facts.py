@@ -323,3 +323,44 @@ def test_ls_says_what_it_could_not_judge(tmp_path, monkeypatch):
     monkeypatch.setattr(cli_mod, "fleet_view", lambda rows: {"devices": rows, "summary": {}})
     r = runner.invoke(cli.app, ["ls", "--tag", "gpu"])
     assert "not considered" in r.output and "a" in r.output
+
+
+# ------------------------------------------------------------------ portability
+
+def test_fleet_imports_without_a_pty():
+    """A center may run on Windows, where `pty` imports `tty` imports `termios` and
+    there is no termios. A top-level import took the whole CLI down at startup, so
+    fleet could not even print --version there."""
+    import importlib
+    import sys
+
+    blocked = {"pty": None, "tty": None, "termios": None}
+    saved = {k: sys.modules.get(k) for k in blocked}
+    try:
+        sys.modules.update(blocked)          # import of these now raises ImportError
+        for mod in ("fleet.keys", "fleet.cli"):
+            importlib.reload(importlib.import_module(mod))
+    finally:
+        for k, v in saved.items():
+            if v is None:
+                sys.modules.pop(k, None)
+            else:
+                sys.modules[k] = v
+        for mod in ("fleet.keys", "fleet.cli"):
+            importlib.reload(importlib.import_module(mod))
+
+
+def test_a_machine_without_a_pty_says_so_instead_of_crashing(tmp_path, monkeypatch):
+    """The one genuinely unportable path. It must read as a limit of this machine, and
+    name the way round it, rather than surfacing as an ImportError mid-enrolment."""
+    from fleet import cli
+
+    monkeypatch.setattr(cli, "pty_available", lambda: False)
+    monkeypatch.setattr(cli, "ensure_keypair", lambda *a, **k: (tmp_path / "k", "ssh-ed25519 AAAA x"))
+    monkeypatch.setattr(cli, "install_key_over_existing_access",
+                        lambda *a, **k: (False, "Permission denied (publickey)."))
+    monkeypatch.setattr(cli.getpass, "getpass",
+                        lambda *a, **k: pytest.fail("must not prompt without a pty"))
+
+    dev = _dev(name="box", endpoints=[{"target": "1.2.3.4", "user": "root", "port": 22}])
+    assert cli._install_key(dev) is False
