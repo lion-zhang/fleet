@@ -23,6 +23,9 @@ from fleet import cli
 from fleet import inventory as inv
 from fleet import store
 from fleet.models import Device, Kind, ProbeResult, Status
+from fleet.ops import enrol
+from fleet.ops import sweep
+from fleet.ops import sync
 
 
 def _sandbox(tmp_path, monkeypatch):
@@ -42,7 +45,7 @@ def _keypair(tmp_path, monkeypatch, name="center_ed25519"):
     pub = key.with_suffix(".pub").read_text().strip()
     import fleet.config
     monkeypatch.setattr(fleet.config, "FLEET_KEY", key)
-    monkeypatch.setattr(cli, "ensure_keypair", lambda *a, **k: (key, pub))
+    monkeypatch.setattr(enrol, "ensure_keypair", lambda *a, **k: (key, pub))
     return key, pub
 
 
@@ -80,7 +83,7 @@ def test_a_spoke_can_add_but_leaves_enrolling_to_the_center(tmp_path, monkeypatc
     dev = _a_host()
     _probes(monkeypatch, dev)
     called = []
-    monkeypatch.setattr(cli, "_register_identity", lambda d: called.append(d) or "fp")
+    monkeypatch.setattr(enrol, "register_identity", lambda d: called.append(d) or "fp")
 
     r = runner.invoke(cli.app, ["add", "ssh root@5.6.7.8"])
     assert r.exit_code == 0, r.output
@@ -121,9 +124,9 @@ def test_a_host_that_already_takes_our_key_is_enrolled_without_a_password(tmp_pa
 
     _probes(monkeypatch, _a_host(), status=Status.OK)
     asked = []
-    monkeypatch.setattr(cli.getpass, "getpass",
+    monkeypatch.setattr(enrol.getpass, "getpass",
                         lambda *a, **k: asked.append(1) or "x")
-    monkeypatch.setattr(cli, "_register_identity", lambda d: "SHA256:new")
+    monkeypatch.setattr(enrol, "register_identity", lambda d: "SHA256:new")
 
     r = runner.invoke(cli.app, ["add", "ssh root@5.6.7.8"])
     assert r.exit_code == 0, r.output
@@ -140,7 +143,7 @@ def test_a_host_authorized_upstream_gets_no_key(tmp_path, monkeypatch):
     _probes(monkeypatch, _a_host(ssh_auth="external"), status=Status.OK)
     monkeypatch.setattr(cli, "_install_key",
                         lambda *a, **k: pytest.fail("must not install a key"))
-    monkeypatch.setattr(cli, "_register_identity",
+    monkeypatch.setattr(enrol, "register_identity",
                         lambda d: pytest.fail("nothing to pin"))
 
     r = runner.invoke(cli.app, ["add", "ssh root@5.6.7.8"])
@@ -162,11 +165,11 @@ def test_the_sweep_enrols_a_machine_that_has_no_pinned_key(tmp_path, monkeypatch
               _a_host()], inv.INVENTORY_PATH)
 
     enrolled = []
-    monkeypatch.setattr(cli, "_register_identity",
+    monkeypatch.setattr(enrol, "register_identity",
                         lambda d: enrolled.append(d.name) or "SHA256:new")
-    monkeypatch.setattr(cli, "run_probe", lambda *a, **k: (_ for _ in ()).throw(OSError()))
+    monkeypatch.setattr(enrol, "run_probe", lambda *a, **k: (_ for _ in ()).throw(OSError()))
     # the sweep ends by handing the inventory to every machine, which is one ssh each
-    monkeypatch.setattr(cli, "run_sync", lambda *a, **k: (255, ""))
+    monkeypatch.setattr(sync, "run_sync", lambda *a, **k: (255, ""))
 
     r = runner.invoke(cli.app, ["sync"])
     assert r.exit_code == 0, r.output
@@ -184,9 +187,9 @@ def test_the_sweep_never_asks_for_a_password(tmp_path, monkeypatch):
               _a_host()], inv.INVENTORY_PATH)
 
     asked = []
-    monkeypatch.setattr(cli.getpass, "getpass", lambda *a, **k: asked.append(1) or "x")
+    monkeypatch.setattr(enrol.getpass, "getpass", lambda *a, **k: asked.append(1) or "x")
     monkeypatch.setattr(cli, "_remote_pubkey_of", lambda *a, **k: "", raising=False)
-    monkeypatch.setattr(cli, "run_probe", lambda *a, **k: (_ for _ in ()).throw(OSError()))
+    monkeypatch.setattr(enrol, "run_probe", lambda *a, **k: (_ for _ in ()).throw(OSError()))
     # Let the real _register_identity run: it must fail without prompting.
     import fleet.reconcile as rec
     monkeypatch.setattr(rec, "_remote", lambda *a, **k: (False, "Permission denied"))
@@ -250,7 +253,7 @@ def test_json_still_enrols(tmp_path, monkeypatch):
 
     _probes(monkeypatch, _a_host(), status=Status.OK)
     enrolled = []
-    monkeypatch.setattr(cli, "_register_identity",
+    monkeypatch.setattr(enrol, "register_identity",
                         lambda d: enrolled.append(d.name) or "SHA256:new")
 
     r = runner.invoke(cli.app, ["add", "ssh root@5.6.7.8", "--json"])

@@ -33,9 +33,16 @@ from .keys import (ensure_keypair, install_key,
                    install_key_over_existing_access, pty_available)
 from .models import Device, Kind, Status
 from .ops import FleetError
+from .ops import sync as _sync
+from .ops.sweep import (apply_now as _apply_now, broadcast as _broadcast,
+                        endpoint_for as _endpoint_for,
+                        enrol_unpinned as _enrol_unpinned, run as _sweep)
+from .ops.enrol import (finish_add as _enrol_after_add,
+                        install_our_key as _install_key,
+                        register_identity as _register_identity)
 from .ops.sync import (center_advertise_url, ensure_fresh,
                        file_request as _file_request, post as _post,
-                       record_relayed as _record_relayed, run_sync,
+                       record_relayed as _record_relayed,
                        telemetry_to_relay as _telemetry_to_relay,
                        this_host as _this_host)
 from .ui import DOT as _DOT, chatter_to_stderr as _chatter_to_stderr, console, emit as _emit, err
@@ -422,121 +429,10 @@ def cmd_add(ssh_command: str = typer.Argument(None, help='e.g. "ssh -p 58418 roo
         raise typer.Exit(1)
 
 
-def _enrol_after_add(dev, res, *, where: str, this_machine: bool) -> str:
-    """Finish the half of adding that only the center can do. Returns what happened.
-
-    `enrolled` means ready to use. Anything else means the machine is recorded and
-    cannot yet be granted access to anything, which is a different thing to tell someone
-    than "added" -- and is why the outcome is reported rather than implied.
-    """
-    if this_machine:
-        return "self"                      # we are already ourselves; nothing to enrol
-    if where != "center":
-        # Only the center can write the access list, so that half waits for it.
-        console.print(f"  [dim]recorded. The center enrols {dev.name} on its next "
-                      "sweep — it is not grantable until then.[/dim]")
-        return "pending-center"
-    if dev.ssh_auth == "external":
-        # Tailscale SSH, Netbird SSH and the like terminate ssh themselves and authorize
-        # from their own ACL, so authorized_keys is not consulted. Writing one would
-        # report success and grant nothing.
-        console.print(f"  [dim]{dev.name} authorizes ssh upstream, not from "
-                      "authorized_keys — there is nothing here for the center to "
-                      "install[/dim]")
-        return "external"
-    # A host that already accepts our key needs no install, only an identity.
-    if res.status is Status.AUTH_FAILED and not _install_key(dev):
-        console.print(f"  [dim]{dev.name} is recorded, but cannot be granted anything "
-                      "until it accepts a key from here[/dim]")
-        return "failed"
-    return "enrolled" if _register_identity(dev) else "failed"
 
 
-def _confirm_key(dev, ep) -> None:
-    """Re-probe after an install, rather than recording a verdict.
-
-    Auth state is derived from the last probe, so without this the device keeps
-    reporting needs_key. It also proves the key actually works -- an append that exits 0
-    is not the same as a key sshd will accept, and on Windows the two differ routinely.
-    """
-    conn = store.connect()
-    try:
-        store.record(conn, dev.id, run_probe(ep, mode=dev.probe_mode,
-                                             disk_paths=dev.disk_paths))
-    finally:
-        conn.close()
 
 
-def _install_key(dev, *, quiet: bool = False) -> bool:
-    """Get this machine's fleet key into a host's authorized_keys, cheapest way first.
-
-    The three ways in, in the order that asks least of the user:
-
-    1. **Access we already hold** -- a key in your agent, the one the provider injected
-       at creation, or this fleet's own key pre-placed by hand. Costs one connection to
-       find out, never prompts, and is the normal case on a cloud VM. Trying it first is
-       what lets an agent enrol a machine unattended.
-    2. **A password**, typed once and spent on a single connection. Needs a human, so it
-       needs a terminal.
-    3. **Neither** -- say so, and name the way out: put the key on the host out of band.
-
-    Only ever called for a host that rejected us, so step 1 cannot append a key the host
-    already has.
-    """
-    eps = inv.endpoints_of(dev)
-    if not eps:
-        err.print(f"[red]{dev.name} has no endpoint recorded[/red]")
-        return False
-    # The fleet key, never one from ~/.ssh. This key is fleet's handle on the machine:
-    # it can be revoked fleet-wide without touching the key you push to GitHub with, and
-    # the entry it leaves in authorized_keys says where it came from.
-    try:
-        path, pubkey = ensure_keypair()
-    except KeyError as exc:
-        err.print(f"[red]{exc}[/red]")
-        return False
-    ep = sorted(eps, key=lambda e: e.preference)[0]
-
-    ok, output = install_key_over_existing_access(ep, pubkey)
-    if ok:
-        _confirm_key(dev, ep)
-        console.print(f"[green]✓[/green] key installed on {dev.name}, "
-                      "over access it already accepted.")
-        return True
-
-    if not pty_available():
-        # A center running on Windows. Everything else in fleet is portable; driving a
-        # password prompt is not, because there is no pty there. Say so as a property of
-        # this machine rather than of the host we are enrolling, and name the way round
-        # it -- which needs no password anywhere.
-        msg = (f"  [dim]{dev.name} accepts no key of ours, and this machine cannot type "
-               "a password (no pty on Windows). Put [bold]fleet center --pubkey[/bold] "
-               "on it and add it again.[/dim]")
-        (console if quiet else err).print(msg)
-        return False
-    if not sys.stdin.isatty():
-        # Hanging on a prompt would be bad; capturing the password into whatever called
-        # us would be worse. Refuse, and say exactly what to do instead.
-        msg = (f"  [dim]{dev.name} accepts no key of ours and there is no terminal to "
-               "type a password. Put [bold]fleet center --pubkey[/bold] on it, or run "
-               "[bold]fleet add[/bold] yourself from a terminal.[/dim]")
-        (console if quiet else err).print(msg)
-        return False
-
-    console.print(f"[dim]installing {path} on {ep.user}@{ep.target}[/dim]")
-    password = getpass.getpass(f"Password for {ep.user}@{ep.target}: ")
-    try:
-        ok, output = install_key(ep, password, pubkey)
-    finally:
-        password = ""                      # not security, just hygiene: drop it promptly
-    if ok:
-        _confirm_key(dev, ep)
-        console.print(f"[green]✓[/green] key installed on {dev.name}; password discarded.")
-        return True
-    err.print(f"[red]Could not install the key.[/red]\n{output.strip()[-400:]}")
-    err.print(f"  [dim]put [bold]fleet center --pubkey[/bold] on {dev.name} "
-              "and add it again[/dim]")
-    return False
 
 
 @app.command("edit")
@@ -923,7 +819,7 @@ def cmd_sync(serve: bool = typer.Option(False, "--serve",
         err.print(f"[red]{center.name} is the center but has no endpoint recorded[/red]")
         raise typer.Exit(2)
 
-    code, output = run_sync(sorted(eps, key=lambda e: e.preference)[0], inv.dumps(devices))
+    code, output = _sync.run_sync(sorted(eps, key=lambda e: e.preference)[0], inv.dumps(devices))
     if code != 0:
         # sync is not on the critical path: every command still works from local state.
         err.print(f"[red]sync failed[/red] (exit {code})\n{output.strip()[-400:]}")
@@ -989,209 +885,14 @@ def _live_tick(conn, devices, schedule: Schedule, cfg, detail: Detail) -> list[d
     return rows
 
 
-def _endpoint_for(dev, user: str):
-    """The device's best route, dialled as the user this edge is about.
-
-    The edge names whose authorized_keys we are editing, which is not always the user the
-    endpoint happens to record -- a box answers as both root@ and ubuntu@, and writing
-    the wrong one's file is a grant that appears to work and never does.
-    """
-    eps = sorted(inv.endpoints_of(dev), key=lambda e: e.preference)
-    if not eps:
-        return None
-    ep = eps[0]
-    return replace(ep, user=user or ep.user)
 
 
-def _apply_now(acc, src: str, dst: str, user: str, *, install: bool) -> None:
-    """Reconcile one edge immediately, on the machine it affects.
-
-    Targeted, not a sweep: one connection to the machine whose authorized_keys changes.
-    An unreachable target is not an error -- the ledger keeps it pending with an age and
-    a retry count, which is the honest report and what `fleet access` already shows.
-    """
-    from . import reconcile as rec
-
-    dev = inv.find_exact(inv.load(), acc.name_of(dst))
-    if dev is None:
-        return
-    ep = _endpoint_for(dev, user)
-    if ep is None:
-        return
-    ledger = rec.load_ledger()
-    key = ">".join((src, dst, user))
-    st = ledger.get(key) or rec.EdgeState()
-    conn = store.connect()
-    try:
-        _, snap = store.latest(conn, dev.id)
-    finally:
-        conn.close()
-    ok, out = rec.apply_edge(acc, (src, dst, user), ep, install=install,
-                             platform=remote_platform(snap))
-    if ok:
-        st.observed = st.desired = "present" if install else "absent"
-        st.last_error = ""
-        console.print(f"  [green]✓[/green] applied on {dev.name}")
-    else:
-        st.last_error = out
-        console.print(f"  [yellow]·[/yellow] {dev.name} not reached [dim]({out[:60]})[/dim]")
-        console.print("  [dim]it stays pending; `fleet sync` retries[/dim]")
-    ledger[key] = st
-    rec.save_ledger(ledger)
 
 
-def _enrol_unpinned(acc, devices) -> bool:
-    """Register every machine the access list has no key for. Returns whether any were.
-
-    This is what replaces a separate enrol command. A machine added from a spoke, or one
-    whose enrolment was interrupted, is reachable and ungrantable: the list is keyed on
-    the fingerprint of *its* key, so an edge from it cannot even be expressed. Only the
-    center can fix that, and a sweep is the moment it is already dialling everything.
-
-    Never prompts. A sweep is unattended, so a host that accepts no key from here is
-    reported, not asked about -- the way out is to put the center's key on it, which
-    `fleet center --pubkey` prints, rather than to find someone to type a password.
-    """
-    pinned = {v.get("device_id") for v in acc.keys.values()}
-    named = {v.get("name") for v in acc.keys.values()}
-    done = False
-    for dev in inv.live(devices):
-        if dev.id in pinned or dev.name in named:
-            continue
-        if dev.ssh_auth == "external":
-            continue                       # authorized upstream; nothing to pin here
-        if not inv.endpoints_of(dev):
-            continue                       # the center itself has no endpoint to dial
-        done = bool(_register_identity(dev)) or done
-    return done
 
 
-def _sweep(devices) -> None:
-    """The center's pass over the fleet: make authorized_keys match the access list.
-
-    Only the center reaches here, and only when `fleet sync` is run deliberately -- this
-    installs and removes credentials on every machine, which is not something to do from
-    a background timer nobody is watching.
-    """
-    from . import access as acl
-    from . import reconcile as rec
-
-    try:
-        acc = acl.load()
-    except acl.AccessError as exc:
-        console.print(f"[dim]· {exc}[/dim]")
-        return
-
-    ledger = rec.plan(acc, rec.load_ledger())
-    if why := rec.refuses_to_run(acc, ledger):
-        err.print(f"[red]{why}[/red]")
-        raise FleetError(why, code=2)
-
-    # After the wipe guard, never before it: a sweep that is about to be refused must not
-    # first go and put keys on things. Re-plan afterwards, because an enrolment is what
-    # makes an edge from that machine expressible at all.
-    if _enrol_unpinned(acc, devices):
-        acc = acl.load()                   # each enrolment saved a new generation
-        ledger = rec.plan(acc, rec.load_ledger())
-
-    by_id = {d.id: d for d in inv.live(devices)}
-    pending = [(k, st) for k, st in ledger.items() if not st.converged]
-    if not pending:
-        # Still hand the inventory round. Keys converging is the common case, and it is
-        # exactly when a spoke has nothing else to learn from -- returning here meant a
-        # settled fleet never told anyone anything.
-        console.print("[dim]· access is up to date[/dim]")
-        _broadcast(devices)
-        return
-
-    conn = store.connect()
-    done = failed = 0
-    try:
-        for key, st in pending:
-            src, dst, user = key.split(">")
-            # the ledger's copy first: a revoke usually runs *because* the machine was
-            # dropped from the list, so the pin is often already gone
-            dev = by_id.get(st.dst_device or (acc.keys.get(dst) or {}).get("device_id", ""))
-            install = st.desired == "present"
-            st.attempts += 1
-            st.last_attempt_at = int(time.time())
-            if dev is None:
-                st.last_error = "no device record for this machine"
-                failed += 1
-                continue
-            ep = _endpoint_for(dev, user)
-            if ep is None:
-                st.last_error = "no endpoint recorded"
-                failed += 1
-                continue
-            _, snap = store.latest(conn, dev.id)
-            ok, out = rec.apply_edge(acc, (src, dst, user), ep, install=install,
-                                     platform=remote_platform(snap))
-            if ok:
-                st.observed, st.last_error = st.desired, ""
-                done += 1
-                verb = "installed on" if install else "removed from"
-                console.print(f"[green]✓[/green] {acc.name_of(src)}'s key {verb} {dev.name}")
-                # While we are connected anyway: a machine that cannot reach this one
-                # will otherwise have no telemetry for it at all.
-                with suppress(Exception):
-                    store.record(conn, dev.id,
-                                 run_probe(ep, mode=dev.probe_mode,
-                                           disk_paths=dev.disk_paths))
-            else:
-                st.last_error = out
-                failed += 1
-                # Not an error: a device that is off is an edge that has not converged.
-                console.print(f"[yellow]·[/yellow] {dev.name} not reached "
-                              f"[dim]({out[:60]})[/dim]")
-    finally:
-        conn.close()
-        rec.save_ledger(ledger)
-
-    console.print(f"\n[dim]{done} applied, {failed} still pending[/dim]"
-                  + ("  [dim]-- `fleet access` shows what is outstanding[/dim]"
-                     if failed else ""))
-    _broadcast(devices)
 
 
-def _broadcast(devices) -> None:
-    """Hand every machine that runs fleet the current inventory, and with it the center.
-
-    A fallback now rather than the routine path: a machine that can reach the listener
-    refreshes itself, and one that cannot -- or that has not been told where to look yet
-    -- is told here. That is what stops a machine holding our key in its authorized_keys
-    with no idea where the key came from.
-
-    The inventory is read once rather than per machine: this loop used to re-read it from
-    disk on every iteration, which on a fleet of any size is the same file parsed N times
-    to send N copies of the same thing.
-
-    A machine without fleet installed simply fails this; that is the ordinary case for a
-    managed target and is not worth a line of output. The inventory is not the authority
-    on anything security-relevant -- the access list is, and it is signed -- so a spoke
-    declining to answer costs nothing.
-    """
-    from . import access as acl
-
-    mine = inv.dumps(inv.load())
-    reached = 0
-    for dev in inv.live(devices):
-        eps = sorted(inv.endpoints_of(dev), key=lambda e: e.preference)
-        if not eps:
-            continue                       # the center itself
-        code, output = run_sync(eps[0], mine)
-        if code != 0:
-            continue
-        try:
-            returned = inv.loads(output)
-        except Exception:
-            continue                       # not fleet on the far side, or an old one
-        # Merged against what the file holds *now*, not the list we started the sweep
-        # with: the round trips take a while and a `fleet add` may have landed since.
-        inv.update(lambda current: inv.merge(current, returned, authoritative=False))
-        reached += 1
-    if reached:
-        console.print(f"[dim]· inventory handed to {reached} machine(s)[/dim]")
 
 
 @app.command("top")
@@ -1772,57 +1473,6 @@ def cmd_center(name: str = typer.Argument(None, help="hand the role to this mach
                       "--export[/bold][/dim]")
 
 
-def _register_identity(dev) -> str:
-    """Give the machine its own fleet keypair and pin it. Returns the fingerprint.
-
-    Enrolment used to stop at "our key is on it", which makes a host reachable and
-    nothing else: the access list is keyed on the fingerprint of *its* key, so without
-    this the very next step it tells you to run -- granting it something -- could not
-    find it. `access.enroll` existed and was never called.
-
-    The key is read back over our own connection rather than taken from anything the
-    machine published, so what gets pinned is what we saw on the host itself.
-    """
-    from . import access as acl
-    from . import reconcile as rec
-    from .keys import ensure_remote_keypair_command
-
-    try:
-        acc = acl.load()
-    except acl.AccessError:
-        console.print("  [dim]no fleet here yet -- run [bold]fleet center --init[/bold] "
-                      "and enrol again to register its key[/dim]")
-        return ""
-
-    eps = sorted(inv.endpoints_of(dev), key=lambda e: e.preference)
-    conn = store.connect()
-    try:
-        _, snap = store.latest(conn, dev.id)
-    finally:
-        conn.close()
-    plat = remote_platform(snap)
-    ok, out = rec._remote(eps[0], ensure_remote_keypair_command(platform=plat),
-                          platform=plat, capture=True)
-    pub = next((ln.strip() for ln in (out or "").splitlines()
-                if ln.strip().startswith("ssh-")), "")
-    if not ok or not pub:
-        err.print(f"  [yellow]could not read a key from {dev.name}[/yellow] "
-                  f"[dim]{(out or '')[:80]}[/dim]")
-        # Do not claim reachability we have not established: this branch is reached just
-        # as often because the host refused the connection as because it answered and
-        # had no key, and "it is reachable, but..." about a dead rental is a wrong
-        # answer printed confidently.
-        err.print("  [dim]until it has one it cannot be granted access to anything"
-                  "[/dim]")
-        return ""
-    try:
-        fp = acl.enroll(acc, dev.name, pub, dev.id, user=eps[0].user or "root")
-    except acl.AccessError as exc:
-        err.print(f"  [red]{exc}[/red]")
-        return ""
-    acl.save(acc)
-    console.print(f"[green]✓[/green] {dev.name} registered as {fp[:24]}...")
-    return fp
 
 
 def _dissolve(acc, *, force: bool) -> None:

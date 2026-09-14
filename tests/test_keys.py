@@ -24,6 +24,7 @@ from fleet.keys import (
     run_with_password,
 )
 from fleet.sshcmd import Endpoint
+from fleet.ops import enrol
 
 
 def _ep(**kw) -> Endpoint:
@@ -246,7 +247,7 @@ def test_enrolling_refuses_to_prompt_without_a_terminal(tmp_path, monkeypatch):
         dev, ProbeResult(status=Status.AUTH_FAILED, error_detail="key rejected")))
     # No key of ours works either, so the only way left is a password -- which is what
     # must be refused rather than prompted for.
-    monkeypatch.setattr(cli, "install_key_over_existing_access",
+    monkeypatch.setattr(enrol, "install_key_over_existing_access",
                         lambda *a, **k: (False, "Permission denied (publickey)."))
 
     result = runner.invoke(cli.app, ["add", "ssh -p 2222 root@5.6.7.8"])
@@ -268,28 +269,28 @@ def test_key_install_uses_the_fleet_key_not_a_personal_one(tmp_path, monkeypatch
     import fleet.cli as cli
 
     seen = {}
-    monkeypatch.setattr(cli, "ensure_keypair",
+    monkeypatch.setattr(enrol, "ensure_keypair",
                         lambda *a, **k: (tmp_path / "id_ed25519", "ssh-ed25519 AAAA fleet:me"))
-    monkeypatch.setattr(cli, "install_key",
+    monkeypatch.setattr(enrol, "install_key",
                         lambda ep, pw, pub, **k: seen.update(pub=pub) or (True, ""))
     # Force the password path: without this the test dials 5.6.7.8 for real.
-    monkeypatch.setattr(cli, "install_key_over_existing_access",
+    monkeypatch.setattr(enrol, "install_key_over_existing_access",
                         lambda *a, **k: (False, "Permission denied (publickey)."))
-    monkeypatch.setattr(cli.getpass, "getpass", lambda *a: "hunter2")
+    monkeypatch.setattr(enrol.getpass, "getpass", lambda *a: "hunter2")
     monkeypatch.setattr(cli.sys.stdin, "isatty", lambda: True, raising=False)
     # _install_key re-probes on success, to prove the key actually works rather than
     # trusting an append that exited 0. That probe is a real connection, and unlike the
     # sweep's it is not wrapped in suppress() -- so it has to return, not raise.
     from fleet.models import ProbeResult, Status
 
-    monkeypatch.setattr(cli, "run_probe",
+    monkeypatch.setattr(enrol, "run_probe",
                         lambda *a, **k: ProbeResult(status=Status.OK))
 
     from fleet.models import Device, Kind
     dev = Device(id="net:1.2.3.4:22", name="box", kind=Kind.RENTAL,
                  endpoints=[{"target": "1.2.3.4", "user": "root", "port": 22}])
     monkeypatch.setattr(cli.store, "DB_PATH", tmp_path / "cache.db")
-    cli._install_key(dev)
+    enrol.install_our_key(dev)
     assert seen["pub"] == "ssh-ed25519 AAAA fleet:me"
 
 def test_add_does_not_prompt_for_a_password_without_a_terminal(tmp_path, monkeypatch):
@@ -304,10 +305,10 @@ def test_add_does_not_prompt_for_a_password_without_a_terminal(tmp_path, monkeyp
     monkeypatch.setattr(cli, "onboard", lambda *a, **k: (
         dev, ProbeResult(status=Status.AUTH_FAILED, error_detail="key rejected")))
 
-    monkeypatch.setattr(cli, "install_key_over_existing_access",
+    monkeypatch.setattr(enrol, "install_key_over_existing_access",
                         lambda *a, **k: (False, "Permission denied (publickey)."))
     called = []
-    monkeypatch.setattr(cli, "getpass", type("g", (), {
+    monkeypatch.setattr(enrol, "getpass", type("g", (), {
         "getpass": staticmethod(lambda *a, **k: called.append(1) or "x")})())
 
     result = runner.invoke(app, ["add", "ssh root@5.6.7.8"])

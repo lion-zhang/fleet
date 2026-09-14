@@ -9,6 +9,8 @@ from __future__ import annotations
 
 from fleet.inventory import merge, touch
 from fleet.models import Device, Kind
+from fleet.ops import sweep
+from fleet.ops import sync
 
 
 def _dev(name: str, *, id: str | None = None, updated_at: int = 100, **kw) -> Device:
@@ -255,7 +257,7 @@ def test_sync_applies_what_the_center_returns(tmp_path, monkeypatch):
     runner, path = _serve_env(tmp_path, monkeypatch,
                               [_dev("laptop"), _dev("hub", role="center")])
     returned = inv.dumps([_dev("laptop"), _dev("hub", role="center"), _dev("from-center")])
-    monkeypatch.setattr(cli, "run_sync", lambda *a, **k: (0, returned))
+    monkeypatch.setattr(sync, "run_sync", lambda *a, **k: (0, returned))
     result = runner.invoke(app, ["sync"])
     assert result.exit_code == 0, result.output
     assert "from-center" in _names(inv.load(path))
@@ -268,7 +270,7 @@ def test_a_failed_sync_leaves_local_state_untouched(tmp_path, monkeypatch):
 
     runner, path = _serve_env(tmp_path, monkeypatch,
                               [_dev("laptop"), _dev("hub", role="center")])
-    monkeypatch.setattr(cli, "run_sync", lambda *a, **k: (255, "connection refused"))
+    monkeypatch.setattr(sync, "run_sync", lambda *a, **k: (255, "connection refused"))
     result = runner.invoke(app, ["sync"])
     assert result.exit_code != 0
     assert _names(inv.load(path)) == ["hub", "laptop"]
@@ -489,7 +491,7 @@ def test_sync_does_not_erase_a_device_added_while_it_was_running(tmp_path, monke
         inv.save(concurrent, path)
         return 0, payload            # center knows nothing of the new device
 
-    monkeypatch.setattr(cli, "run_sync", racing_center)
+    monkeypatch.setattr(sync, "run_sync", racing_center)
     result = runner_invoke = CliRunner().invoke(app, ["sync"])
     assert result.exit_code == 0, result.output
     assert "just-added" in [d.name for d in inv.live(inv.load(path))], \

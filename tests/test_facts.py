@@ -20,6 +20,9 @@ from fleet import view
 from fleet.models import Device, Kind
 from fleet.probe.parse import parse_payload
 from fleet.view import _CORES, _RAM_GIB, _SLACK, _STORAGE_TIB, _VRAM_GIB, facts, matches_tag
+from fleet.ops import enrol
+from fleet.ops import sweep
+from fleet.ops import sync
 
 FIXTURES = pathlib.Path(__file__).parent / "fixtures" / "probe"
 
@@ -355,15 +358,15 @@ def test_a_machine_without_a_pty_says_so_instead_of_crashing(tmp_path, monkeypat
     name the way round it, rather than surfacing as an ImportError mid-enrolment."""
     from fleet import cli
 
-    monkeypatch.setattr(cli, "pty_available", lambda: False)
-    monkeypatch.setattr(cli, "ensure_keypair", lambda *a, **k: (tmp_path / "k", "ssh-ed25519 AAAA x"))
-    monkeypatch.setattr(cli, "install_key_over_existing_access",
+    monkeypatch.setattr(enrol, "pty_available", lambda: False)
+    monkeypatch.setattr(enrol, "ensure_keypair", lambda *a, **k: (tmp_path / "k", "ssh-ed25519 AAAA x"))
+    monkeypatch.setattr(enrol, "install_key_over_existing_access",
                         lambda *a, **k: (False, "Permission denied (publickey)."))
-    monkeypatch.setattr(cli.getpass, "getpass",
+    monkeypatch.setattr(enrol.getpass, "getpass",
                         lambda *a, **k: pytest.fail("must not prompt without a pty"))
 
     dev = _dev(name="box", endpoints=[{"target": "1.2.3.4", "user": "root", "port": 22}])
-    assert cli._install_key(dev) is False
+    assert enrol.install_our_key(dev) is False
 
 
 def test_the_console_forces_utf8_output():
@@ -494,7 +497,7 @@ def test_reinitialising_does_not_rename_the_center(tmp_path, monkeypatch):
     import subprocess
     subprocess.run(["ssh-keygen", "-t", "ed25519", "-N", "", "-q", "-f", str(key)], check=True)
     pub = key.with_suffix(".pub").read_text().strip()
-    monkeypatch.setattr(cli, "ensure_keypair", lambda *a, **k: (key, pub))
+    monkeypatch.setattr(enrol, "ensure_keypair", lambda *a, **k: (key, pub))
     monkeypatch.setattr(cli, "onboard_self", lambda **k: (
         Device(id="id:me", name="beelink", kind=Kind.PERMANENT), ProbeResult(status=Status.OK)))
 
@@ -577,7 +580,7 @@ def test_init_marks_the_center_in_the_inventory_too(tmp_path, monkeypatch):
     import subprocess
     key = tmp_path / "k"
     subprocess.run(["ssh-keygen", "-t", "ed25519", "-N", "", "-q", "-f", str(key)], check=True)
-    monkeypatch.setattr(cli, "ensure_keypair",
+    monkeypatch.setattr(enrol, "ensure_keypair",
                         lambda *a, **k: (key, key.with_suffix(".pub").read_text().strip()))
     monkeypatch.setattr(cli, "onboard_self", lambda **k: (
         Device(id="id:me", name="hub", kind=Kind.PERMANENT), ProbeResult(status=Status.OK)))
@@ -638,9 +641,9 @@ def test_the_sweep_hands_the_inventory_to_every_machine(tmp_path, monkeypatch):
     acl.save(acc, acl.ACCESS_PATH)
 
     monkeypatch.setattr(rec, "apply_edge", lambda *a, **k: (True, ""))
-    monkeypatch.setattr(cli, "run_probe", lambda *a, **k: (_ for _ in ()).throw(OSError()))
+    monkeypatch.setattr(enrol, "run_probe", lambda *a, **k: (_ for _ in ()).throw(OSError()))
     handed = []
-    monkeypatch.setattr(cli, "run_sync",
+    monkeypatch.setattr(sync, "run_sync",
                         lambda ep, payload: handed.append(ep.target) or (0, payload))
 
     assert CliRunner().invoke(cli.app, ["sync"]).exit_code == 0
@@ -657,8 +660,8 @@ def test_a_machine_without_fleet_is_not_an_error(tmp_path, monkeypatch):
     devices = [Device(id="id:a", name="a", kind=Kind.PERMANENT,
                       endpoints=[{"target": "1.2.3.4", "user": "root", "port": 22}])]
     inv.save(devices, inv.INVENTORY_PATH)
-    monkeypatch.setattr(cli, "run_sync", lambda *a, **k: (127, "fleet: command not found"))
-    cli._broadcast(devices)                # must not raise
+    monkeypatch.setattr(sync, "run_sync", lambda *a, **k: (127, "fleet: command not found"))
+    sweep.broadcast(devices)                # must not raise
 
 
 def test_a_settled_fleet_still_hands_the_inventory_round(tmp_path, monkeypatch):
@@ -686,9 +689,9 @@ def test_a_settled_fleet_still_hands_the_inventory_round(tmp_path, monkeypatch):
         acl.ACCESS_PATH)
 
     handed = []
-    monkeypatch.setattr(cli, "run_sync",
+    monkeypatch.setattr(sync, "run_sync",
                         lambda ep, payload: handed.append(ep.target) or (0, payload))
-    monkeypatch.setattr(cli, "_enrol_unpinned", lambda *a, **k: False)
+    monkeypatch.setattr(sweep, "enrol_unpinned", lambda *a, **k: False)
 
     assert CliRunner().invoke(cli.app, ["sync"]).exit_code == 0
     assert handed == ["1.2.3.4"]

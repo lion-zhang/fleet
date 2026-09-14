@@ -15,6 +15,9 @@ from fleet import inventory as inv
 from fleet import reconcile as rec
 from fleet import store
 from fleet.models import Device, Kind
+from fleet.ops import enrol
+from fleet.ops import sweep
+from fleet.ops import sync
 
 A = "SHA256:aaa"
 B = "SHA256:bbb"
@@ -30,7 +33,7 @@ def fleet_at(tmp_path, monkeypatch):
     monkeypatch.setattr(cli, "local_device_id", lambda: "id:center")
     # the sweep hands the inventory to every machine at the end; that is a real
     # ssh per device, and these tests are about the reconciler
-    monkeypatch.setattr(cli, "run_sync", lambda *a, **k: (255, ""))
+    monkeypatch.setattr(sync, "run_sync", lambda *a, **k: (255, ""))
 
     devices = [
         Device(id="id:center", name="macbook", kind=Kind.PERMANENT, role="center"),
@@ -55,7 +58,7 @@ def test_a_grant_is_actually_applied(fleet_at, monkeypatch):
     calls = []
     monkeypatch.setattr(rec, "apply_edge",
                         lambda acc, edge, ep, **kw: calls.append((edge, kw)) or (True, ""))
-    monkeypatch.setattr(cli, "run_probe", lambda *a, **k: (_ for _ in ()).throw(OSError()))
+    monkeypatch.setattr(enrol, "run_probe", lambda *a, **k: (_ for _ in ()).throw(OSError()))
 
     r = runner.invoke(cli.app, ["sync"])
     assert r.exit_code == 0, r.output
@@ -69,7 +72,7 @@ def test_a_grant_is_actually_applied(fleet_at, monkeypatch):
 def test_the_ledger_remembers_what_landed(fleet_at, monkeypatch):
     runner, _ = fleet_at
     monkeypatch.setattr(rec, "apply_edge", lambda *a, **k: (True, ""))
-    monkeypatch.setattr(cli, "run_probe", lambda *a, **k: (_ for _ in ()).throw(OSError()))
+    monkeypatch.setattr(enrol, "run_probe", lambda *a, **k: (_ for _ in ()).throw(OSError()))
     runner.invoke(cli.app, ["sync"])
     ledger = rec.load_ledger(acl.LEDGER_PATH)
     assert ledger[f"{A}>{B}>root"].observed == "present"
@@ -98,7 +101,7 @@ def test_a_revoke_is_applied_as_a_removal(fleet_at, monkeypatch):
     one is a different shape and is refused; see the test below."""
     runner, _ = fleet_at
     monkeypatch.setattr(rec, "apply_edge", lambda *a, **k: (True, ""))
-    monkeypatch.setattr(cli, "run_probe", lambda *a, **k: (_ for _ in ()).throw(OSError()))
+    monkeypatch.setattr(enrol, "run_probe", lambda *a, **k: (_ for _ in ()).throw(OSError()))
 
     acc = acl.load(acl.ACCESS_PATH)
     acl.grant(acc, C, B, user="root")     # something extra to survive the revoke
@@ -123,7 +126,7 @@ def test_a_revoke_still_works_after_the_machine_left_the_list(fleet_at, monkeypa
     forever with nothing left to say where it was."""
     runner, _ = fleet_at
     monkeypatch.setattr(rec, "apply_edge", lambda *a, **k: (True, ""))
-    monkeypatch.setattr(cli, "run_probe", lambda *a, **k: (_ for _ in ()).throw(OSError()))
+    monkeypatch.setattr(enrol, "run_probe", lambda *a, **k: (_ for _ in ()).throw(OSError()))
 
     acc = acl.load(acl.ACCESS_PATH)
     acl.grant(acc, C, B, user="root")
@@ -136,7 +139,7 @@ def test_a_revoke_still_works_after_the_machine_left_the_list(fleet_at, monkeypa
 def test_the_sweep_refuses_to_strip_everything_at_once(fleet_at, monkeypatch):
     runner, _ = fleet_at
     monkeypatch.setattr(rec, "apply_edge", lambda *a, **k: (True, ""))
-    monkeypatch.setattr(cli, "run_probe", lambda *a, **k: (_ for _ in ()).throw(OSError()))
+    monkeypatch.setattr(enrol, "run_probe", lambda *a, **k: (_ for _ in ()).throw(OSError()))
     runner.invoke(cli.app, ["sync"])
 
     acl.save(acl.Access(fleet_id="7f3a9c"), acl.ACCESS_PATH)   # an empty list

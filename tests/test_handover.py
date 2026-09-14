@@ -13,6 +13,7 @@ from fleet import inventory as inv
 from fleet import reconcile as rec
 from fleet import store
 from fleet.models import Device, Kind
+from fleet.ops import enrol
 
 
 @pytest.fixture
@@ -26,7 +27,7 @@ def two_machines(tmp_path, monkeypatch):
     subprocess.run(["ssh-keygen", "-t", "ed25519", "-N", "", "-q", "-f", str(key)],
                    check=True)
     pub = key.with_suffix(".pub").read_text()
-    monkeypatch.setattr(cli, "ensure_keypair", lambda *a, **k: (key, pub), raising=False)
+    monkeypatch.setattr(enrol, "ensure_keypair", lambda *a, **k: (key, pub), raising=False)
     import fleet.keys
     monkeypatch.setattr(fleet.keys, "ensure_keypair", lambda *a, **k: (key, pub))
 
