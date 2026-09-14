@@ -99,10 +99,24 @@ next `fleet sync`, because only the center can write the access list.
 fleet setup
 ```
 
-Writes instructions for whichever of Claude Code, Codex and Hermes are actually installed
-— a skill file where the agent owns the directory, and a marked region in `AGENTS.md`
-where you own the file, which leaves the rest of it alone. It will not create a config
-directory for an agent you do not use. Re-run it after upgrading fleet.
+Sets up whichever agents are actually installed, and nothing else — it will not create a
+config directory for an agent you do not use. Re-run it after upgrading fleet.
+
+**Agents with a shell** — Claude Code, Codex, Gemini CLI, Hermes — get a skill, which
+costs nothing until a task actually needs a machine. Where fleet owns the file it writes
+the whole thing; where you own it (`AGENTS.md`, `GEMINI.md`) it marks a region and leaves
+every other byte alone.
+
+**Desktop clients have no shell**, so instructions are useless to them. They get `fleet
+mcp` registered as an MCP server instead — Claude Desktop and Cursor, merged into their
+own config beside whatever servers are already there. That half needs the optional extra:
+
+```bash
+uv tool install --force 'fleet-broker[mcp]'
+```
+
+Supporting another agent is one entry in `AGENTS` (or `MCP_CLIENTS`) in `setup.py`. The
+paths are a table, not code.
 
 ---
 

@@ -2037,7 +2037,7 @@ def _handover(acc, name: str, *, force: bool) -> None:
 @app.command("setup")
 def cmd_setup(
     target: str = typer.Option("auto", "--target",
-                               help="claude | codex | hermes | all | auto (whatever is installed)"),
+                               help="an agent name, or all | auto (whatever is installed)"),
     project: bool = typer.Option(False, "--project",
                                  help="write into the current directory, not your home"),
     dry_run: bool = typer.Option(False, "--dry-run", help="show what would change; write nothing"),
@@ -2045,33 +2045,49 @@ def cmd_setup(
 ):
     """Teach your coding agents to use fleet.
 
-    Claude Code gets a skill, which costs nothing until a task actually needs a machine.
-    Codex gets a marked region in AGENTS.md; anything else in that file is left alone.
+    An agent with a shell gets a skill, which costs nothing until a task actually needs
+    a machine. A desktop client has no shell, so it gets `fleet mcp` registered as an
+    MCP server instead -- merged into its config beside whatever else is already there.
 
     [dim]Example:[/dim]  fleet setup --dry-run
     """
     root = Path.cwd() if project else Path.home()
+    # MCP clients are a second namespace: a desktop app is registered, not written to.
+    # `--project` never touches them -- their config is per-user, not per-repo.
+    from .setup import (MCP_CLIENTS, detect_mcp_clients, install_mcp, uninstall_mcp)
+
+    mcp_names = tuple(c.name for c in MCP_CLIENTS)
     if target == "auto":
         # cwd tells us nothing about which agents you use, so a project install
         # assumes the one whose layout is identical in both scopes.
         targets = ["claude"] if project else detect_targets(root)
+        clients = [] if project else detect_mcp_clients(root)
     elif target == "all":
         targets = list(TARGETS)
+        clients = [] if project else list(mcp_names)
     else:
-        targets = [target]
+        targets = [target] if target in TARGETS else []
+        clients = [target] if target in mcp_names else []
 
-    if unknown := [t for t in targets if t not in TARGETS]:
+    if unknown := [t for t in [target] if t not in (*TARGETS, *mcp_names, "all", "auto")]:
         err.print(f"[red]Unknown target {unknown[0]!r}[/red]  "
-                  f"({' | '.join(TARGETS)} | all | auto)")
+                  f"({' | '.join((*TARGETS, *mcp_names))} | all | auto)")
         raise typer.Exit(2)
-    if not targets:
-        err.print("[yellow]No coding agent found.[/yellow]  Looked for ~/.claude and "
-                  "~/.codex.  Force one with [bold]--target claude[/bold].")
+    if not targets and not clients:
+        err.print("[yellow]No coding agent found.[/yellow]  Looked for "
+                  f"{', '.join('~/.' + t for t in TARGETS)} and the desktop clients.  "
+                  "Force one with [bold]--target claude[/bold].")
         raise typer.Exit(1)
 
     cmd = fleet_command()
-    changes = (uninstall(root, targets, dry_run=dry_run, project=project) if remove
-               else install(root, targets, cmd, dry_run=dry_run, project=project))
+    if remove:
+        changes = (uninstall(root, targets, dry_run=dry_run, project=project)
+                   + uninstall_mcp(root, clients, dry_run=dry_run))
+    else:
+        from .setup import fleet_executable
+
+        changes = (install(root, targets, cmd, dry_run=dry_run, project=project)
+                   + install_mcp(root, clients, fleet_executable(), dry_run=dry_run))
 
     for c in changes:
         colour = {"created": "green", "updated": "green",
@@ -2083,6 +2099,29 @@ def cmd_setup(
         err.print(f"\n[yellow]fleet is not on your PATH[/yellow], so the skill points at "
                   f"{cmd}.\n  Install it properly and re-run setup: "
                   "[bold]uv tool install --editable .[/bold]")
+
+
+@app.command("mcp", hidden=True)
+def cmd_mcp():
+    """Serve fleet over MCP on stdio, for agents that cannot run a shell.
+
+    Hidden because nobody types it: a desktop client launches it, from a config entry
+    `fleet setup` writes. Everything it exposes is a command on this page.
+
+    [dim]Example:[/dim]  fleet mcp
+    """
+    from .mcpserver import McpUnavailable, serve
+
+    try:
+        serve()
+    except McpUnavailable as exc:
+        # escaped: the message names an extra, and `[mcp]` is rich markup -- unescaped
+        # it printed the install command with the extra silently removed, which is the
+        # one part of it the reader needs.
+        from rich.markup import escape
+
+        err.print(f"[red]{escape(str(exc))}[/red]")
+        raise typer.Exit(2)
 
 
 @app.command("paths")

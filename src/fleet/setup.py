@@ -33,6 +33,11 @@ def fleet_command() -> str:
     not inherit that activation -- cannot see. Skip venv directories and keep walking:
     a real install further down PATH still means the bare name works everywhere.
     """
+    return "fleet" if _fleet_on_path() else str(_fallback_exe())
+
+
+def _fleet_on_path() -> Path | None:
+    """The fleet executable found on PATH, ignoring any inside the running venv."""
     prefix = Path(sys.prefix).resolve()
     for entry in os.environ.get("PATH", "").split(os.pathsep):
         if not entry:
@@ -45,8 +50,21 @@ def fleet_command() -> str:
             continue
         exe = directory / "fleet"
         if exe.is_file() and os.access(exe, os.X_OK):
-            return "fleet"
-    return str(Path(sys.executable).resolve().parent / "fleet")
+            return exe
+    return None
+
+
+def _fallback_exe() -> Path:
+    """fleet beside the interpreter running us, when PATH does not have it.
+
+    The unresolved directory first, deliberately. In a uv tool environment bin/python3
+    is a symlink into the shared interpreter install, whose bin holds no fleet at all --
+    so resolving walks out of the one directory the executable is certainly in, and the
+    MCP server answered "fleet is not installed on this machine" from inside its own
+    install.
+    """
+    beside = Path(sys.executable).parent / "fleet"
+    return beside if beside.exists() else Path(sys.executable).resolve().parent / "fleet"
 
 
 # Hermes organises skills into categories; the docs' own example for infrastructure
@@ -100,6 +118,95 @@ AGENTS = (
     # than being written wholesale.
     Agent("gemini", home=".gemini/GEMINI.md", project="GEMINI.md"),
 )
+
+@dataclass(frozen=True, slots=True)
+class McpClient:
+    """An agent that speaks MCP instead of reading a file.
+
+    A desktop client has no shell, so the skills above are useless to it: it needs a
+    server it can launch and typed tools it can call. Registering one is a key in a JSON
+    config rather than a region in markdown, which is why this is a second table and not
+    another column on the first.
+
+    The configs here belong to the user and routinely hold other servers' credentials,
+    so the merge only ever adds or replaces our own key and rewrites nothing else.
+    """
+
+    name: str
+    key: str                               # the object our entry goes in
+    macos: str                             # path under the home directory
+    windows: str = ""
+    linux: str = ""
+
+    def path(self, root: Path, platform: str) -> Path | None:
+        rel = {"darwin": self.macos, "win32": self.windows}.get(platform, self.linux)
+        return root.joinpath(*rel.split("/")) if rel else None
+
+
+MCP_CLIENTS = (
+    McpClient("claude-desktop", key="mcpServers",
+              macos="Library/Application Support/Claude/claude_desktop_config.json",
+              windows="AppData/Roaming/Claude/claude_desktop_config.json",
+              linux=".config/Claude/claude_desktop_config.json"),
+    McpClient("cursor", key="mcpServers", macos=".cursor/mcp.json",
+              windows=".cursor/mcp.json", linux=".cursor/mcp.json"),
+)
+
+
+def fleet_executable() -> str:
+    """An absolute path to fleet, for anything launched outside a shell.
+
+    `fleet_command` may answer with the bare name, which is right for a skill: an agent
+    types it into a shell that has read a profile. A desktop client is not a shell. On
+    macOS a GUI application inherits a PATH with no ~/.local/bin in it, so the bare name
+    is the one answer guaranteed to fail exactly where we cannot see it fail.
+    """
+    return str(_fleet_on_path() or _fallback_exe())
+
+
+def mcp_entry(cmd: str) -> dict:
+    """What we register. `fleet mcp` serves stdio, which is how clients launch a server."""
+    return {"command": cmd, "args": ["mcp"]}
+
+
+def apply_mcp(existing: str, key: str, cmd: str) -> str:
+    """Add or update our server in a client's config, leaving every other byte alone.
+
+    Same promise as the markdown region, kept a different way: the document is parsed,
+    exactly one key is set, and it is written back. A config we cannot parse is returned
+    untouched -- refusing to guess is the only safe move on a file we did not write and
+    that may hold someone else's tokens.
+    """
+    import json
+
+    try:
+        doc = json.loads(existing) if existing.strip() else {}
+    except json.JSONDecodeError:
+        return existing
+    if not isinstance(doc, dict):
+        return existing
+    servers = doc.get(key)
+    if not isinstance(servers, dict):
+        servers = {}
+    servers["fleet"] = mcp_entry(cmd)
+    doc[key] = servers
+    return json.dumps(doc, indent=2) + "\n"
+
+
+def remove_mcp(existing: str, key: str) -> str:
+    """Drop our server. A config that never had one comes back untouched."""
+    import json
+
+    try:
+        doc = json.loads(existing) if existing.strip() else {}
+    except json.JSONDecodeError:
+        return existing
+    if not isinstance(doc, dict) or not isinstance(doc.get(key), dict):
+        return existing
+    if doc[key].pop("fleet", None) is None:
+        return existing
+    return json.dumps(doc, indent=2) + "\n"
+
 
 # The one list. cli.py validates against this rather than repeating it.
 TARGETS = tuple(a.name for a in AGENTS)
@@ -311,6 +418,59 @@ def _desired(target: str, path: Path, cmd: str) -> str:
                 else skill_text(cmd))
     existing = path.read_text() if path.exists() else ""
     return apply_block(existing, agents_block(cmd))
+
+
+def detect_mcp_clients(root: Path, platform: str = "") -> list[str]:
+    """MCP clients that have actually run here. Judged by the directory their config
+    lives in, because the file itself does not exist until one is configured."""
+    platform = platform or sys.platform
+    out = []
+    for c in MCP_CLIENTS:
+        path = c.path(root, platform)
+        if path and path.parent.is_dir():
+            out.append(c.name)
+    return out
+
+
+def install_mcp(root: Path, clients: list[str], cmd: str, *,
+                dry_run: bool = False, platform: str = "") -> list[Change]:
+    """Register `fleet mcp` with each client, without disturbing its other servers."""
+    platform = platform or sys.platform
+    changes: list[Change] = []
+    for client in MCP_CLIENTS:
+        if client.name not in clients:
+            continue
+        path = client.path(root, platform)
+        if path is None:
+            continue
+        current = path.read_text() if path.exists() else ""
+        desired = apply_mcp(current, client.key, cmd)
+        action = ("unchanged" if desired == current
+                  else "created" if not current else "updated")
+        if action != "unchanged" and not dry_run:
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text(desired)
+        changes.append(Change(client.name, path, action))
+    return changes
+
+
+def uninstall_mcp(root: Path, clients: list[str], *,
+                  dry_run: bool = False, platform: str = "") -> list[Change]:
+    platform = platform or sys.platform
+    changes: list[Change] = []
+    for client in MCP_CLIENTS:
+        if client.name not in clients:
+            continue
+        path = client.path(root, platform)
+        if path is None or not path.exists():
+            continue
+        current = path.read_text()
+        desired = remove_mcp(current, client.key)
+        action = "removed" if desired != current else "unchanged"
+        if action == "removed" and not dry_run:
+            path.write_text(desired)
+        changes.append(Change(client.name, path, action))
+    return changes
 
 
 def install(root: Path, targets: list[str], cmd: str, *,

@@ -424,6 +424,8 @@ def test_the_instructions_separate_what_needs_the_center():
 NOT_FOR_AGENTS = {
     "probe": "hidden maintainer tool for capturing parser fixtures",
     "setup": "circular -- an agent reading these instructions is the result of it",
+    "mcp": "the transport an agent arrives over, not something it calls; a desktop "
+           "client launches it from the config setup writes",
 }
 
 # Flags deliberately left out, each with the reason. The command guard below forces a
