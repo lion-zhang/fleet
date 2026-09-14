@@ -50,8 +50,18 @@ else
   git clone --quiet --branch "$REF" "$REPO" "$DIR"
 fi
 
-uv tool install --force --quiet "$DIR"
+# Stop the center's service before replacing the files it is running from. Not
+# politeness: on Windows a live fleet.exe holds its own installation open and the install
+# fails against it with an error that mentions nothing about why. Quiet and best-effort,
+# because a machine that is not a center has nothing to stop.
+PATH="$HOME/.local/bin:$PATH" fleet service stop >/dev/null 2>&1 || true
+
+uv tool install --force --reinstall --quiet "$DIR"
 PATH="$HOME/.local/bin:$PATH" fleet --version
+
+# Back up if it was there. `install` is idempotent, so this must not start a service on a
+# machine that never had one -- `service start` does nothing when none is installed.
+PATH="$HOME/.local/bin:$PATH" fleet service start >/dev/null 2>&1 || true
 {_drop_timer_block()}"""
 
 

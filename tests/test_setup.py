@@ -426,6 +426,8 @@ NOT_FOR_AGENTS = {
     "setup": "circular -- an agent reading these instructions is the result of it",
     "mcp": "the transport an agent arrives over, not something it calls; a desktop "
            "client launches it from the config setup writes",
+    "service": "plumbing `--init` and `update` call for themselves; an agent that had "
+               "to manage it would be doing the job this removes",
 }
 
 # Flags deliberately left out, each with the reason. The command guard below forces a
@@ -448,6 +450,7 @@ FLAGS_NOT_FOR_AGENTS = {
     "--force": "overrides a refusal; an agent must report the refusal, not override it",
     "--port": "where --listen binds; the user's choice, not an agent's",
     "--advertise": "--listen plumbing, for a center behind a different address",
+    "--no-service": "opts out of the thing that makes a center useful; a user's call",
 }
 
 

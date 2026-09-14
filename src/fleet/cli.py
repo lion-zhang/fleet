@@ -1789,6 +1789,9 @@ def cmd_center(name: str = typer.Argument(None, help="hand the role to this mach
                listen: bool = typer.Option(False, "--listen",
                                            help="serve the fleet so machines can sync "
                                                 "themselves, instead of being swept"),
+               no_service: bool = typer.Option(False, "--no-service",
+                                               help="with --init: do not install the "
+                                                    "background service"),
                port: int = typer.Option(0, "--port", metavar="N",
                                         help="port for --listen (default 7373)"),
                advertise: str = typer.Option("", "--advertise", metavar="URL",
@@ -1881,6 +1884,15 @@ def cmd_center(name: str = typer.Argument(None, help="hand the role to this mach
             conn.close()
         console.print(f"[green]✓[/green] fleet {acc.fleet_id} started; "
                       f"{dev.name} is the center.")
+        if not no_service:
+            # Installed here rather than left as a step to remember: machines keep
+            # themselves current by asking the center, and a center that only listens
+            # while someone holds a terminal open is not one they can ask.
+            from . import service
+            from .serve import DEFAULT_PORT
+            from .setup import fleet_executable
+
+            console.print(f"  [dim]service: {service.install(fleet_executable(), DEFAULT_PORT)}[/dim]")
         console.print(f"  [dim]key to pre-place on locked-down hosts: "
                       f"[bold]fleet center --pubkey[/bold][/dim]")
         return
@@ -1920,6 +1932,21 @@ def cmd_center(name: str = typer.Argument(None, help="hand the role to this mach
                   + ("  [dim]← this machine[/dim]" if centre else ""))
     console.print(f"fleet    {acc.fleet_id}")
     console.print(f"machines {len(acc.keys)}   edges {len(acc.edges())}")
+    if centre:
+        # Worth a line: machines keep themselves current by asking this one, so a
+        # service that is not up means the whole fleet quietly goes stale, and nothing
+        # else on this page would say so.
+        from . import service as svc
+
+        state = svc.status()
+        if state == "running":
+            console.print(f"serving  {center_advertise_url(acc)}")
+        elif state == "installed":
+            console.print("[yellow]![/yellow] the service is installed but not running "
+                          "-- machines cannot refresh themselves")
+        else:
+            console.print("[yellow]![/yellow] not serving; machines wait to be swept "
+                          "-- [bold]fleet service install[/bold]")
     if note := acl.staleness_note():
         console.print(f"[yellow]![/yellow] {note}")
     if not centre:
@@ -2271,6 +2298,45 @@ def cmd_setup(
         err.print(f"\n[yellow]fleet is not on your PATH[/yellow], so the skill points at "
                   f"{cmd}.\n  Install it properly and re-run setup: "
                   "[bold]uv tool install --editable .[/bold]")
+
+
+@app.command("service", hidden=True)
+def cmd_service(action: str = typer.Argument("status",
+                                             help="status | install | remove | start | stop")):
+    """Manage the background service that keeps the center listening.
+
+    Hidden because nobody should have to run it: `fleet center --init` installs it and
+    `fleet update` stops and starts it around the install. It exists so those two have
+    something to call, and so you can look when something is wrong.
+
+    [dim]Example:[/dim]  fleet service status
+    """
+    from . import service
+
+    if action == "status":
+        console.print(service.status())
+        return
+    if action == "install":
+        from . import access as acl
+        from .serve import DEFAULT_PORT
+        from .setup import fleet_executable
+
+        try:
+            acc = acl.load()
+        except acl.AccessError as exc:
+            err.print(f"[red]{exc}[/red]")
+            raise typer.Exit(2)
+        console.print(service.install(fleet_executable(), DEFAULT_PORT))
+        console.print(f"  [dim]machines will dial {center_advertise_url(acc)}[/dim]")
+        return
+    if action == "remove":
+        console.print(service.remove())
+        return
+    if action in ("start", "stop"):
+        getattr(service, action)()
+        return
+    err.print(f"[red]Unknown action {action!r}[/red]  (status | install | remove | start | stop)")
+    raise typer.Exit(2)
 
 
 @app.command("mcp", hidden=True)
