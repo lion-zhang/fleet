@@ -1,0 +1,14 @@
+# The probe payloads are sent verbatim over ssh to a shell on the far side, so their
+# line endings are a wire format, not a local preference. Git for Windows defaults to
+# core.autocrlf=true, which rewrote payload.sh to CRLF on checkout -- and every probe
+# from the Windows center then failed with `sh: 8: \r: not found` followed by
+# `Syntax error: "|" unexpected`, because dash reads the CR as part of the command.
+#
+# Declared here rather than fixed on the machine: it is a property of the file, and the
+# next clone on any Windows box would otherwise reintroduce it.
+*.sh text eol=lf
+*.ps1 text eol=lf
+
+# Same reasoning, one layer up: these are read and piped to a remote shell too.
+src/fleet/probe/payload.sh text eol=lf
+src/fleet/probe/payload.ps1 text eol=lf

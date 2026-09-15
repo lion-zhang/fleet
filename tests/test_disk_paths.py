@@ -301,3 +301,31 @@ def test_root_is_always_treated_as_writable(tmp_path):
     snap = parse_payload(_run_payload(FLEET_DISK_PATHS="/"))
     assert snap.disks[0].mount == "/"
     assert snap.disks[0].writable is True
+
+
+def test_the_probe_payload_has_no_carriage_returns():
+    """It is piped verbatim into `sh` on the far side, so a CR is part of the command.
+    Git for Windows defaults to core.autocrlf=true and rewrote this file on checkout;
+    every probe from the Windows center then failed with `sh: 8: \\r: not found` and
+    `Syntax error: "|" unexpected`, while the same fleet looked healthy from macOS.
+
+    Checked on the bytes the code will actually send, not on what is committed -- the
+    conversion happens at checkout, so only the file on disk can show it."""
+    from fleet.probe.runner import PAYLOAD
+
+    raw = PAYLOAD.read_bytes()
+    assert b"\r" not in raw, (
+        f"{PAYLOAD} has {raw.count(chr(13).encode())} carriage return(s); "
+        "the .gitattributes entry pinning it to LF is missing or not applied "
+        "(try `git add --renormalize .`)")
+
+
+def test_gitattributes_pins_the_payload_line_endings():
+    """The file above is only right on this machine if something pins it everywhere."""
+    import pathlib
+
+    root = pathlib.Path(__file__).resolve().parent.parent
+    attrs = (root / ".gitattributes")
+    assert attrs.exists(), "nothing stops the next Windows clone reintroducing CRLF"
+    text = attrs.read_text()
+    assert "eol=lf" in text and ".sh" in text
