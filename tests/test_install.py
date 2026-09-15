@@ -473,3 +473,18 @@ def test_every_powershell_sent_over_command_dash_completes_per_line():
 
     assert posix_sync_command("abc123", "SHA256:xx", user="u", pubkey=None), \
         "the POSIX form still exists; sh reads a whole script and has no such limit"
+
+
+def test_updating_an_existing_install_honours_the_repo_it_was_given():
+    """`--repo` was silently ignored for every machine that already had fleet: the fetch
+    used whatever `origin` was set to when it was first cloned. So an install could not
+    be pointed at a new remote, or moved from ssh to https, and failed with an auth error
+    naming a URL the caller never asked for. Found updating a real machine."""
+    from fleet.ssh.cmd import WINDOWS
+
+    for script in (install_script("https://github.com/x/y.git"),
+                   install_script("https://github.com/x/y.git", platform=WINDOWS)):
+        code = "\n".join(l for l in script.splitlines() if not l.strip().startswith("#"))
+        assert "remote set-url origin" in code, "an existing clone keeps its old remote"
+        assert code.index("remote set-url origin") < code.index("fetch"), \
+            "the remote has to be corrected before the fetch that uses it"

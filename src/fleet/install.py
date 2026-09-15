@@ -45,6 +45,12 @@ if ! command -v uv >/dev/null 2>&1; then
 fi
 
 if [ -d "$DIR/.git" ]; then
+  # The repo we were given, not the one this clone happened to be made with. Without
+  # this, `--repo` was silently ignored for every machine that already had fleet: the
+  # fetch used whatever `origin` was set to years ago, so an install could not be pointed
+  # at a new remote or moved from ssh to https, and failed with an auth error naming a
+  # URL the caller never asked for.
+  git -C "$DIR" remote set-url origin "$REPO"
   git -C "$DIR" fetch --quiet origin "$REF"
   git -C "$DIR" checkout --quiet -B "$REF" "origin/$REF"
 else
@@ -171,6 +177,8 @@ if (-not (Get-Command uv -ErrorAction SilentlyContinue)) {{
 }}
 
 if (Test-Path (Join-Path $dir '.git')) {{
+  # The repo we were given, not the one this clone happened to be made with.
+  git -C $dir remote set-url origin $repo
   git -C $dir fetch --quiet origin $ref
   git -C $dir checkout --quiet -B $ref "origin/$ref"
 }} else {{
