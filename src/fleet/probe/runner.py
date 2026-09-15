@@ -177,10 +177,22 @@ def _posix_remote(env: dict | None) -> str:
     prefix = " ".join(f"{k}={shlex.quote(v)}" for k, v in (env or {}).items())
     if local_platform() != WINDOWS:
         return f"{prefix} sh -s".strip()
+    # The script's own output is collected on the far side and sent back afterwards,
+    # which is the part that actually matters. Something the probe starts outlives it
+    # holding whatever stdout it was given: with the ssh channel that keeps the session
+    # open and the probe times out having printed most of its answer, and with a file it
+    # finishes in 0.4s. Handing the children a file means only `cat` ever writes to the
+    # channel, and `cat` exits.
+    #
+    # stdout and stderr stay separate through the round trip -- the caller classifies on
+    # stderr, and OpenSSH 10.x writes post-quantum warnings there.
+    #
     # `$$` is the remote shell's pid, so two probes of one host cannot collide, and the
-    # file goes whatever `mktemp` says rather than assuming /tmp is writable.
+    # file goes wherever `mktemp` says rather than assuming /tmp is writable.
     return (f'f=$(mktemp 2>/dev/null || echo /tmp/.fleet-probe.$$); cat > "$f"; '
-            f'{prefix} sh "$f"; rc=$?; rm -f "$f"; exit $rc').strip()
+            f'{prefix} sh "$f" > "$f.out" 2> "$f.err"; rc=$?; '
+            f'cat "$f.out"; cat "$f.err" >&2; '
+            f'rm -f "$f" "$f.out" "$f.err"; exit $rc').strip()
 
 
 def _spawn(argv: list[str], payload: bytes, timeout: float,
