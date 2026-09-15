@@ -76,6 +76,10 @@ these either refuse or file a request for the center to act on later.
 - `{cmd} sync` -- the sweep: enrol anything not yet enrolled, install and remove keys,
   and collect telemetry. Rarely needed now: a grant applies itself, and machines refresh
   from the center on their own. Reach for it to retry something left pending
+- `{cmd} sync --from URL` -- run on a machine the center cannot reach, to dial the
+  center instead. A machine learns where the center is only when the center reaches it,
+  so one behind a firewall, or on a path that fails in that direction, is a full member
+  with no way to find it. This is the way in. Ask the user for the address
 - `{cmd} center --listen` -- serve the fleet so machines refresh themselves instead of
   waiting to be swept. Long-running: tell the user to run it, do not start it yourself
 - `{cmd} center NAME` -- hand the role over; the successor then runs

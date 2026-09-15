@@ -187,6 +187,57 @@ def ensure_fresh(*, force: bool = False) -> None:
     acl.note_center_seen()
     acl.note_center_url(note["center_url"] or url)
 
+def join(url: str) -> str:
+    """Dial a center at an address given by hand, and remember it. Returns a summary.
+
+    `ensure_fresh` cannot start on its own: it needs the center's address *and* the
+    center's key, and both only ever arrive in a sealed envelope the center delivers by
+    dialling out. A machine that can reach the listener but has never been swept is
+    therefore stuck -- pinned in the access list, holding the center's key, a member in
+    every sense the center cares about, and with no way to find it. This is the way in
+    that does not need the center to reach us, which is the whole point of it listening.
+
+    The trust is the trust the fleet already makes. If we have pinned a center, the reply
+    must be signed by it. If we have not, first contact pins whoever answered -- and the
+    address came from the person running the command, not from the network. The center
+    still decides whether to answer: it refuses a signer it has not pinned, so this
+    cannot talk a fleet into admitting a machine it has not already admitted.
+    """
+    from .errors import FleetError
+
+    try:
+        payload = acl.seal(inv.dumps(inv.load()), telemetry=telemetry_to_relay())
+    except Exception as exc:
+        raise FleetError(f"this machine has no fleet key to introduce itself with: {exc}")
+
+    body = post(url, payload, timeout=20.0)
+    if body is None:
+        raise FleetError(f"no answer from {url}")
+
+    pinned = acl.trusted_center_pubkey()
+    try:
+        if not pinned:
+            acl.unseal_first_contact(body)         # pins whoever answered
+            pinned = acl.trusted_center_pubkey()
+        note = acl.unseal(body, pinned)
+    except acl.AccessError as exc:
+        raise FleetError(f"the answer from {url} is not one we can trust: {exc}")
+
+    try:
+        incoming = inv.loads(note["inventory"])
+    except Exception as exc:
+        raise FleetError(f"unreadable inventory from {url}: {exc}")
+
+    _, changes = inv.update(lambda current: inv.merge(current, incoming,
+                                                     authoritative=True))
+    if note["telemetry"]:
+        record_relayed(note["telemetry"])
+    acl.note_center_seen()
+    # Whatever the center says to use from now on, falling back to what was typed.
+    acl.note_center_url(note["center_url"] or url)
+    return f"joined: {len(incoming)} machine(s) known, {changes} changed"
+
+
 def file_request(current, target: str, allow: str, user: str) -> None:
     """Ask the center for an edge we cannot create ourselves.
 

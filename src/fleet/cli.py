@@ -648,6 +648,9 @@ def cmd_update(name: str = typer.Argument(None, help="defaults to this machine")
 @app.command("sync")
 def cmd_sync(serve: bool = typer.Option(False, "--serve",
                                         help="run on the center: merge stdin, print the result"),
+             from_url: str = typer.Option(None, "--from", metavar="URL",
+                                          help="dial a center at this address and "
+                                               "remember it, when it cannot reach you"),
              json_out: bool = typer.Option(False, "--json")):
     """Merge this machine's inventory with the center's.
 
@@ -656,6 +659,14 @@ def cmd_sync(serve: bool = typer.Option(False, "--serve",
 
     [dim]Example:[/dim]  fleet sync
     """
+    if from_url:
+        # Before the center check: this is for a machine that cannot be reached *by* the
+        # center, and it is the only way in for one that has never been swept.
+        with _as_exit():
+            summary = _sync.join(from_url)
+        console.print(f"[green]✓[/green] {summary}")
+        return
+
     if serve:
 
         raw = sys.stdin.read()

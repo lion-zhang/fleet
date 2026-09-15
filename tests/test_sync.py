@@ -7,6 +7,12 @@ silently eats a device you spent an evening onboarding.
 
 from __future__ import annotations
 
+import subprocess
+
+import pytest
+
+from fleet import config
+
 from fleet.state.inventory import merge, touch
 from fleet.models import Device, Kind
 from fleet.ops import identity
@@ -576,3 +582,81 @@ def test_an_ordinary_merge_still_unions():
 
     merged, _ = inv.merge([mine], [theirs])
     assert {e["target"] for e in merged[0].endpoints} == {"lan", "mesh"}
+
+
+# ------------------------------------------- dialling a center that cannot reach us
+
+def test_a_machine_the_center_cannot_reach_can_dial_it_instead(tmp_path, monkeypatch):
+    """`ensure_fresh` needs the center's address *and* its key, and both only ever
+    arrive in an envelope the center delivers by dialling out. A machine that can reach
+    the listener but has never been swept is stuck: pinned in the access list, a member
+    in every sense the center cares about, and with no way to find it. Found on a real
+    machine whose ssh path from the center had failed."""
+    from fleet.state import access as acl
+    from fleet.state import inventory as inv
+    from fleet.ops import sync
+    from fleet.models import Device, Kind
+
+    key = tmp_path / "id_ed25519"
+    subprocess.run(["ssh-keygen", "-t", "ed25519", "-N", "", "-q", "-f", str(key)],
+                   check=True)
+    monkeypatch.setattr(config, "FLEET_KEY", key)
+    monkeypatch.setattr(inv, "INVENTORY_PATH", tmp_path / "inventory.yaml")
+    for n in ("ACCESS_PATH", "CACHE_PATH", "LEDGER_PATH", "OUTBOX_PATH"):
+        monkeypatch.setattr(acl, n, tmp_path / getattr(acl, n).name)
+    inv.save([Device(id="id:me", name="me", kind=Kind.PERMANENT)], inv.INVENTORY_PATH)
+
+    assert acl.center_url() == "", "precondition: it does not know where the center is"
+
+    # what the center would answer, sealed with its own key
+    centre_key = tmp_path / "centre_ed25519"
+    subprocess.run(["ssh-keygen", "-t", "ed25519", "-N", "", "-q", "-f", str(centre_key)],
+                   check=True)
+    theirs = inv.dumps([Device(id="id:hub", name="hub", kind=Kind.PERMANENT),
+                        Device(id="id:me", name="me", kind=Kind.PERMANENT)])
+    reply = acl.seal(theirs, key_path=centre_key,
+                     center_url="http://hub.example:7373/sync")
+    monkeypatch.setattr(sync, "post", lambda url, payload, **k: reply)
+
+    summary = sync.join("http://typed-by-hand:7373/sync")
+
+    assert "hub" in {d.name for d in inv.load()}, "the center's inventory did not land"
+    assert acl.center_url() == "http://hub.example:7373/sync", \
+        "it must remember where to ask next time, as the center names it"
+    assert acl.trusted_center_pubkey().strip() == \
+        centre_key.with_suffix(".pub").read_text().strip(), "the center was not pinned"
+    assert "machine" in summary
+
+
+def test_dialling_refuses_an_answer_it_cannot_trust(tmp_path, monkeypatch):
+    """Once a center is pinned, an answer from anywhere else is refused -- the typed
+    address selects who to ask, never who to believe."""
+    from fleet.state import access as acl
+    from fleet.state import inventory as inv
+    from fleet.ops import sync
+    from fleet.ops.errors import FleetError
+    from fleet.models import Device, Kind
+
+    key = tmp_path / "id_ed25519"
+    subprocess.run(["ssh-keygen", "-t", "ed25519", "-N", "", "-q", "-f", str(key)],
+                   check=True)
+    monkeypatch.setattr(config, "FLEET_KEY", key)
+    monkeypatch.setattr(inv, "INVENTORY_PATH", tmp_path / "inventory.yaml")
+    for n in ("ACCESS_PATH", "CACHE_PATH", "LEDGER_PATH", "OUTBOX_PATH"):
+        monkeypatch.setattr(acl, n, tmp_path / getattr(acl, n).name)
+    inv.save([Device(id="id:me", name="me", kind=Kind.PERMANENT)], inv.INVENTORY_PATH)
+
+    real = tmp_path / "real_ed25519"
+    impostor = tmp_path / "impostor_ed25519"
+    for k in (real, impostor):
+        subprocess.run(["ssh-keygen", "-t", "ed25519", "-N", "", "-q", "-f", str(k)],
+                       check=True)
+    acl.pin_center_pubkey(real.with_suffix(".pub").read_text())
+
+    forged = acl.seal(inv.dumps([Device(id="id:evil", name="evil", kind=Kind.PERMANENT)]),
+                      key_path=impostor)
+    monkeypatch.setattr(sync, "post", lambda url, payload, **k: forged)
+
+    with pytest.raises(FleetError):
+        sync.join("http://wherever:7373/sync")
+    assert "evil" not in {d.name for d in inv.load()}
