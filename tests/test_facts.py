@@ -622,10 +622,22 @@ def test_no_remote_script_goes_through_text_mode():
     offenders = []
     for path in src.rglob("*.py"):
         tree = ast.parse(path.read_text())
+        # A parameter already declared `bytes` and forwarded onward is bytes by
+        # construction -- that is the one ssh runner every caller goes through, and its
+        # callers are still checked normally.
+        forwarded = set()
+        for fn in ast.walk(tree):
+            if isinstance(fn, ast.FunctionDef):
+                for arg in list(fn.args.args) + list(fn.args.kwonlyargs):
+                    if arg.annotation and "bytes" in ast.unparse(arg.annotation):
+                        forwarded.add(arg.arg)
         for node in ast.walk(tree):
             if not isinstance(node, ast.Call):
                 continue
             for kw in node.keywords:
+                if kw.arg == "input" and isinstance(kw.value, ast.Name) \
+                        and kw.value.id in forwarded:
+                    continue
                 if kw.arg == "input" and not is_bytes(kw.value):
                     offenders.append(f"{path.name}:{kw.value.lineno}: "
                                      f"input={ast.unparse(kw.value)}")
@@ -728,3 +740,59 @@ def test_a_settled_fleet_still_hands_the_inventory_round(tmp_path, monkeypatch):
 
     assert CliRunner().invoke(cli.app, ["sync"]).exit_code == 0
     assert handed == ["1.2.3.4"]
+
+
+def test_no_ssh_is_spawned_with_a_pipe_for_stdout():
+    """Windows OpenSSH's ssh.exe hangs when its stdin or its stdout is an anonymous
+    pipe -- for good, with no output and no CPU. Measured on the Windows center after it
+    could not reach a single machine: same command, same host, same key, stdout to a pipe
+    timed out every time and stdout to a file returned in 0.2s with exit status 0.
+
+    That is why a sweep from there reached nothing while `fleet ls` looked healthy: the
+    reads came from cache and every write was an ssh that never returned.
+
+    So every ssh goes through `ssh.cmd.run` or the probe's `_spawn`, both of which use
+    real files on Windows. A source guard, because the failure is invisible on the only
+    platform that has it and nothing in a POSIX test run would ever notice."""
+    import ast
+    import pathlib
+
+    src = pathlib.Path(__file__).resolve().parent.parent / "src" / "fleet"
+    allowed = {"cmd.py", "runner.py"}          # the two that know about the files
+    builders = ("build_argv", "build_enroll_argv", "build_install_argv")
+    offenders = []
+    for path in src.rglob("*.py"):
+        if path.name in allowed:
+            continue
+        tree = ast.parse(path.read_text())
+        for fn in ast.walk(tree):
+            if not isinstance(fn, ast.FunctionDef):
+                continue
+            # names in this function that hold an argv built from an endpoint -- which
+            # is what makes it an ssh invocation rather than schtasks or ssh-keygen
+            ssh_argv = set()
+            for node in ast.walk(fn):
+                if isinstance(node, ast.Assign) and isinstance(node.value, ast.Call):
+                    called = ast.unparse(node.value.func)
+                    if called in builders:
+                        for tgt in node.targets:
+                            if isinstance(tgt, ast.Name):
+                                ssh_argv.add(tgt.id)
+            for node in ast.walk(fn):
+                if not isinstance(node, ast.Call):
+                    continue
+                name = ast.unparse(node.func)
+                if name not in ("subprocess.run", "subprocess.Popen") or not node.args:
+                    continue
+                first = node.args[0]
+                built = (isinstance(first, ast.Name) and first.id in ssh_argv) or (
+                    isinstance(first, ast.Call) and ast.unparse(first.func) in builders) or (
+                    isinstance(first, ast.BinOp) and any(
+                        isinstance(sub, ast.Call) and ast.unparse(sub.func) in builders
+                        for sub in ast.walk(first)))
+                if built:
+                    offenders.append(f"{path.name}:{node.lineno}: "
+                                     f"{name}({ast.unparse(first)})")
+    assert not offenders, (
+        "these spawn ssh directly and will hang on a Windows center -- route them "
+        "through ssh.cmd.run:\n" + "\n".join(offenders))

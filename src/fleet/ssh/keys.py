@@ -23,7 +23,7 @@ from contextlib import suppress
 from pathlib import Path
 
 from ..config import FLEET_KEY
-from .cmd import Endpoint, build_enroll_argv
+from .cmd import Endpoint, build_enroll_argv, run as sshrun
 
 # sshd's prompt varies ("Password:", "root@host's password:", a PAM phrasing), so match
 # the one word they reliably share, case-insensitively.
@@ -320,8 +320,7 @@ def install_key_over_existing_access(ep: Endpoint, pubkey: str, *,
     there to fill in. That is what makes it safe to try first, and safe for an agent.
     """
     def run(command: str) -> tuple[int, str]:
-        proc = subprocess.run(build_enroll_argv(ep) + [command],
-                              capture_output=True, text=True, timeout=timeout)
+        proc = sshrun(build_enroll_argv(ep) + [command], text=True, timeout=timeout)
         return proc.returncode, proc.stdout + proc.stderr
     try:
         return _append_pubkey(run, pubkey)

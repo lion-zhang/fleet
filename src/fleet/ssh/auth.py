@@ -18,6 +18,7 @@ network.
 from __future__ import annotations
 
 import re
+from .cmd import run as sshrun
 
 # Servers that authorize from their own policy rather than authorized_keys.
 #
@@ -67,7 +68,7 @@ def probe_server(ep, *, timeout: int = 8) -> str:
     argv.append(f"{ep.user}@{ep.target}" if ep.user else ep.target)
     argv.append("true")
     try:
-        p = subprocess.run(argv, capture_output=True, text=True, timeout=timeout + 5)
+        p = sshrun(argv, text=True, timeout=timeout + 5)
     except (OSError, subprocess.SubprocessError):
         return ""
     return server_identity(p.stderr)

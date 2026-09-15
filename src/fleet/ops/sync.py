@@ -24,7 +24,7 @@ from ..state import inventory as inv
 from ..state import store
 from ..config import DEFAULT_PORT, load_config
 from ..models import Status
-from ..ssh.cmd import build_argv
+from ..ssh.cmd import build_argv, run as sshrun
 from ..ui import console
 
 def center_advertise_url(acc, port: int = 0) -> str:
@@ -78,7 +78,7 @@ def send_sealed(ep, sealed: str) -> tuple[int, str]:
     # `fleet install` puts fleet.
     remote = 'sh -lc \'PATH="$HOME/.local/bin:$PATH" fleet sync --serve\''
     argv = build_argv(ep, remote=remote)
-    p = subprocess.run(argv, input=sealed.encode(), capture_output=True, timeout=180)
+    p = sshrun(argv, input=sealed.encode(), timeout=180)
     out = p.stdout.decode(errors="replace")
     return p.returncode, (out if p.returncode == 0 else out + p.stderr.decode(errors="replace"))
 

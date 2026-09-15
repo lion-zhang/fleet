@@ -12,6 +12,7 @@ import os
 import shlex
 import subprocess
 import sys
+from pathlib import Path
 from dataclasses import dataclass, field
 
 from ..config import FLEET_KEY
@@ -144,6 +145,54 @@ def resolve(parsed: ParsedSsh, *, timeout: float = 10.0) -> Endpoint:
         identity=identity,
         jump=cfg.get("proxyjump", "") if cfg.get("proxyjump", "none") != "none" else "",
     )
+
+
+
+def run(argv: list[str], *, input: bytes | None = None, timeout: float | None = None,
+        text: bool = False, env: dict | None = None) -> subprocess.CompletedProcess:
+    """Run an ssh invocation and capture what it said.
+
+    Every ssh fleet spawns goes through here, because on Windows `capture_output=True`
+    does not work: **ssh.exe hangs when its stdin or its stdout is an anonymous pipe**,
+    and hangs for good -- no timeout of its own, no output, no CPU.
+
+    Measured on the Windows center rather than inferred, after it could not reach a
+    single machine. The same command, same host, same key: stdout to a pipe timed out
+    every time; stdout to a file returned in 0.2s with `debug1: Exit status 0`. stderr on
+    a pipe is fine; stdin as a pipe hangs it too, so a 24KB envelope only crossed once
+    both ends were files.
+
+    That is why the center's sweep reached nothing while `fleet ls` on the same box
+    looked healthy -- the reads came from cache, and every write was an ssh that never
+    returned. POSIX keeps the ordinary pipes; it has no such problem and the temp files
+    would only be litter.
+    """
+    if local_platform() != WINDOWS:
+        return subprocess.run(argv, input=input, capture_output=True, timeout=timeout,
+                              text=text, env=env)
+
+    import tempfile
+
+    with tempfile.TemporaryDirectory() as scratch:
+        out_path = Path(scratch) / "stdout"
+        err_path = Path(scratch) / "stderr"
+        in_path = Path(scratch) / "stdin"
+        if input is not None:
+            in_path.write_bytes(input)
+        stdin = in_path.open("rb") if input is not None else subprocess.DEVNULL
+        try:
+            with out_path.open("wb") as out, err_path.open("wb") as err:
+                proc = subprocess.run(argv, stdin=stdin, stdout=out, stderr=err,
+                                      timeout=timeout, env=env)
+        finally:
+            if input is not None:
+                stdin.close()
+        raw_out, raw_err = out_path.read_bytes(), err_path.read_bytes()
+
+    if text:
+        raw_out = raw_out.decode(errors="replace")
+        raw_err = raw_err.decode(errors="replace")
+    return subprocess.CompletedProcess(argv, proc.returncode, raw_out, raw_err)
 
 
 def resolve_command(cmd: str, *, timeout: float = 10.0) -> Endpoint:

@@ -63,6 +63,7 @@ from .render.top import (Schedule, device_lines, disk_cell, gpu_cells_compact,
 from .render.view import Detail, auth_of, device_view, fleet_view, matches_tag
 from .serve import serve as serve_center
 from .ssh.cmd import (build_argv, local_platform, local_shell_argv, remote_command,
+                      run as sshrun,
                       remote_platform, resolve_command)
 from .ssh.keys import (ensure_keypair, install_key, install_key_over_existing_access,
                        pty_available)
@@ -464,8 +465,7 @@ def configured_repo() -> str:
 def run_installer(ep, script: str, *, forward_agent: bool = True,
                   platform: str = "") -> tuple[int, str]:
     argv = build_install_argv(ep, forward_agent=forward_agent, platform=platform)
-    p = subprocess.run(argv, input=payload_for(script, platform),
-                       capture_output=True, timeout=900)
+    p = sshrun(argv, input=payload_for(script, platform), timeout=900)
     return p.returncode, (p.stdout + p.stderr).decode(errors="replace")
 
 
@@ -936,7 +936,7 @@ def cmd_probe(name: str = typer.Argument(None, help="defaults to this machine"),
     if raw:
         argv = build_argv(sorted(eps, key=lambda e: e.preference)[0],
                           remote="sh -s", env=probe_env(dev.probe_mode, dev.disk_paths))
-        p = subprocess.run(argv, input=PAYLOAD.read_bytes(), capture_output=True)
+        p = sshrun(argv, input=PAYLOAD.read_bytes())
         sys.stdout.write(p.stdout.decode(errors="replace"))
         raise typer.Exit(0 if p.returncode == 0 else 1)
     res = run_probe(sorted(eps, key=lambda e: e.preference)[0], mode=dev.probe_mode,

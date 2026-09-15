@@ -16,6 +16,7 @@ import base64
 import shlex
 import subprocess
 import time
+from contextlib import suppress
 from pathlib import Path
 
 from ..models import ProbeResult, Snapshot, Status
@@ -159,6 +160,52 @@ def run_probe_local(*, mode: str = "full", disk_paths: list[str] | None = None,
                        latency_ms=elapsed)
 
 
+def _spawn(argv: list[str], payload: bytes, timeout: float,
+           popen_kw: dict) -> tuple[int, bytes, bytes]:
+    """Start the probe, feed it the script, and collect what came back.
+
+    Two shapes, because Windows needs one. **ssh.exe hangs when its stdin or its stdout
+    is an anonymous pipe** -- for good, with no output and no CPU -- so on Windows the
+    script goes in through a real file and the answers come back out of real files.
+    Measured on the Windows center after it could not reach a single machine: the same
+    command with stdout to a pipe timed out every time, and with stdout to a file
+    returned in 0.2s.
+
+    The process group survives either way. It is what `_kill` needs to take down ssh and
+    everything it started when a host stops answering mid-probe, and losing it would
+    leave those behind on every timeout.
+    """
+    if not IS_WINDOWS:
+        proc = subprocess.Popen(argv, stdin=subprocess.PIPE, stdout=subprocess.PIPE,
+                                stderr=subprocess.PIPE, **popen_kw)
+        try:
+            out, err = proc.communicate(payload, timeout=timeout)
+        except subprocess.TimeoutExpired:
+            _kill(proc)
+            with suppress(subprocess.TimeoutExpired):
+                proc.communicate(timeout=2)
+            raise
+        return proc.returncode, out, err
+
+    import tempfile
+
+    with tempfile.TemporaryDirectory() as scratch:
+        root = Path(scratch)
+        (root / "stdin").write_bytes(payload)
+        out_path, err_path = root / "stdout", root / "stderr"
+        with (root / "stdin").open("rb") as si, out_path.open("wb") as so, \
+                err_path.open("wb") as se:
+            proc = subprocess.Popen(argv, stdin=si, stdout=so, stderr=se, **popen_kw)
+            try:
+                proc.wait(timeout=timeout)
+            except subprocess.TimeoutExpired:
+                _kill(proc)
+                with suppress(subprocess.TimeoutExpired):
+                    proc.wait(timeout=2)
+                raise
+        return proc.returncode, out_path.read_bytes(), err_path.read_bytes()
+
+
 def run_probe(ep: Endpoint, *, mode: str = "full", timeout: float = 20.0,
               connect_timeout: int = 8, multiplex: bool = True,
               disk_paths: list[str] | None = None) -> ProbeResult:
@@ -209,24 +256,17 @@ def _run_probe_once(ep: Endpoint, *, mode: str = "full", timeout: float = 20.0,
     # verbatim and a Windows one sent it CRLF, and the far-side `sh` answered
     # `Syntax error: "|" unexpected`. There is no `newline=` on Popen to ask for
     # otherwise, so the script is encoded here and the output decoded back.
-    popen_kw: dict = {"stdin": subprocess.PIPE, "stdout": subprocess.PIPE,
-                      "stderr": subprocess.PIPE}
+    popen_kw: dict = {}
     if IS_WINDOWS:
         popen_kw["creationflags"] = subprocess.CREATE_NEW_PROCESS_GROUP  # type: ignore[attr-defined]
     else:
         popen_kw["start_new_session"] = True
 
-    proc = subprocess.Popen(argv, **popen_kw)
     try:
-        raw_out, raw_err = proc.communicate(payload.encode(), timeout=timeout)
+        rc, raw_out, raw_err = _spawn(argv, payload.encode(), timeout, popen_kw)
         stdout = raw_out.decode(errors="replace")
         stderr = raw_err.decode(errors="replace")
     except subprocess.TimeoutExpired:
-        _kill(proc)
-        try:
-            proc.communicate(timeout=2)
-        except subprocess.TimeoutExpired:
-            pass
         elapsed = int((time.monotonic() - started) * 1000)
         return ProbeResult(status=Status.TIMEOUT, error_class="timeout",
                            error_detail=f"no response within {timeout:.0f}s",
@@ -235,7 +275,7 @@ def _run_probe_once(ep: Endpoint, *, mode: str = "full", timeout: float = 20.0,
     elapsed = int((time.monotonic() - started) * 1000)
     # stdout and stderr are kept separate on purpose: OpenSSH 10.x writes post-quantum
     # warnings to stderr, and merging them would corrupt the line protocol.
-    if proc.returncode != 0 and not stdout.strip():
+    if rc != 0 and not stdout.strip():
         status, detail = classify_stderr(stderr)
         return ProbeResult(status=status, error_class=status.value, error_detail=detail,
                            endpoint_used=ep.name, latency_ms=elapsed,

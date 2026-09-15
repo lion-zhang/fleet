@@ -23,6 +23,7 @@ import yaml
 from .state import access as acc_mod
 from .state.access import Access, AccessError
 from .ssh.authkeys import sync_command
+from .ssh.cmd import run as sshrun
 from .ssh.cmd import Endpoint, build_argv
 
 
@@ -110,8 +111,7 @@ def _remote(ep: Endpoint, script: str, *, platform: str = "posix",
         # would have been replaced by the block alone, losing every key we did not
         # write. The promise never to touch a line outside our own block depends on the
         # script arriving intact.
-        p = subprocess.run(argv, input=script.encode(), capture_output=True,
-                           timeout=timeout)
+        p = sshrun(argv, input=script.encode(), timeout=timeout)
     except subprocess.TimeoutExpired:
         return False, "timed out"
     except OSError as exc:
