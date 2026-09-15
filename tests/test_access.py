@@ -303,3 +303,28 @@ def test_signing_and_verifying_cannot_hang_forever():
     assert runs, "expected ssh-keygen to be run from here"
     for node in runs:
         assert "timeout" in {k.arg for k in node.keywords},             f"line {node.lineno}: no timeout"
+
+
+def test_a_large_envelope_still_signs_and_verifies():
+    """Windows OpenSSH's ssh-keygen stops reading stdin past about 8KB and then never
+    exits -- 8192 bytes signed instantly, 20000 hung, pipe or real file alike. A sealed
+    envelope is an inventory plus telemetry, about 20KB on a fleet of eight, so the
+    center could not sign at all. Signing a file has no such limit.
+
+    Round-tripped rather than asserted on the command line, because what matters is that
+    a spoke can still check what the center produced."""
+    import subprocess
+    import tempfile
+    from pathlib import Path
+
+    with tempfile.TemporaryDirectory() as d:
+        key = Path(d) / "id_ed25519"
+        subprocess.run(["ssh-keygen", "-t", "ed25519", "-N", "", "-q", "-f", str(key)],
+                       check=True)
+        pub = key.with_suffix(".pub").read_text()
+        body = "machines:\n" + ("  - name: filler-machine-with-a-longish-line\n" * 600)
+        assert len(body) > 20_000, "the point is a payload past the stdin ceiling"
+
+        signature = access.sign(body, key)
+        assert access.verify(body, signature, pub)
+        assert not access.verify(body + "tampered", signature, pub)

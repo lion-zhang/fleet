@@ -275,19 +275,34 @@ def sign(payload: str, key_path: Path | None = None) -> str:
     authenticates *a* peer, not *the* center. The signature is what makes the claim
     checkable, and it keeps being checkable if the transport ever changes.
     """
+    import tempfile
+
     key_path = key_path or config.FLEET_KEY
-    try:
-        p = _keygen(["ssh-keygen", "-Y", "sign", "-f", str(key_path),
-                     "-n", SIGN_NAMESPACE, "-"], payload)
-    except FileNotFoundError as exc:
-        raise AccessError("ssh-keygen not found -- install OpenSSH") from exc
-    except subprocess.TimeoutExpired as exc:
-        raise AccessError("ssh-keygen did not return while signing") from exc
-    except subprocess.CalledProcessError as exc:
-        raise AccessError(
-            f"could not sign: {(exc.stderr or b'').decode(errors='replace').strip()[:200]}"
-        ) from exc
-    return p.stdout.decode()
+    with tempfile.TemporaryDirectory() as scratch:
+        # Signed as a *file*, never over stdin. Windows OpenSSH's ssh-keygen stops
+        # reading stdin somewhere past 8KB and then never exits: 8192 bytes signed in
+        # under a tenth of a second and 20000 hung indefinitely, whether stdin was a pipe
+        # or a real file. A sealed envelope is an inventory plus telemetry -- about 20KB
+        # on a fleet of eight -- so a Windows center could not sign at all, and presented
+        # as a sweep that printed one line and stopped. The file form has no such limit.
+        data = Path(scratch) / "payload"
+        data.write_bytes(payload.encode())     # bytes: CRLF here would be signed, and no
+        sig = Path(scratch) / "payload.sig"    # spoke ever sees CRLF to check against
+        try:
+            subprocess.run(["ssh-keygen", "-Y", "sign", "-f", str(key_path),
+                            "-n", SIGN_NAMESPACE, str(data)],
+                           capture_output=True, check=True, timeout=60)
+        except FileNotFoundError as exc:
+            raise AccessError("ssh-keygen not found -- install OpenSSH") from exc
+        except subprocess.TimeoutExpired as exc:
+            raise AccessError("ssh-keygen did not return while signing") from exc
+        except subprocess.CalledProcessError as exc:
+            raise AccessError(
+                f"could not sign: {(exc.stderr or b'').decode(errors='replace').strip()[:200]}"
+            ) from exc
+        if not sig.exists():
+            raise AccessError("ssh-keygen wrote no signature")
+        return sig.read_text()
 
 
 def verify(payload: str, signature: str, signer_pubkey: str) -> bool:
