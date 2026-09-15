@@ -329,3 +329,95 @@ def test_gitattributes_pins_the_payload_line_endings():
     assert attrs.exists(), "nothing stops the next Windows clone reintroducing CRLF"
     text = attrs.read_text()
     assert "eol=lf" in text and ".sh" in text
+
+
+# ------------------------------------------------- one remote form, every platform
+
+def test_the_remote_form_does_not_branch_on_the_probing_platform():
+    """It used to. A second path exercised only on the platform nobody runs the tests on
+    is how the CRLF and the ssh-pipe bugs both survived as long as they did."""
+    import inspect
+
+    from fleet.probe import runner
+
+    src = inspect.getsource(runner._posix_remote)
+    body = "\n".join(l for l in src.splitlines() if not l.strip().startswith("#"))
+    assert "local_platform" not in body, "the remote form branches on the caller's OS"
+    assert "IS_WINDOWS" not in body
+
+
+def test_the_script_never_arrives_on_stdin_and_never_writes_to_the_channel():
+    """Two properties, both found the hard way on a Windows center.
+
+    The script cannot arrive on stdin: ssh.exe will not take a pipe for stdin, so it
+    comes from a file, and a seekable stdin changes how `sh -s` reads it -- the identical
+    bytes ran to completion as a file and stalled part way on stdin.
+
+    Its output cannot go straight down the channel: something the probe starts outlives
+    it holding whatever stdout it was given, which keeps the session open after the
+    script has finished.
+    """
+    from fleet.probe.runner import _posix_remote
+
+    remote = _posix_remote({"FLEET_MODE": "full"})
+    assert "sh -s" not in remote, "the script must not be read from stdin"
+    assert 'cat > "$f"' in remote, "it is spooled to a file first"
+    assert 'sh "$f" > "$f.out" 2> "$f.err"' in remote, \
+        "the script's own output must land in files, not on the ssh channel"
+    assert 'cat "$f.out"' in remote and 'cat "$f.err" >&2' in remote, \
+        "and be sent back afterwards, with stdout and stderr still separate"
+    assert 'rm -f "$f"' in remote, "nothing is left behind on a machine we do not own"
+    assert "exit $rc" in remote, "the script's own exit status is what the caller sees"
+
+
+def test_a_host_that_cannot_spool_says_so():
+    """`sh -s` needed nothing writable; this needs one temp file. That is a real trade,
+    so it has to fail loudly -- an empty answer reads as a machine with nothing to
+    report."""
+    from fleet.probe.runner import _posix_remote
+
+    remote = _posix_remote(None)
+    assert "cannot write" in remote and ">&2" in remote
+    assert "exit 127" in remote
+
+
+def test_the_environment_reaches_the_probe_not_the_spooling_cat():
+    """build_argv prefixes the whole remote command, which would have set the variables
+    for `cat` and left the probe with none."""
+    from fleet.probe.runner import _posix_remote
+
+    remote = _posix_remote({"FLEET_MODE": "shared", "FLEET_DISK_PATHS": "/a /b"})
+    assert "FLEET_MODE=shared" in remote
+    assert remote.index("cat >") < remote.index("FLEET_MODE=shared"), \
+        "the environment must sit on the sh that runs the probe"
+    assert "FLEET_DISK_PATHS='/a /b'" in remote, "paths with spaces must stay one value"
+
+
+def test_a_windows_host_is_still_detected_when_cmd_exe_exits_zero():
+    """The POSIX remote command spools the script to a temp file before running it, so
+    cmd.exe never reaches the part that would name a missing program. It answers with a
+    single line on stderr -- `The system cannot find the path specified.` -- and exits 0.
+
+    A Windows host therefore looks like a POSIX one that ran and reported nothing, and
+    the PowerShell retry stopped firing: every Windows machine came back `payload
+    produced no '#END'`. Caught on the real fleet, by the center reporting itself broken.
+    """
+    from fleet.models import ProbeResult, Status
+    from fleet.probe.runner import _looks_like_cmd_exe
+
+    cmd_exe = ProbeResult(status=Status.PROBE_ERROR,
+                          error_detail="payload produced no '#END' sentinel",
+                          stderr_tail="The system cannot find the path specified.\r\n")
+    assert _looks_like_cmd_exe(cmd_exe), "the retry will not fire for a Windows host"
+
+    # and the older signature still works, for a host whose shell says so plainly
+    legacy = ProbeResult(status=Status.PROBE_ERROR, error_detail="",
+                         stderr_tail="'sh' is not recognized as an internal or "
+                                     "external command,")
+    assert _looks_like_cmd_exe(legacy)
+
+    # a genuine POSIX failure must not be mistaken for one
+    posix = ProbeResult(status=Status.PROBE_ERROR,
+                        error_detail="payload produced no '#END' sentinel",
+                        stderr_tail="sh: 1: df: not found")
+    assert not _looks_like_cmd_exe(posix)

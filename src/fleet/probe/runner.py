@@ -30,7 +30,13 @@ PAYLOAD_PS1 = Path(__file__).with_name("payload.ps1")
 # What cmd.exe says when handed `sh -s`. The host is up and the key worked; it
 # simply has no POSIX shell, so the same probe is retried in PowerShell.
 _NO_POSIX_SHELL = ("is not recognized as an internal or external command",
-                   "operable program or batch file")
+                   "operable program or batch file",
+                   # cmd.exe's answer to the probe's own remote command, which spools the
+                   # script to a temp file before running it. It never reaches the part
+                   # that would name a missing program, so it says only this -- and says
+                   # it while exiting 0, which is why the retry has to look at a probe
+                   # that "succeeded" with nothing in it.
+                   "the system cannot find the path specified")
 # What the classifier turns those into. Matched as well as the raw text, because
 # classification runs first and would otherwise replace the only signal the retry has --
 # which it did, silently, the first time this was wired up.
@@ -161,38 +167,42 @@ def run_probe_local(*, mode: str = "full", disk_paths: list[str] | None = None,
 
 
 def _posix_remote(env: dict | None) -> str:
-    """How to hand the probe script to `sh` on the far side.
+    """How to hand the probe script to `sh` on the far side. One form, every platform.
 
-    `sh -s` everywhere except from a Windows center, where it does not work. ssh.exe
-    will not take a pipe for stdin, so the script has to arrive from a *file* -- and a
-    seekable stdin changes how `sh -s` reads it: the script ran to completion when
-    written out and executed as a file, and stalled part way when the identical bytes
-    arrived on a seekable stdin. Spooling it to a file on the far side first sidesteps
-    the question entirely, and `cat` does not care whether its stdin can seek.
+    Two things have to be true, and `sh -s` gives neither.
 
-    The environment is carried on the `sh` itself rather than by `build_argv`, which
-    would otherwise prefix the whole compound command and set the variables for the
-    spooling `cat` instead of for the probe.
+    The script must not arrive on stdin. ssh.exe will not take a pipe for stdin, so from
+    a Windows center it has to come from a file -- and a seekable stdin changes how
+    `sh -s` reads it: the identical bytes ran to completion as a file and stalled part
+    way on a seekable stdin.
+
+    The script's output must not go straight down the ssh channel. Something the probe
+    starts outlives it holding whatever stdout it was handed, which keeps the session
+    open after the script has finished -- the probe timed out having already printed
+    most of its answer. Give the children a file and only `cat` writes to the channel,
+    and `cat` exits.
+
+    Both were found on a Windows center, and for a while this was a Windows-only form.
+    It is not any more, because the reason to branch never held up: measured against
+    every machine in a real fleet -- including a Synology NAS, the most constrained
+    target there is -- this returns the same bytes as `sh -s` and returns them faster.
+    A second path that is only exercised on the one platform nobody runs the tests on is
+    how the CRLF and pipe bugs survived as long as they did.
+
+    The cost is one writable temp file, where `sh -s` needed nothing. That is a real
+    trade and the reason it says so out loud when it cannot have one: the alternative is
+    an empty answer that looks like a machine with nothing to report.
     """
     prefix = " ".join(f"{k}={shlex.quote(v)}" for k, v in (env or {}).items())
-    if local_platform() != WINDOWS:
-        return f"{prefix} sh -s".strip()
-    # The script's own output is collected on the far side and sent back afterwards,
-    # which is the part that actually matters. Something the probe starts outlives it
-    # holding whatever stdout it was given: with the ssh channel that keeps the session
-    # open and the probe times out having printed most of its answer, and with a file it
-    # finishes in 0.4s. Handing the children a file means only `cat` ever writes to the
-    # channel, and `cat` exits.
-    #
-    # stdout and stderr stay separate through the round trip -- the caller classifies on
-    # stderr, and OpenSSH 10.x writes post-quantum warnings there.
-    #
     # `$$` is the remote shell's pid, so two probes of one host cannot collide, and the
     # file goes wherever `mktemp` says rather than assuming /tmp is writable.
-    return (f'f=$(mktemp 2>/dev/null || echo /tmp/.fleet-probe.$$); cat > "$f"; '
-            f'{prefix} sh "$f" > "$f.out" 2> "$f.err"; rc=$?; '
-            f'cat "$f.out"; cat "$f.err" >&2; '
-            f'rm -f "$f" "$f.out" "$f.err"; exit $rc').strip()
+    return (
+        'f=$(mktemp 2>/dev/null || echo /tmp/.fleet-probe.$$); '
+        'cat > "$f" || { echo "fleet: cannot write $f" >&2; exit 127; }; '
+        f'{prefix} sh "$f" > "$f.out" 2> "$f.err"; rc=$?; '
+        'cat "$f.out"; cat "$f.err" >&2; '
+        'rm -f "$f" "$f.out" "$f.err"; exit $rc'
+    ).replace("  ", " ").strip()
 
 
 def _spawn(argv: list[str], payload: bytes, timeout: float,
@@ -260,6 +270,13 @@ def run_probe(ep: Endpoint, *, mode: str = "full", timeout: float = 20.0,
 
 
 def _looks_like_cmd_exe(res: ProbeResult) -> bool:
+    """Whether to retry this host in PowerShell.
+
+    Reads stderr even when the probe "succeeded": cmd.exe answers the POSIX remote
+    command with a single line on stderr and an exit status of 0, so a Windows host
+    looks like a POSIX one that ran and reported nothing. Before this, the retry simply
+    never fired and every Windows machine came back `payload produced no '#END'`.
+    """
     haystack = f"{res.error_detail} {res.stderr_tail}".lower()
     return (WINDOWS_DETAIL.lower() in haystack
             or any(sig in haystack for sig in _NO_POSIX_SHELL))
