@@ -160,6 +160,29 @@ def run_probe_local(*, mode: str = "full", disk_paths: list[str] | None = None,
                        latency_ms=elapsed)
 
 
+def _posix_remote(env: dict | None) -> str:
+    """How to hand the probe script to `sh` on the far side.
+
+    `sh -s` everywhere except from a Windows center, where it does not work. ssh.exe
+    will not take a pipe for stdin, so the script has to arrive from a *file* -- and a
+    seekable stdin changes how `sh -s` reads it: the script ran to completion when
+    written out and executed as a file, and stalled part way when the identical bytes
+    arrived on a seekable stdin. Spooling it to a file on the far side first sidesteps
+    the question entirely, and `cat` does not care whether its stdin can seek.
+
+    The environment is carried on the `sh` itself rather than by `build_argv`, which
+    would otherwise prefix the whole compound command and set the variables for the
+    spooling `cat` instead of for the probe.
+    """
+    prefix = " ".join(f"{k}={shlex.quote(v)}" for k, v in (env or {}).items())
+    if local_platform() != WINDOWS:
+        return f"{prefix} sh -s".strip()
+    # `$$` is the remote shell's pid, so two probes of one host cannot collide, and the
+    # file goes whatever `mktemp` says rather than assuming /tmp is writable.
+    return (f'f=$(mktemp 2>/dev/null || echo /tmp/.fleet-probe.$$); cat > "$f"; '
+            f'{prefix} sh "$f"; rc=$?; rm -f "$f"; exit $rc').strip()
+
+
 def _spawn(argv: list[str], payload: bytes, timeout: float,
            popen_kw: dict) -> tuple[int, bytes, bytes]:
     """Start the probe, feed it the script, and collect what came back.
@@ -249,7 +272,7 @@ def _run_probe_once(ep: Endpoint, *, mode: str = "full", timeout: float = 20.0,
     else:
         payload = PAYLOAD.read_text()
         argv = build_argv(ep, connect_timeout=connect_timeout, multiplex=multiplex,
-                          remote="sh -s", env=env)
+                          remote=_posix_remote(env), env=None)
     started = time.monotonic()
     # Bytes, not text. `text=True` wraps stdin in a TextIOWrapper with newline=None,
     # which rewrites every \n to \r\n on Windows -- so a POSIX center sent payload.sh
