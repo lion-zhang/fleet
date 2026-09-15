@@ -600,20 +600,35 @@ def test_no_remote_script_goes_through_text_mode():
     ever sees, so every verify would fail).
 
     A source guard rather than a behaviour test: the next `input=` added without
-    `.encode()` is the one that breaks a fleet nobody is watching."""
+    `.encode()` is the one that breaks a fleet nobody is watching.
+
+    Over the AST rather than the text. It used to scan lines for `input=`, which meant
+    prose describing the hazard tripped the guard against it."""
+    import ast
     import pathlib
-    import re
+
+    def is_bytes(node) -> bool:
+        if isinstance(node, ast.Constant):
+            return isinstance(node.value, bytes)
+        if isinstance(node, ast.Call):
+            fn = node.func
+            if isinstance(fn, ast.Attribute) and fn.attr in ("encode", "read_bytes"):
+                return True
+            if isinstance(fn, ast.Name) and fn.id in ("payload_for", "bytes"):
+                return True
+        return False
 
     src = pathlib.Path(__file__).resolve().parent.parent / "src" / "fleet"
     offenders = []
     for path in src.rglob("*.py"):
-        for n, line in enumerate(path.read_text().splitlines(), 1):
-            # `payload_for` is the installer's byte source -- it returns base64 for
-            # Windows and encoded sh for POSIX, and test_install asserts both are bytes.
-            if re.search(r"\binput=", line) and ".encode()" not in line \
-                    and "read_bytes()" not in line and "payload_for(" not in line \
-                    and not line.lstrip().startswith("#"):
-                offenders.append(f"{path.name}:{n}: {line.strip()}")
+        tree = ast.parse(path.read_text())
+        for node in ast.walk(tree):
+            if not isinstance(node, ast.Call):
+                continue
+            for kw in node.keywords:
+                if kw.arg == "input" and not is_bytes(kw.value):
+                    offenders.append(f"{path.name}:{kw.value.lineno}: "
+                                     f"input={ast.unparse(kw.value)}")
     assert not offenders, "remote payloads must be bytes:\n" + "\n".join(offenders)
 
 

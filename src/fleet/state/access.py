@@ -239,6 +239,34 @@ def is_center(acc: Access | None = None, *, key_path: Path | None = None) -> boo
 
 # ------------------------------------------------------------------------- signing
 
+def _keygen(argv: list[str], payload: str, *, timeout: int = 60):
+    """Run ssh-keygen with `payload` on stdin, fed from a real file rather than a pipe.
+
+    Not `input=`, which hands it an anonymous pipe. On a Windows center OpenSSH's
+    ssh-keygen never returns when stdin is a pipe -- it does not read to EOF and does not
+    exit, so `subprocess.run` waits forever on reader threads that never see the pipe
+    close. Measured, not inferred: signing 100 bytes hung indefinitely, and the identical
+    command with stdin redirected from a file returned in under a tenth of a second.
+
+    It applied to `sign` and `verify` alike, so a Windows center could neither seal a
+    reply nor check an envelope a spoke had sent it -- and with no timeout anywhere, both
+    presented as a sweep that simply stopped. The timeout here is the second half of
+    that: whatever else goes wrong, it must end.
+
+    Bytes, and a file written in binary. Text mode would hand ssh-keygen CRLF on a
+    Windows center, so the signature would cover bytes no spoke ever sees -- every verify
+    on the LF original would fail, and the fleet would reject its own center.
+    """
+    import tempfile
+
+    with tempfile.TemporaryDirectory() as scratch:
+        data = Path(scratch) / "payload"
+        data.write_bytes(payload.encode())
+        with data.open("rb") as stdin:
+            return subprocess.run(argv, stdin=stdin, capture_output=True,
+                                  check=True, timeout=timeout)
+
+
 def sign(payload: str, key_path: Path | None = None) -> str:
     """Sign with the fleet key. SSHSIG, so it needs no dependency we do not already have.
 
@@ -249,14 +277,12 @@ def sign(payload: str, key_path: Path | None = None) -> str:
     """
     key_path = key_path or config.FLEET_KEY
     try:
-        p = subprocess.run(
-            ["ssh-keygen", "-Y", "sign", "-f", str(key_path), "-n", SIGN_NAMESPACE, "-"],
-            # Bytes both ways. Text mode would hand ssh-keygen CRLF on a Windows center,
-            # so the signature would cover bytes no spoke ever sees -- every verify on
-            # the LF original would fail, and the fleet would reject its own center.
-            input=payload.encode(), capture_output=True, check=True)
+        p = _keygen(["ssh-keygen", "-Y", "sign", "-f", str(key_path),
+                     "-n", SIGN_NAMESPACE, "-"], payload)
     except FileNotFoundError as exc:
         raise AccessError("ssh-keygen not found -- install OpenSSH") from exc
+    except subprocess.TimeoutExpired as exc:
+        raise AccessError("ssh-keygen did not return while signing") from exc
     except subprocess.CalledProcessError as exc:
         raise AccessError(
             f"could not sign: {(exc.stderr or b'').decode(errors='replace').strip()[:200]}"
@@ -276,11 +302,9 @@ def verify(payload: str, signature: str, signer_pubkey: str) -> bool:
         sig = Path(scratch) / "payload.sig"
         sig.write_text(signature)
         try:
-            subprocess.run(
-                ["ssh-keygen", "-Y", "verify", "-f", str(allowed), "-I", "center",
-                 "-n", SIGN_NAMESPACE, "-s", str(sig)],
-                input=payload.encode(), capture_output=True, check=True)
-        except (OSError, subprocess.CalledProcessError):
+            _keygen(["ssh-keygen", "-Y", "verify", "-f", str(allowed), "-I", "center",
+                     "-n", SIGN_NAMESPACE, "-s", str(sig)], payload)
+        except (OSError, subprocess.CalledProcessError, subprocess.TimeoutExpired):
             return False
     return True
 

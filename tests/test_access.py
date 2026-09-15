@@ -265,3 +265,41 @@ def test_a_corrupt_cache_reads_as_never_seen(tmp_path):
     p.write_text("{{{ not yaml")
     assert access.center_last_seen(p) == 0
     assert staleness_note(p) == ""
+
+
+def test_ssh_keygen_is_never_handed_a_pipe():
+    """On a Windows center, OpenSSH's ssh-keygen never returns when stdin is an
+    anonymous pipe: it does not read to EOF and does not exit, so subprocess.run waits
+    forever on reader threads that never see the pipe close. Measured on the real center
+    -- signing 100 bytes hung indefinitely, and the identical command with stdin
+    redirected from a file returned in under a tenth of a second.
+
+    It hit sign and verify alike, so the center could neither seal a reply nor check an
+    envelope a spoke sent it, and with no timeout anywhere both presented as a sweep that
+    simply stopped."""
+    import ast
+    import pathlib
+
+    src = pathlib.Path(access.__file__).read_text()
+    for node in ast.walk(ast.parse(src)):
+        if not isinstance(node, ast.Call):
+            continue
+        name = ast.unparse(node.func)
+        if not name.startswith("subprocess."):
+            continue
+        kwargs = {k.arg for k in node.keywords}
+        assert "input" not in kwargs, (
+            f"line {node.lineno}: ssh-keygen must be fed from a file, not a pipe")
+
+
+def test_signing_and_verifying_cannot_hang_forever():
+    """Whatever else goes wrong, it must end."""
+    import ast
+    import pathlib
+
+    src = pathlib.Path(access.__file__).read_text()
+    runs = [n for n in ast.walk(ast.parse(src))
+            if isinstance(n, ast.Call) and ast.unparse(n.func) == "subprocess.run"]
+    assert runs, "expected ssh-keygen to be run from here"
+    for node in runs:
+        assert "timeout" in {k.arg for k in node.keywords},             f"line {node.lineno}: no timeout"
