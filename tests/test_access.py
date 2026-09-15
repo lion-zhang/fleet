@@ -9,6 +9,7 @@ from __future__ import annotations
 import subprocess
 
 import pytest
+import yaml
 
 from fleet.state import access
 from fleet.render.staleness import staleness_note
@@ -328,3 +329,81 @@ def test_a_large_envelope_still_signs_and_verifies():
         signature = access.sign(body, key)
         assert access.verify(body, signature, pub)
         assert not access.verify(body + "tampered", signature, pub)
+
+
+# ---------------------------------------------- signing a digest instead of the body
+
+@pytest.fixture
+def a_key(tmp_path):
+    import subprocess
+
+    key = tmp_path / "id_ed25519"
+    subprocess.run(["ssh-keygen", "-t", "ed25519", "-N", "", "-q", "-f", str(key)],
+                   check=True)
+    return key, key.with_suffix(".pub").read_text()
+
+
+def _big_inventory() -> str:
+    body = "devices:\n" + ("  - name: filler-machine-with-a-longish-name\n" * 600)
+    assert len(body) > 20_000
+    return body
+
+
+def test_the_envelope_carries_a_signature_over_a_digest(a_key):
+    """`-Y verify` has no file form -- it only ever takes the message on stdin, and
+    Windows ssh-keygen stops reading stdin past about 8KB. So a Windows machine cannot
+    check a signature over a real envelope at all. Signing a digest makes the verified
+    message 71 bytes however big the fleet gets."""
+    key, pub = a_key
+    sealed = access.seal(_big_inventory(), key_path=key)
+    env = yaml.safe_load(sealed)
+
+    assert env["signature_digest"], "no digest signature to check"
+    assert access.digest_of(env["body"]).startswith("sha256:")
+    assert len(access.digest_of(env["body"])) == 71
+    assert access.unseal(sealed, pub)["inventory"].startswith("devices:")
+
+
+def test_the_digest_is_never_taken_from_the_envelope(a_key):
+    """Recomputed from the body we are about to act on. Transmitting it would let a
+    signature over some other document be replayed against this one."""
+    key, pub = a_key
+    sealed = access.seal("devices: []\n", key_path=key)
+    assert "sha256:" not in sealed, "the digest must not be on the wire at all"
+
+    env = yaml.safe_load(sealed)
+    env["body"] = "devices:\n  - name: injected\n"
+    with pytest.raises(access.AccessError):
+        access.unseal(yaml.safe_dump(env), pub)
+
+
+def test_a_bad_digest_signature_does_not_fall_back_to_the_body_one(a_key):
+    """Falling back would let anyone who can edit the envelope choose which signature is
+    examined."""
+    key, pub = a_key
+    env = yaml.safe_load(access.seal("devices: []\n", key_path=key))
+    env["signature_digest"] = access.sign("something else entirely", key)
+    with pytest.raises(access.AccessError):
+        access.unseal(yaml.safe_dump(env), pub)
+
+
+def test_an_envelope_from_a_peer_that_has_not_updated_still_opens(a_key):
+    """The protocol number does not move, so machines upgrade one at a time instead of
+    all at once -- which matters when some of them are switched off."""
+    key, pub = a_key
+    env = yaml.safe_load(access.seal("devices: []\n", key_path=key))
+    del env["signature_digest"]                    # exactly what an older center sends
+    assert access.unseal(yaml.safe_dump(env), pub)["inventory"] == "devices: []\n"
+
+    env["body"] = "devices:\n  - name: injected\n"
+    with pytest.raises(access.AccessError):
+        access.unseal(yaml.safe_dump(env), pub)
+
+
+def test_an_older_peer_can_still_read_what_we_send(a_key):
+    """The other direction: a machine that has never heard of `signature_digest` reads
+    `signature` over the body, exactly as it always did."""
+    key, pub = a_key
+    env = yaml.safe_load(access.seal("devices: []\n", key_path=key))
+    assert access.verify(env["body"], env["signature"], pub), \
+        "the body signature must stay valid for peers that only know about it"

@@ -329,6 +329,25 @@ def verify(payload: str, signature: str, signer_pubkey: str) -> bool:
 PROTOCOL = 2
 
 
+def digest_of(body: str) -> str:
+    """What gets signed instead of the body itself, when the signer can manage it.
+
+    Windows OpenSSH's ssh-keygen stops reading stdin somewhere past 8KB and never exits,
+    and `-Y verify` has no file form -- it only ever takes the message on stdin. So a
+    Windows machine cannot check a signature over a 20KB envelope at all, which is every
+    envelope on a fleet of any size. Signing a digest makes the verified message 71
+    bytes, whatever the fleet grows to.
+
+    Self-describing so the hash can change later without the signed bytes becoming
+    ambiguous. Never transmitted: a receiver recomputes it from the body it is about to
+    act on, so a signature over "the digest of some other document" cannot be replayed
+    against this one.
+    """
+    import hashlib
+
+    return "sha256:" + hashlib.sha256(body.encode()).hexdigest()
+
+
 def seal(inventory_yaml: str, *, key_path: Path | None = None,
          telemetry: list | None = None, center_url: str = "") -> str:
     """Wrap an inventory in a signature the receiver can check.
@@ -356,7 +375,13 @@ def seal(inventory_yaml: str, *, key_path: Path | None = None,
         # named for the common case; it is simply whoever signed, and a listening center
         # checks it against the keys it has pinned before reading anything else
         "center_pubkey": key_path.with_suffix(".pub").read_text().strip(),
+        # Both, and the protocol number does not move. A peer that has not been updated
+        # reads `signature` exactly as it always did and never looks at the other field,
+        # so the fleet upgrades one machine at a time instead of all at once -- which
+        # matters when some of them are switched off. `signature` can go once nothing
+        # old is left.
         "signature": sign(body, key_path),
+        "signature_digest": sign(digest_of(body), key_path),
         "body": body,
     }, sort_keys=False)
 
@@ -376,7 +401,16 @@ def unseal(payload: str, signer_pubkey: str) -> dict:
         raise AccessError("unsigned sync payload -- refusing it")
     if int(env.get("protocol") or 0) != PROTOCOL:
         raise AccessError(f"sync protocol {env.get('protocol')!r} is not {PROTOCOL}")
-    if not verify(env["body"], env.get("signature") or "", signer_pubkey):
+    # The digest when the sender offered one, because it is the only form a Windows
+    # receiver can check on a fleet of any size. No fallback if it is present and wrong:
+    # falling back would let anyone who can edit the envelope choose which signature is
+    # examined. Stripping the field is still possible, but that only forces the slow path
+    # -- `signature` has to verify on its own merits either way.
+    offered = (env.get("signature_digest") or "").strip()
+    if offered:
+        if not verify(digest_of(env["body"]), offered, signer_pubkey):
+            raise AccessError("sync payload is not signed by the key we trust")
+    elif not verify(env["body"], env.get("signature") or "", signer_pubkey):
         raise AccessError("sync payload is not signed by the key we trust")
     inner = yaml.safe_load(env["body"]) or {}
     return {"inventory": inner.get("inventory", ""),
