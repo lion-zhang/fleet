@@ -971,7 +971,15 @@ def cmd_ssh(ctx: typer.Context, name: str):
     finally:
         conn.close()
     platform = remote_platform(snap)
-    if auth_of(dev, cached) == "needs_key":
+    # A cached refusal is evidence only while it is fresh. A grant applies on the target
+    # within seconds of `fleet access --allow` on the center, and nothing tells this
+    # machine that it happened, so an old reading refused a connection that now works --
+    # and sent the reader to `fleet sync`, which a spoke holding no key on the center
+    # cannot run either. Stale, we try: a key that really is missing fails in under a
+    # second with ssh's own message, which is a cheaper way to be wrong than this was.
+    fresh_s = int(load_config().get("telemetry_ttl_s") or 0)
+    probed_at = int((cached or {}).get("last_probe_at") or 0)
+    if auth_of(dev, cached) == "needs_key" and time.time() - probed_at <= fresh_s:
         err.print(f"[yellow]{dev.name} rejected our key.[/yellow] Only the center can "
                   "install one:")
         err.print(f"  [bold]fleet add \"ssh ...\"[/bold] on the center, or "

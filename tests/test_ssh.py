@@ -9,6 +9,7 @@ a non-interactive one, and the failure looks like "my shell exits immediately".
 from __future__ import annotations
 
 import os
+import time
 
 import pytest
 from typer.testing import CliRunner
@@ -88,7 +89,24 @@ def test_a_non_default_port_and_a_jump_host_are_carried(tmp_path, monkeypatch):
 def test_a_host_that_rejected_our_key_says_how_to_fix_it(box, monkeypatch):
     """Better than handing you a connection that will just fail."""
     monkeypatch.setattr(cli, "auth_of", lambda *a, **k: "needs_key")
+    monkeypatch.setattr(store, "latest",
+                        lambda *a, **k: ({"last_probe_at": int(time.time())}, None))
     r = CliRunner().invoke(cli.app, ["ssh", "lin-xps"])
     assert r.exit_code == 2
     assert "Only the center can install one" in r.output
     assert not box, "and it does not try to connect anyway"
+
+
+def test_a_stale_rejection_does_not_block_a_grant_that_has_since_landed(box, monkeypatch):
+    """`fleet access --allow` installs the key on the target, and the machine doing the
+    connecting never hears about it. Trusting an old "rejected" reading refused a
+    connection that worked, and the advice it printed -- run `fleet sync` -- is exactly
+    what a spoke with no key on the center cannot do. Found on a real fleet, minutes
+    after the grant landed."""
+    monkeypatch.setattr(cli, "auth_of", lambda *a, **k: "needs_key")
+    monkeypatch.setattr(store, "latest",
+                        lambda *a, **k: ({"last_probe_at": int(time.time()) - 3600}, None))
+    r = CliRunner().invoke(cli.app, ["ssh", "lin-xps"])
+    assert r.exit_code == 0, r.output
+    assert box, "it must try the connection rather than refuse on an old reading"
+    assert box[-1][1][-1] == "lin@lin-xps.example.ts.net"
