@@ -6,11 +6,14 @@ the list recorded intent perfectly and no key ever moved.
 
 from __future__ import annotations
 
+from pathlib import Path
+
 import pytest
 from typer.testing import CliRunner
 
 from fleet.state import access as acl
 from fleet import cli
+from fleet import config
 from fleet.ops import identity
 from fleet.state import inventory as inv
 from fleet import reconcile as rec
@@ -224,12 +227,42 @@ def test_probe_still_works_but_is_not_advertised():
 
 def test_paths_names_every_file_and_the_shared_directory(fleet_at):
     """CONFIG_DIR and STATE_DIR are the same directory on macOS, which is why every
-    filename is distinct and nothing here may be cleaned up by globbing."""
+    filename is distinct and nothing here may be cleaned up by globbing.
+
+    The sandbox puts both at one root, so this holds on Linux too, where the real
+    platformdirs answer is two directories. It used to assert the host's own layout:
+    it passed on a mac and could not pass on a Linux box, which is where fleet is
+    mostly installed."""
     runner, _ = fleet_at
     out = runner.invoke(cli.app, ["paths"]).output
     for expected in ("inventory", "fleet key", "access", "ledger", "outbox", "cache"):
         assert expected in out
     assert "same directory" in out
+
+
+def test_paths_does_not_claim_one_directory_when_there_are_two(fleet_at, monkeypatch,
+                                                               tmp_path):
+    """The other half of the platform split, asserted rather than assumed."""
+    monkeypatch.setattr(config, "STATE_DIR", tmp_path / "state")
+    runner, _ = fleet_at
+    out = runner.invoke(cli.app, ["paths"]).output
+    assert "cache" in out
+    assert "same directory" not in out
+
+
+def test_paths_reports_where_state_actually_is(fleet_at):
+    """`fleet paths` answers "where does this machine keep its state", so it has to read
+    the live values. Importing them by name bound them once at import: under the sandbox
+    it printed the real home directory, which is both wrong and the one way this command
+    can mislead."""
+    runner, root = fleet_at
+    # Whitespace is stripped because rich wraps a long path across lines, and a tmp path
+    # in CI is long. Paths here never contain a space, so this cannot join two of them.
+    flat = "".join(runner.invoke(cli.app, ["paths"]).output.split())
+    assert str(root) in flat
+    for real in (Path.home() / ".config" / "fleet",
+                 Path.home() / "Library" / "Application Support" / "fleet"):
+        assert "".join(str(real).split()) not in flat
 
 
 # ------------------------------------------------------ one machine at a time

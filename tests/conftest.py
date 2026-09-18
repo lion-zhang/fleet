@@ -35,6 +35,14 @@ def _sandbox_fleet_state(tmp_path_factory, monkeypatch):
     monkeypatch.setattr(config, "FLEET_KEY", root / "id_ed25519", raising=False)
     monkeypatch.setattr(config, "CONFIG_PATH", root / "config.yaml", raising=False)
     monkeypatch.setattr(config, "INVENTORY_PATH", root / "inventory.yaml", raising=False)
+    # The two directories themselves, because `fleet paths` reports them. Left alone,
+    # every test saw the real platformdirs answer, which differs by OS: config and state
+    # are one directory on macOS and two on Linux. Pointing both at the sandbox root
+    # makes them equal on every platform -- a test that cares about them being separate
+    # says so itself, as test_sweep does.
+    monkeypatch.setattr(config, "CONFIG_DIR", root, raising=False)
+    monkeypatch.setattr(config, "STATE_DIR", root, raising=False)
+    monkeypatch.setattr(config, "DB_PATH", root / "cache.db", raising=False)
 
     # Belt and braces for the one that reaches the network: a command that refreshes
     # itself must not dial anything real, even if some path above is missed.

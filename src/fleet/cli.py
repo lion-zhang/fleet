@@ -24,13 +24,13 @@ from rich.markup import escape
 from rich.table import Table
 from rich.text import Text
 
+from . import config as _cfg
 from . import reconcile as rec
 from . import service
 from .agents import (MCP_CLIENTS, TARGETS, detect_mcp_clients, detect_targets,
                      fleet_command, fleet_executable, install, install_mcp,
                      package_version, uninstall, uninstall_mcp)
-from .config import (CONFIG_DIR, DB_PATH, DEFAULT_PORT, FLEET_KEY, INVENTORY_PATH,
-                     STATE_DIR, load_config)
+from .config import DEFAULT_PORT, FLEET_KEY, INVENTORY_PATH, load_config
 from .edit import apply_edits
 from .install import build_install_argv, install_script, payload_for
 from .mcpserver import McpUnavailable, serve as serve_mcp
@@ -1408,20 +1408,24 @@ def cmd_paths():
     [dim]Example:[/dim]  fleet paths
     """
 
-    console.print(f"inventory  {INVENTORY_PATH}")
-    console.print(f"fleet key  {FLEET_KEY}   [dim](never regenerate: it is this "
+    # Read through the modules that own these, not through this module's import-time
+    # copies. `from .config import INVENTORY_PATH` binds the value once, so a test that
+    # redirects state -- and `fleet paths` is the one command whose whole job is to say
+    # where state lives -- was printing the real machine's paths from inside the sandbox.
+    console.print(f"inventory  {inv.INVENTORY_PATH}")
+    console.print(f"fleet key  {_cfg.FLEET_KEY}   [dim](never regenerate: it is this "
                   "machine's identity)[/dim]")
     console.print(f"access     {acl.ACCESS_PATH}   [dim](center only — the authority)[/dim]")
     console.print(f"ledger     {acl.LEDGER_PATH}   [dim](center only — what has landed)[/dim]")
     console.print(f"seen       {acl.CACHE_PATH}   [dim](the center's key, and when it "
                   "last swept)[/dim]")
     console.print(f"outbox     {acl.OUTBOX_PATH}   [dim](requests we have filed)[/dim]")
-    console.print(f"cache      {DB_PATH}   [dim](disposable — delete and re-probe)[/dim]")
-    if CONFIG_DIR == STATE_DIR:
+    console.print(f"cache      {store.DB_PATH}   [dim](disposable — delete and re-probe)[/dim]")
+    if _cfg.CONFIG_DIR == _cfg.STATE_DIR:
         # Worth saying out loud: it is why every filename above is distinct, and why
         # nothing here may ever be cleaned up by globbing a directory.
         console.print(f"\n[dim]config and state are the same directory here "
-                      f"({CONFIG_DIR}).[/dim]")
+                      f"({_cfg.CONFIG_DIR}).[/dim]")
 
 
 def main() -> None:
