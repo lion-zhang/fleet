@@ -235,7 +235,10 @@ def join(url: str) -> str:
     acl.note_center_seen()
     # Whatever the center says to use from now on, falling back to what was typed.
     acl.note_center_url(note["center_url"] or url)
-    return f"joined: {len(incoming)} machine(s) known, {changes} changed"
+    # Live devices, not records: a fleet that has ever removed a machine carries the
+    # tombstone for TOMBSTONE_TTL_S so the deletion can propagate, and counting those
+    # told a seven-machine fleet it had joined fourteen.
+    return f"joined: {len(inv.live(incoming))} machine(s) known, {changes} changed"
 
 
 def file_request(current, target: str, allow: str, user: str) -> None:

@@ -628,6 +628,37 @@ def test_a_machine_the_center_cannot_reach_can_dial_it_instead(tmp_path, monkeyp
     assert "machine" in summary
 
 
+def test_dialling_counts_machines_not_tombstones(tmp_path, monkeypatch):
+    """The summary is the only thing the person who typed the address sees, and a fleet
+    that has ever removed a machine keeps the tombstone until every machine has seen it.
+    Counting records made a seven-machine fleet report fourteen."""
+    from fleet.state import access as acl
+    from fleet.state import inventory as inv
+    from fleet.ops import sync
+    from fleet.models import Device, Kind
+
+    key = tmp_path / "id_ed25519"
+    subprocess.run(["ssh-keygen", "-t", "ed25519", "-N", "", "-q", "-f", str(key)],
+                   check=True)
+    monkeypatch.setattr(config, "FLEET_KEY", key)
+    monkeypatch.setattr(inv, "INVENTORY_PATH", tmp_path / "inventory.yaml")
+    for n in ("ACCESS_PATH", "CACHE_PATH", "LEDGER_PATH", "OUTBOX_PATH"):
+        monkeypatch.setattr(acl, n, tmp_path / getattr(acl, n).name)
+    inv.save([Device(id="id:me", name="me", kind=Kind.PERMANENT)], inv.INVENTORY_PATH)
+
+    centre_key = tmp_path / "centre_ed25519"
+    subprocess.run(["ssh-keygen", "-t", "ed25519", "-N", "", "-q", "-f", str(centre_key)],
+                   check=True)
+    gone = Device(id="id:gone", name="gone", kind=Kind.PERMANENT)
+    gone.deleted_at = 1
+    theirs = inv.dumps([Device(id="id:hub", name="hub", kind=Kind.PERMANENT),
+                        Device(id="id:me", name="me", kind=Kind.PERMANENT), gone])
+    reply = acl.seal(theirs, key_path=centre_key, center_url="http://hub.example:7373/sync")
+    monkeypatch.setattr(sync, "post", lambda url, payload, **k: reply)
+
+    assert "2 machine(s)" in sync.join("http://typed-by-hand:7373/sync")
+
+
 def test_dialling_refuses_an_answer_it_cannot_trust(tmp_path, monkeypatch):
     """Once a center is pinned, an answer from anywhere else is refused -- the typed
     address selects who to ask, never who to believe."""
