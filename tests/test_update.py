@@ -12,6 +12,7 @@ import pytest
 from typer.testing import CliRunner
 
 from fleet import cli
+from fleet import install
 from fleet.ops import identity
 from fleet.state import inventory as inv
 from fleet.state import store
@@ -83,3 +84,89 @@ def test_no_repo_configured_says_what_to_set(fleet_of, monkeypatch):
     r = runner.invoke(cli.app, ["update"])
     assert r.exit_code == 2
     assert "--repo" in r.output and "config.yaml" in r.output
+
+
+# ------------------------------------------- update is not install, and not one shell
+
+def test_a_device_with_no_fleet_is_skipped_rather_than_given_one(fleet_of, monkeypatch):
+    """`fleet update --all` reaches every device with a route, and most of a fleet is
+    meant to have nothing installed -- the probe is a script piped over one connection.
+    Deploying a fix therefore also installed fleet on a NAS and on whatever rental
+    happened to answer. The device is the authority on whether it has fleet, so the
+    script asks and exits 91, and the caller reports it as skipped rather than failed."""
+    runner, _, _ = fleet_of
+    monkeypatch.setattr(cli, "run_installer",
+                        lambda ep, script, **kw: (install.NOTHING_TO_UPDATE, ""))
+    r = runner.invoke(cli.app, ["update", "--all"])
+    assert r.exit_code == 0, "a machine that was never meant to run fleet is not a failure"
+    assert "1 skipped" in r.output
+    assert "fleet install oracle" in r.output, "it says how to install one on purpose"
+
+
+def test_the_update_script_refuses_where_there_is_nothing_to_update():
+    """Both shells, because a fleet is not one platform -- and before uv is fetched, so
+    a skipped device is left exactly as it was found."""
+    for platform in ("", "windows"):
+        guarded = install.install_script("https://e/f.git", platform=platform,
+                                         update_only=True)
+        assert str(install.NOTHING_TO_UPDATE) in guarded
+        assert guarded.index(str(install.NOTHING_TO_UPDATE)) < guarded.index("uv"), \
+            "the check has to come before uv is fetched onto a machine we are skipping"
+        assert str(install.NOTHING_TO_UPDATE) not in \
+            install.install_script("https://e/f.git", platform=platform), \
+            "`fleet install` still installs: that is what it is for"
+
+
+def test_a_windows_device_is_updated_with_the_windows_installer(fleet_of, monkeypatch):
+    """`fleet install` had always read the platform from the last probe and `fleet
+    update` had not, so updating a Windows center handed it the POSIX script. sh.exe is
+    there because git is, so it ran -- far enough to stop fleet by running fleet, which
+    holds open the directory uv then fails to remove. That leaves no working fleet on
+    the machine at all. Found on a real center, which had to be repaired by hand."""
+    import json
+
+    runner, _, _ = fleet_of
+    devices = inv.load(inv.INVENTORY_PATH)
+    devices.append(Device(id="id:win", name="beelink", kind=Kind.PERMANENT,
+                          endpoints=[{"target": "win.example", "user": "zl", "port": 22}]))
+    inv.save(devices, inv.INVENTORY_PATH)
+    conn = store.connect()
+    conn.execute("INSERT INTO snapshot (device_id, ts, source, payload) VALUES (?,?,?,?)",
+                 ("id:win", 1, "self", json.dumps({"uname_s": "Windows"})))
+    conn.commit()
+    conn.close()
+
+    seen = {}
+    monkeypatch.setattr(cli, "run_installer",
+                        lambda ep, script, **kw: seen.update(script=script, kw=kw) or (0, ""))
+    assert runner.invoke(cli.app, ["update", "beelink"]).exit_code == 0
+    assert seen["kw"].get("platform") == "windows", "ssh was told the wrong shell"
+    assert "$ErrorActionPreference" in seen["script"], "it was handed the POSIX script"
+
+
+def test_this_machine_is_updated_in_the_shell_it_actually_runs(fleet_of, monkeypatch):
+    """The local half had the same bug with none of the ssh: `sh -c` on a Windows center
+    is git's sh.exe, where the POSIX script half-runs. The script goes over stdin so the
+    payload is bytes either way -- text mode rewrites \\n to \\r\\n on Windows."""
+    runner, _, local = fleet_of
+    assert runner.invoke(cli.app, ["update"]).exit_code == 0
+    assert local[0] == ["sh", "-s"], "posix: the script arrives on stdin, not as argv"
+
+    monkeypatch.setattr(install, "local_platform", lambda: "windows")
+    local.clear()
+    runner.invoke(cli.app, ["update"])
+    assert local[0][0] == "powershell"
+    assert "-Command" in local[0] and "-" not in local[0], \
+        "`powershell -Command -` evaluates stdin statement by statement and breaks blocks"
+
+
+def test_running_from_a_checkout_skips_this_machine_rather_than_failing(fleet_of,
+                                                                        monkeypatch):
+    """The same answer the remote half gives, for the machine you are sitting at."""
+    runner, _, _ = fleet_of
+    monkeypatch.setattr(subprocess, "run",
+                        lambda argv, **kw: subprocess.CompletedProcess(
+                            argv, install.NOTHING_TO_UPDATE, b"", b""))
+    r = runner.invoke(cli.app, ["update"])
+    assert r.exit_code == 0
+    assert "no installed fleet" in r.output

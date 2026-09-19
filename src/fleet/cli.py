@@ -32,7 +32,8 @@ from .agents import (MCP_CLIENTS, TARGETS, detect_mcp_clients, detect_targets,
                      package_version, uninstall, uninstall_mcp)
 from .config import DEFAULT_PORT, FLEET_KEY, INVENTORY_PATH, load_config
 from .edit import apply_edits
-from .install import build_install_argv, install_script, payload_for
+from .install import (NOTHING_TO_UPDATE, build_install_argv, install_script,
+                      local_install_argv, payload_for)
 from .mcpserver import McpUnavailable, serve as serve_mcp
 from .models import Device, Kind, Status
 from .onboard import onboard, onboard_self
@@ -462,6 +463,20 @@ def configured_repo() -> str:
         return ""
 
 
+def _remote_platform_of(dev) -> str:
+    """Which shell this device speaks, from the last probe.
+
+    An unprobed machine reads POSIX, which is the safe way to be wrong: a POSIX script
+    on Windows fails loudly, where the reverse can appear to succeed.
+    """
+    conn = store.connect()
+    try:
+        _, snap = store.latest(conn, dev.id)
+    finally:
+        conn.close()
+    return remote_platform(snap)
+
+
 def run_installer(ep, script: str, *, forward_agent: bool = True,
                   platform: str = "") -> tuple[int, str]:
     argv = build_install_argv(ep, forward_agent=forward_agent, platform=platform)
@@ -511,15 +526,7 @@ def cmd_install(name: str = typer.Argument(None,
                   f"{INVENTORY_PATH.parent / 'config.yaml'}")
         raise typer.Exit(2)
 
-    # Which shell the far side speaks, from the last probe. An unprobed machine reads
-    # POSIX, which is the safe way to be wrong: a POSIX script on Windows fails loudly,
-    # where the reverse can appear to succeed.
-    conn = store.connect()
-    try:
-        _, snap = store.latest(conn, dev.id)
-    finally:
-        conn.close()
-    platform = remote_platform(snap)
+    platform = _remote_platform_of(dev)
 
     console.print(f"[dim]installing fleet on {dev.name} from {url} ({ref})[/dim]")
     code, output = run_installer(sorted(eps, key=lambda e: e.preference)[0],
@@ -577,14 +584,18 @@ def _before_any_command(
 @app.command("update")
 def cmd_update(name: str = typer.Argument(None, help="defaults to this machine"),
                everywhere: bool = typer.Option(False, "--all",
-                                               help="every device that can be reached"),
+                                               help="every device that already runs fleet"),
                repo: str = typer.Option(None, "--repo", metavar="URL"),
                ref: str = typer.Option("main", "--ref", help="branch or tag")):
-    """Deploy the newest fleet from git.
+    """Deploy the newest fleet from git, to the machines that have it.
 
     `fleet install` already re-runs as an update, but only one device at a time and only
     over ssh. This adds the two things you actually reach for: updating everything at
     once, and updating the machine you are standing on without connecting to it.
+
+    A device with no fleet is skipped and named, never given one: most of a fleet is
+    meant to have nothing installed, and `fleet install NAME` is how you change that on
+    purpose.
 
     [dim]Example:[/dim]  fleet update --all
     """
@@ -608,30 +619,60 @@ def cmd_update(name: str = typer.Argument(None, help="defaults to this machine")
         targets = []
 
     me = identity.local_device_id()
-    script = install_script(url, ref=ref)
-    ok = failed = 0
+    ok = failed = skipped = 0
 
     # This machine first and without ssh. The center is never an ssh target, so
     # connecting to ourselves would fail on exactly the machine most likely to be
     # running the command.
     if not name or (targets and any(d.id == me for d in targets)):
         console.print(f"[dim]updating this machine from {url} ({ref})[/dim]")
-        p = subprocess.run(["sh", "-c", script], capture_output=True, text=True)
+        # local_platform, not `sh -c`: on a Windows center that shell is git's, and the
+        # POSIX script half-runs under it. This is the machine running the command, so
+        # it certainly has fleet -- update_only would be true either way, and saying so
+        # keeps one script shape for every path.
+        local_script = install_script(url, ref=ref, platform=local_platform(),
+                                      update_only=True)
+        p = subprocess.run(local_install_argv(),
+                           input=payload_for(local_script, local_platform()),
+                           capture_output=True)
         if p.returncode == 0:
             console.print("[green]✓[/green] this machine")
             ok += 1
+        elif p.returncode == NOTHING_TO_UPDATE:
+            # Running from a source checkout with nothing installed. The same answer as
+            # for any other machine, rather than a red ✗ for the one you are sitting at.
+            console.print("[dim]·[/dim] this machine has no installed fleet "
+                          "[dim]-- you are running it from a checkout[/dim]")
+            skipped += 1
         else:
-            err.print(f"[red]✗[/red] this machine\n{(p.stderr or p.stdout)[-400:]}")
+            said = (p.stderr or p.stdout or b"")
+            err.print(f"[red]✗[/red] this machine\n"
+                      f"{said.decode(errors='replace')[-400:]}")
             failed += 1
         targets = [d for d in targets if d.id != me]
 
     for dev in targets:
         eps = sorted(inv.endpoints_of(dev), key=lambda e: e.preference)
+        # Per device, because a fleet is not one platform. Building the script once and
+        # sending it to everything handed the POSIX installer to a Windows center, which
+        # runs it under git's sh.exe far enough to break the installation it was meant
+        # to update -- `fleet install` had always read the platform, and this had not.
+        platform = _remote_platform_of(dev)
         console.print(f"[dim]updating {dev.name}[/dim]")
-        code, output = run_installer(eps[0], script)
+        code, output = run_installer(eps[0],
+                                     install_script(url, ref=ref, platform=platform,
+                                                    update_only=True),
+                                     platform=platform)
         if code == 0:
             console.print(f"[green]✓[/green] {dev.name}")
             ok += 1
+        elif code == NOTHING_TO_UPDATE:
+            # Not a failure, and not something to fix: most of a fleet is meant to have
+            # nothing installed. Named rather than counted silently, so `--all` still
+            # accounts for every machine it touched.
+            console.print(f"[dim]·[/dim] {dev.name} [dim]has no fleet -- "
+                          f"install one with [bold]fleet install {dev.name}[/bold][/dim]")
+            skipped += 1
         else:
             # One unreachable device must not stop the rest: a fleet half-updated on
             # purpose is better than a fleet half-updated by an exception.
@@ -639,8 +680,9 @@ def cmd_update(name: str = typer.Argument(None, help="defaults to this machine")
                       f"[dim]{output.strip()[-120:]}[/dim]")
             failed += 1
 
-    if ok + failed > 1 or failed:
-        console.print(f"\n[dim]{ok} updated, {failed} failed[/dim]")
+    if ok + failed + skipped > 1 or failed:
+        tail = f", {skipped} skipped" if skipped else ""
+        console.print(f"\n[dim]{ok} updated, {failed} failed{tail}[/dim]")
     if failed:
         raise typer.Exit(1)
 

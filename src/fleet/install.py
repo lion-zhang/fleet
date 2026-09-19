@@ -15,13 +15,18 @@ from __future__ import annotations
 import base64
 import shlex
 
-from .ssh.cmd import WINDOWS, Endpoint
+from .ssh.cmd import WINDOWS, Endpoint, local_platform
 
 INSTALL_DIR = "$HOME/.local/share/fleet"
 WINDOWS_INSTALL_DIR = "$env:USERPROFILE\\.local\\share\\fleet"
 
+# Exit codes the script reserves for itself, distinct from anything a shell or uv
+# returns, so the caller can tell them apart from a failure.
+NO_UV = 90                  # the device could not fetch uv -- probably no internet
+NOTHING_TO_UPDATE = 91      # update-only, and this device has no fleet to update
 
-def _posix_script(repo: str, *, ref: str = "main") -> str:
+
+def _posix_script(repo: str, *, ref: str = "main", update_only: bool = False) -> str:
     """The sh run on the device. Idempotent: `fleet install` doubles as `fleet update`.
 
     uv is fetched when missing because it also solves the Python problem -- fleet needs
@@ -36,7 +41,7 @@ def _posix_script(repo: str, *, ref: str = "main") -> str:
 REPO={shlex.quote(repo)}
 REF={shlex.quote(ref)}
 DIR="{INSTALL_DIR}"
-
+{_skip_unless_installed(update_only)}
 if ! command -v uv >/dev/null 2>&1; then
   curl -LsSf https://astral.sh/uv/install.sh | sh >/dev/null 2>&1 || exit 90
   if [ -f "$HOME/.local/bin/env" ]; then . "$HOME/.local/bin/env"; fi
@@ -82,6 +87,36 @@ PATH="$HOME/.local/bin:$PATH" fleet --version
 # machine that never had one -- `service start` does nothing when none is installed.
 PATH="$HOME/.local/bin:$PATH" fleet service start >/dev/null 2>&1 || true
 {_drop_timer_block()}"""
+
+
+def _skip_unless_installed(update_only: bool) -> str:
+    """Leave a device that has no fleet alone, when we were asked to update rather than
+    to install.
+
+    `fleet update --all` reaches every device with a route, and every device that is only
+    ever a probe target needs nothing installed -- that is the whole shape of the tool.
+    Deploying a fix to the machines that run fleet therefore also installed it on a NAS,
+    a rental and anything else that answered, which is not what the command says and not
+    what anyone reaching for it wants.
+
+    The check is here rather than in the caller because the caller cannot know: nothing
+    in the inventory records whether fleet is installed, and a field that said so would
+    be wrong the moment someone removed it by hand. The device is the authority.
+
+    Placed before uv is fetched, so a skipped device is left exactly as it was found.
+    """
+    if not update_only:
+        return ""
+    # PATH is searched with ~/.local/bin added, because this script runs under a
+    # non-interactive shell that has never read a profile -- the same reason
+    # `remote_command` exports it. Without that, a machine running a perfectly good
+    # uv-installed fleet looks bare and gets skipped.
+    return f"""
+fleet_on_path=$(PATH="$HOME/.local/bin:$PATH" sh -c 'command -v fleet' 2>/dev/null || true)
+if [ ! -d "$DIR/.git" ] && [ -z "$fleet_on_path" ]; then
+  exit {NOTHING_TO_UPDATE}
+fi
+"""
 
 
 def _drop_timer_block() -> str:
@@ -135,10 +170,29 @@ def build_install_argv(ep: Endpoint, *, forward_agent: bool = True,
     return argv
 
 
-WINDOWS_STDIN_SHELL = (
-    "powershell -NoProfile -Command $i=[Console]::In.ReadToEnd(); "
-    "iex ([Text.Encoding]::UTF8.GetString([Convert]::FromBase64String($i)))"
-)
+_DECODE_STDIN = ("$i=[Console]::In.ReadToEnd(); "
+                 "iex ([Text.Encoding]::UTF8.GetString([Convert]::FromBase64String($i)))")
+
+WINDOWS_STDIN_SHELL = f"powershell -NoProfile -Command {_DECODE_STDIN}"
+
+
+def local_install_argv() -> list[str]:
+    """How to run the installer on the machine we are standing on. The script arrives on
+    stdin, as `payload_for(script, local_platform())` -- never as an argument.
+
+    `sh -c "$script"` on a Windows center is the same trap as sending it the POSIX script
+    over ssh: sh.exe is usually present because git is, the script very nearly runs, and
+    what comes out is a half-finished install rather than a refusal.
+
+    Not `local_shell_argv()`, which is `powershell -Command -` on Windows: that reads
+    stdin and evaluates it statement by statement, so the first line of a multi-line
+    `if {` is a syntax error on its own and everything after it is skipped silently.
+    Decoding the whole payload first makes it one unit again, exactly as the remote
+    installer does.
+    """
+    if local_platform() == WINDOWS:
+        return ["powershell", "-NoProfile", "-Command", _DECODE_STDIN]
+    return ["sh", "-s"]
 
 
 def payload_for(script: str, platform: str = "") -> bytes:
@@ -148,7 +202,7 @@ def payload_for(script: str, platform: str = "") -> bytes:
     return script.encode()
 
 
-def _windows_script(repo: str, ref: str = "main") -> str:
+def _windows_script(repo: str, ref: str = "main", *, update_only: bool = False) -> str:
     """The PowerShell run on a Windows device. Same contract as the sh one.
 
     Written out rather than shimmed through Git Bash. `sh.exe` usually exists on a
@@ -170,7 +224,7 @@ def _windows_script(repo: str, ref: str = "main") -> str:
 $repo = '{repo_lit}'
 $ref  = '{ref_lit}'
 $dir  = "{WINDOWS_INSTALL_DIR}"
-
+{_skip_unless_installed_ps(update_only)}
 if (-not (Get-Command uv -ErrorAction SilentlyContinue)) {{
   try {{ irm https://astral.sh/uv/install.ps1 | iex }} catch {{ exit 90 }}
   $env:PATH = "$env:USERPROFILE\\.local\\bin;$env:PATH"
@@ -223,7 +277,25 @@ if (Test-Path $fleet) {{ & $fleet service start 2>&1 | Out-Null }}
 """
 
 
-def install_script(repo: str, *, ref: str = "main", platform: str = "") -> str:
+def _skip_unless_installed_ps(update_only: bool) -> str:
+    """The PowerShell half of `_skip_unless_installed`, with its reasoning.
+
+    `fleet.exe` is checked by path as well as by `Get-Command`, because uv's shim lands
+    in a directory this session may not have on PATH -- which is the very thing
+    `uv tool update-shell` exists to fix for the terminal you open afterwards.
+    """
+    if not update_only:
+        return ""
+    shim = "$env:USERPROFILE\\.local\\bin\\fleet.exe"
+    return f"""
+if (-not (Test-Path (Join-Path $dir '.git')) -and
+    -not (Get-Command fleet -ErrorAction SilentlyContinue) -and
+    -not (Test-Path "{shim}")) {{ exit {NOTHING_TO_UPDATE} }}
+"""
+
+
+def install_script(repo: str, *, ref: str = "main", platform: str = "",
+                   update_only: bool = False) -> str:
     """The installer for whichever shell the far side speaks.
 
     `platform` comes from the last probe via `remote_platform`, which is the one place
@@ -231,5 +303,5 @@ def install_script(repo: str, *, ref: str = "main", platform: str = "") -> str:
     POSIX script on Windows fails loudly, where the reverse can appear to succeed.
     """
     if platform == WINDOWS:
-        return _windows_script(repo, ref)
-    return _posix_script(repo, ref=ref)
+        return _windows_script(repo, ref, update_only=update_only)
+    return _posix_script(repo, ref=ref, update_only=update_only)

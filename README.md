@@ -26,7 +26,7 @@ fleet ls --tag cuda --tag vram-24g          # by capability, not by remembering 
 fleet top                                   # live view, like htop for the fleet
 fleet edit machine_A --ssh "ssh -p 40001 root@1.2.3.4"   # rentals recycle addresses
 fleet edit machine_B --disk-path /workspace              # watch the volume that matters
-fleet update --all                          # deploy the newest fleet everywhere
+fleet update --all                          # deploy the newest fleet where it is installed
 ```
 
 Machines you only connect *to* need **nothing installed** -- the probe is one script
