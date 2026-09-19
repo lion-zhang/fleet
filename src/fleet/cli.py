@@ -448,19 +448,29 @@ def cmd_edit(name: str = typer.Argument(None, help="defaults to this machine"),
 def configured_repo() -> str:
     """Where a device should clone fleet from.
 
-    Falls back to this checkout's own origin, so the common case -- installing from the
-    repo you are standing in -- needs no configuration at all.
+    Falls back to an origin we can find, so the common case -- deploying the repo you
+    are standing in -- needs no configuration at all.
+
+    Two places, because there are two ways to be running fleet. From a source checkout,
+    the package sits inside the repo. From an install, it sits in uv's tool directory
+    with no git anywhere near it -- but the clone `fleet install` made is still on disk,
+    and its origin is by definition the repo that machine was deployed from. Without the
+    second look, every machine fleet had itself installed answered "No repo to update
+    from" and could update nothing without being told a URL it already knew.
     """
     configured = load_config().get("repo")
     if configured:
         return str(configured)
-    try:
-        root = Path(__file__).resolve().parent.parent.parent
-        out = subprocess.run(["git", "-C", str(root), "remote", "get-url", "origin"],
-                             capture_output=True, text=True, timeout=5)
-        return out.stdout.strip() if out.returncode == 0 else ""
-    except (OSError, subprocess.SubprocessError):
-        return ""
+    for root in (Path(__file__).resolve().parent.parent.parent,
+                 Path.home() / ".local" / "share" / "fleet"):
+        try:
+            out = subprocess.run(["git", "-C", str(root), "remote", "get-url", "origin"],
+                                 capture_output=True, text=True, timeout=5)
+        except (OSError, subprocess.SubprocessError):
+            continue
+        if out.returncode == 0 and out.stdout.strip():
+            return out.stdout.strip()
+    return ""
 
 
 def _remote_platform_of(dev) -> str:

@@ -513,3 +513,26 @@ def test_updating_an_existing_install_honours_the_repo_it_was_given():
         assert "remote set-url origin" in code, "an existing clone keeps its old remote"
         assert code.index("remote set-url origin") < code.index("fetch"), \
             "the remote has to be corrected before the fetch that uses it"
+
+
+def test_the_repo_is_found_from_the_clone_an_install_left(tmp_path, monkeypatch):
+    """Running from an install, not a checkout: the package sits in uv's tool directory
+    with no git near it, and `fleet update` answered "No repo to update from" on every
+    machine fleet had itself deployed. The clone it made is right there, and its origin
+    is by definition where that machine came from."""
+    import subprocess as sp
+
+    from fleet import cli
+    from fleet.config import Config
+
+    monkeypatch.setattr(cli, "load_config", lambda: Config({}))
+    clone = tmp_path / ".local" / "share" / "fleet"
+    clone.mkdir(parents=True)
+    sp.run(["git", "init", "-q", str(clone)], check=True)
+    sp.run(["git", "-C", str(clone), "remote", "add", "origin",
+            "https://example.invalid/fleet.git"], check=True)
+    monkeypatch.setattr(cli.Path, "home", staticmethod(lambda: tmp_path))
+
+    # as if the package were installed somewhere with no repo around it
+    monkeypatch.setattr(cli, "__file__", str(tmp_path / "site-packages" / "fleet" / "cli.py"))
+    assert cli.configured_repo() == "https://example.invalid/fleet.git"
