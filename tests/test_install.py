@@ -414,14 +414,17 @@ def test_the_windows_installer_does_not_stop_fleet_by_running_fleet():
     assert code.index("Start-Sleep") < code.index("uv tool install")
 
 
-def test_the_windows_script_is_delivered_as_one_unit():
-    """`powershell -Command -` reads stdin and evaluates it statement by statement, so
-    the first line of a multi-line `if {` is a syntax error on its own and everything
-    after it is quietly skipped -- the installer appears to run, says nothing, and does
-    nothing. Measured on a real Windows box: a one-line `while` came back fine and an
-    `if/else` block came back empty. Base64 makes the script one unit again."""
-    import base64
+def test_the_windows_script_is_delivered_as_a_file():
+    """Two failures, one delivery. `powershell -Command -` evaluates stdin statement by
+    statement, so a multi-line `if {` is a syntax error on its own and the block after it
+    is skipped -- the installer appears to run, says nothing, and does nothing. Base64
+    piped into `iex` fixed that and introduced the second: decoding into Invoke-Expression
+    is the shape obfuscated malware has, and a machine with Defender's script rules on
+    refuses the whole command with a bare "Access is denied." before a line of it runs.
+    Measured on this fleet's own center, which is how it was found.
 
+    Writing the script out and running the file has neither problem, and `-File` carries
+    the exit code -- which is what brings NOTHING_TO_UPDATE back."""
     from fleet.install import payload_for
     from fleet.ssh.cmd import WINDOWS, Endpoint
 
@@ -429,15 +432,37 @@ def test_the_windows_script_is_delivered_as_one_unit():
     assert "\n" in script and "if (" in script, "the script does use blocks"
 
     wire = payload_for(script, WINDOWS)
-    assert b"\n" not in wire, "it must arrive as a single line"
-    assert base64.b64decode(wire).decode() == script
+    assert wire == script.encode(), "the script travels as itself, not encoded"
 
     remote = build_install_argv(Endpoint(target="b", user="u"), platform=WINDOWS)[-1]
-    assert "FromBase64String" in remote and "ReadToEnd" in remote
+    assert "ReadToEnd" in remote and "Set-Content" in remote, "it is spooled to a file"
+    assert "-File" in remote, "and run from that file"
+    assert "iex" not in remote and "FromBase64String" not in remote, \
+        "the decode-into-iex shape is what Defender refuses"
+    assert remote.index("Set-Content") < remote.index("-File"), "written before it is run"
 
     # POSIX is unchanged: sh reads a script from stdin correctly as it is.
     assert payload_for(script) == script.encode()
     assert build_install_argv(Endpoint(target="b", user="u"))[-1] == "sh -s"
+
+
+def test_a_native_command_that_complains_does_not_abort_the_windows_installer():
+    """Under `$ErrorActionPreference = 'Stop'` a native command writing to stderr raises
+    a terminating NativeCommandError, and redirecting the stream away does not stop it on
+    Windows PowerShell 5. Every one of these is *expected* to complain on a normal
+    machine -- "ERROR: The process fleet.exe not found" is what a box whose service is
+    not running says -- so without a catch the installer died before reaching uv, on
+    exactly the machines with nothing to stop. It is why the center could not be updated
+    at all."""
+    from fleet.ssh.cmd import WINDOWS
+
+    script = install_script("https://x/y.git", platform=WINDOWS)
+    for native in ("schtasks /end", "taskkill /f", "uv tool update-shell",
+                   "$fleet service start"):
+        line = next((l for l in script.splitlines() if native in l), "")
+        assert line, f"{native} is no longer in the script -- has it moved?"
+        assert line.strip().startswith("try {") and "catch" in line, \
+            f"{native} can write to stderr, and that is terminating here: {line.strip()}"
 
 
 def test_every_powershell_sent_over_command_dash_completes_per_line():

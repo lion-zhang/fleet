@@ -12,7 +12,6 @@ connected, so it can be declined for a host you do not trust with that.
 
 from __future__ import annotations
 
-import base64
 import shlex
 
 from .ssh.cmd import WINDOWS, Endpoint, local_platform
@@ -170,10 +169,31 @@ def build_install_argv(ep: Endpoint, *, forward_agent: bool = True,
     return argv
 
 
-_DECODE_STDIN = ("$i=[Console]::In.ReadToEnd(); "
-                 "iex ([Text.Encoding]::UTF8.GetString([Convert]::FromBase64String($i)))")
+# The installer arrives on stdin and is written out before it is run, because neither
+# shorter route survives a real Windows box.
+#
+# `powershell -Command -` reads stdin and evaluates it statement by statement, so the
+# first line of a multi-line `if {` is a syntax error on its own and everything after it
+# is quietly skipped: the installer appears to run, says nothing, and does nothing.
+# Measured -- a one-line `while` came back fine and an `if/else` block came back empty.
+#
+# Base64 plus `iex` was the answer to that, and it is refused outright on a machine with
+# Defender's script rules on: decoding into `Invoke-Expression` is the shape obfuscated
+# malware has, so the whole command dies with a bare "Access is denied." before a line of
+# it runs. Measured too, on this fleet's own center, which is how it was found.
+#
+# A file has neither problem. It is one unit, it is ordinary, and `-File` propagates the
+# script's exit code, which is what carries NOTHING_TO_UPDATE back to the caller.
+_WINDOWS_SPOOL = ("[Console]::In.ReadToEnd() | "
+                  "Set-Content -LiteralPath $env:TEMP\\fleet-install.ps1")
+# `-ExecutionPolicy Bypass` because the default on a Windows client is Restricted, which
+# refuses a .ps1 from disk -- the one difference a file makes that we have to pay for.
+_WINDOWS_RUN = "powershell -NoProfile -ExecutionPolicy Bypass -File {temp}\\fleet-install.ps1"
 
-WINDOWS_STDIN_SHELL = f"powershell -NoProfile -Command {_DECODE_STDIN}"
+# Through cmd.exe, which is what sshd hands a command to: `%TEMP%`, and `&&` so the run
+# only happens if the write did.
+WINDOWS_STDIN_SHELL = (f'powershell -NoProfile -Command "{_WINDOWS_SPOOL}" '
+                       f'&& {_WINDOWS_RUN.format(temp="%TEMP%")}')
 
 
 def local_install_argv() -> list[str]:
@@ -191,14 +211,25 @@ def local_install_argv() -> list[str]:
     installer does.
     """
     if local_platform() == WINDOWS:
-        return ["powershell", "-NoProfile", "-Command", _DECODE_STDIN]
+        # No cmd.exe in the way here, so the two halves are one -Command and the exit
+        # code is passed on by hand.
+        return ["powershell", "-NoProfile", "-Command",
+                f"{_WINDOWS_SPOOL}; {_WINDOWS_RUN.format(temp='$env:TEMP')}; "
+                "exit $LASTEXITCODE"]
     return ["sh", "-s"]
 
 
 def payload_for(script: str, platform: str = "") -> bytes:
-    """What to write to the installer's stdin, for the shell that will read it."""
-    if platform == WINDOWS:
-        return base64.b64encode(script.encode("utf-8"))
+    """What to write to the installer's stdin. The same bytes for either shell: Windows
+    spools them to a file rather than decoding them (see `_WINDOWS_SPOOL`).
+
+    Bytes, never text. `text=True` wraps stdin in a TextIOWrapper with newline=None,
+    which rewrites every \n to \r\n on Windows -- the bug that made a POSIX center send
+    payload.sh verbatim and a Windows one send it CRLF.
+
+    `platform` is kept because every caller has one to hand and a delivery that stops
+    depending on it should not be a reason to go and edit them all.
+    """
     return script.encode()
 
 
@@ -246,8 +277,15 @@ if (Test-Path (Join-Path $dir '.git')) {{
 # holds open the directory uv is about to remove. It fails with "Access is denied" on
 # Scripts, and that is not a failed update: uv has deleted most of the installation by
 # then, so the machine is left with no working fleet at all.
-schtasks /end /tn fleet-center 2>&1 | Out-Null
-taskkill /f /im fleet.exe 2>&1 | Out-Null
+# try/catch, and not because either is allowed to fail quietly for its own sake. A
+# native command that writes to stderr becomes an error record, and under
+# `$ErrorActionPreference = 'Stop'` that record is terminating -- so "ERROR: The process
+# fleet.exe not found", which is the normal answer on a machine whose service is not
+# running, aborted the installer before it reached uv. Redirecting the stream away does
+# not help on Windows PowerShell 5: the record is raised either way. Measured on the
+# center, which could not be updated at all until this was written like this.
+try {{ schtasks /end /tn fleet-center 2>&1 | Out-Null }} catch {{ }}
+try {{ taskkill /f /im fleet.exe 2>&1 | Out-Null }} catch {{ }}
 Get-CimInstance Win32_Process -Filter "Name='pythonw.exe'" |
   Where-Object {{ $_.CommandLine -like '*-m*fleet*center*--listen*' }} |
   ForEach-Object {{ Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }}
@@ -270,10 +308,12 @@ uv tool install --force --reinstall-package fleet-broker --quiet $dir
 # So `fleet` works in a terminal the user opens later, not just in this script. Without
 # it the shim lands in a directory nothing has ever added to PATH, and fleet installs
 # correctly and then is not there when they type its name.
-uv tool update-shell 2>&1 | Out-Null
+try {{ uv tool update-shell 2>&1 | Out-Null }} catch {{ }}
 
 & $fleet --version
-if (Test-Path $fleet) {{ & $fleet service start 2>&1 | Out-Null }}
+if (Test-Path $fleet) {{
+  try {{ & $fleet service start 2>&1 | Out-Null }} catch {{ }}
+}}
 """
 
 
