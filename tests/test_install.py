@@ -536,3 +536,18 @@ def test_the_repo_is_found_from_the_clone_an_install_left(tmp_path, monkeypatch)
     # as if the package were installed somewhere with no repo around it
     monkeypatch.setattr(cli, "__file__", str(tmp_path / "site-packages" / "fleet" / "cli.py"))
     assert cli.configured_repo() == "https://example.invalid/fleet.git"
+
+
+def test_the_installer_offers_the_fleet_key(tmp_path, monkeypatch):
+    """The same key the probe and `fleet ssh` offer. Without it the installer used
+    whatever personal key the machine happened to have, so it worked from the laptop
+    whose key was everywhere and failed with "Permission denied (publickey)" from any
+    machine fleet had enrolled -- every machine that would run `fleet update` itself."""
+    from fleet import install as install_mod
+    from fleet.ssh.cmd import Endpoint
+
+    key = tmp_path / "id_ed25519"
+    key.write_text("x")
+    monkeypatch.setattr(install_mod, "FLEET_KEY", key)
+    argv = install_mod.build_install_argv(Endpoint(target="b", user="u"))
+    assert argv[argv.index("-i") + 1] == str(key)

@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import shlex
 
+from .config import FLEET_KEY
 from .ssh.cmd import WINDOWS, Endpoint, local_platform
 
 INSTALL_DIR = "$HOME/.local/share/fleet"
@@ -153,18 +154,19 @@ def build_install_argv(ep: Endpoint, *, forward_agent: bool = True,
         argv += ["-p", str(ep.port)]
     if ep.identity:
         argv += ["-i", ep.identity]
+    # The fleet key, the same one the probe and `fleet ssh` offer. Without it the
+    # installer authenticated with whatever personal key the machine happened to have,
+    # so it worked from the laptop whose own key was everywhere and failed with
+    # "Permission denied (publickey)" from any machine fleet had enrolled -- which is
+    # every machine that would ever run `fleet update` on its own behalf.
+    if FLEET_KEY.exists() and str(FLEET_KEY) != ep.identity:
+        argv += ["-i", str(FLEET_KEY)]
     if ep.jump:
         argv += ["-J", ep.jump]
     argv.append(f"{ep.user}@{ep.target}" if ep.user else ep.target)
     # Both read the script from stdin, so nothing long or quoted has to survive a second
-    # round of shell parsing on the way in.
-    #
-    # Windows arrives base64 and is decoded on the far side. `powershell -Command -`
-    # reads stdin and evaluates it *statement by statement*, so the first line of a
-    # multi-line `if {` is a syntax error on its own and everything after it is quietly
-    # skipped: the installer appears to run, says nothing, and does nothing. Measured,
-    # not assumed -- a one-line `while` loop came back fine and an `if/else` block came
-    # back empty. Decoding the whole thing first makes it one unit again.
+    # round of shell parsing on the way in. Windows writes it out and runs the file --
+    # see WINDOWS_STDIN_SHELL for the two failures that shape stands between.
     argv.append(WINDOWS_STDIN_SHELL if platform == WINDOWS else "sh -s")
     return argv
 
