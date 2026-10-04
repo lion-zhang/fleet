@@ -33,7 +33,7 @@ from pathlib import Path
 import yaml
 
 from .. import config
-from ..config import CONFIG_DIR, FLEET_KEY, STATE_DIR
+from ..config import CONFIG_DIR, STATE_DIR
 
 # CONFIG_DIR and STATE_DIR are the *same directory* on macOS (platformdirs gives both as
 # ~/Library/Application Support/fleet). So every name here is globally distinct, and
@@ -367,7 +367,13 @@ def seal(inventory_yaml: str, *, key_path: Path | None = None,
     The signature covers the telemetry too. Relayed readings decide where work gets sent,
     so an unsigned one is a way to steer a job onto a machine of the sender's choosing.
     """
-    key_path = key_path or FLEET_KEY
+    # config.FLEET_KEY at call time, as `sign` and `is_center` do. This was the one
+    # reader left on the import-bound name, and it hid well: a test that redirected the
+    # key still sealed with the real one, so on a machine that had a real key it passed
+    # while signing with a production identity, and on a machine without one -- a fresh
+    # Linux checkout, every CI runner -- it raised, which `ensure_fresh` swallows and
+    # `join` reports as having no key at all.
+    key_path = key_path or config.FLEET_KEY
     body = yaml.safe_dump({"inventory": inventory_yaml, "telemetry": telemetry or [],
                            "center_url": center_url}, sort_keys=False)
     return yaml.safe_dump({

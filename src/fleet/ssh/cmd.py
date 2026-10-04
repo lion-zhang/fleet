@@ -15,7 +15,7 @@ import sys
 from pathlib import Path
 from dataclasses import dataclass, field
 
-from ..config import FLEET_KEY
+from .. import config
 
 IS_WINDOWS = sys.platform == "win32"     # see local_platform(); kept for hot paths
 
@@ -370,8 +370,10 @@ def build_enroll_argv(ep: Endpoint, *, connect_timeout: int = 8) -> list[str]:
             "-o", "StrictHostKeyChecking=accept-new"]
     if ep.identity:
         argv += ["-i", ep.identity]
-    if FLEET_KEY.exists():
-        argv += ["-i", str(FLEET_KEY)]
+    # Read through config at call time, here and below: the import-bound name ignores a
+    # redirected key path, which is how a sandboxed test came to offer the real key.
+    if config.FLEET_KEY.exists():
+        argv += ["-i", str(config.FLEET_KEY)]
     if ep.port and ep.port != 22:
         argv += ["-p", str(ep.port)]
     if ep.jump:
@@ -403,8 +405,8 @@ def build_argv(ep: Endpoint, *, connect_timeout: int = 8, multiplex: bool = True
     # Offer the fleet key too, when there is one. IdentitiesOnly=yes above means ssh
     # sends only what we name here, so a host that knows the fleet key but not the
     # endpoint's identity would otherwise be unreachable.
-    if FLEET_KEY.exists() and str(FLEET_KEY) != ep.identity:
-        argv += ["-i", str(FLEET_KEY)]
+    if config.FLEET_KEY.exists() and str(config.FLEET_KEY) != ep.identity:
+        argv += ["-i", str(config.FLEET_KEY)]
     if ep.port and ep.port != 22:
         argv += ["-p", str(ep.port)]
     if ep.jump:

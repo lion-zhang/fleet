@@ -30,7 +30,7 @@ from . import service
 from .agents import (MCP_CLIENTS, TARGETS, detect_mcp_clients, detect_targets,
                      fleet_command, fleet_executable, install, install_mcp,
                      package_version, uninstall, uninstall_mcp)
-from .config import DEFAULT_PORT, FLEET_KEY, INVENTORY_PATH, load_config
+from .config import DEFAULT_PORT, INVENTORY_PATH, load_config
 from .edit import apply_edits
 from .install import (NOTHING_TO_UPDATE, build_install_argv, install_script,
                       local_install_argv, payload_for)
@@ -1040,8 +1040,8 @@ def cmd_ssh(ctx: typer.Context, name: str):
     argv = ["ssh"]
     # The fleet key, or `fleet ssh` connects with a personal key that fleet no longer
     # installs anywhere -- and this is the most-used command in the tool.
-    if FLEET_KEY.exists():
-        argv += ["-i", str(FLEET_KEY)]
+    if _cfg.FLEET_KEY.exists():
+        argv += ["-i", str(_cfg.FLEET_KEY)]
     if ep.port and ep.port != 22:
         argv += ["-p", str(ep.port)]
     if ep.identity:

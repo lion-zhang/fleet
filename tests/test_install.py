@@ -543,11 +543,12 @@ def test_the_installer_offers_the_fleet_key(tmp_path, monkeypatch):
     whatever personal key the machine happened to have, so it worked from the laptop
     whose key was everywhere and failed with "Permission denied (publickey)" from any
     machine fleet had enrolled -- every machine that would run `fleet update` itself."""
+    import fleet.config
     from fleet import install as install_mod
     from fleet.ssh.cmd import Endpoint
 
     key = tmp_path / "id_ed25519"
     key.write_text("x")
-    monkeypatch.setattr(install_mod, "FLEET_KEY", key)
+    monkeypatch.setattr(fleet.config, "FLEET_KEY", key)
     argv = install_mod.build_install_argv(Endpoint(target="b", user="u"))
     assert argv[argv.index("-i") + 1] == str(key)

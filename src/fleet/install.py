@@ -14,7 +14,7 @@ from __future__ import annotations
 
 import shlex
 
-from .config import FLEET_KEY
+from . import config
 from .ssh.cmd import WINDOWS, Endpoint, local_platform
 
 INSTALL_DIR = "$HOME/.local/share/fleet"
@@ -159,8 +159,8 @@ def build_install_argv(ep: Endpoint, *, forward_agent: bool = True,
     # so it worked from the laptop whose own key was everywhere and failed with
     # "Permission denied (publickey)" from any machine fleet had enrolled -- which is
     # every machine that would ever run `fleet update` on its own behalf.
-    if FLEET_KEY.exists() and str(FLEET_KEY) != ep.identity:
-        argv += ["-i", str(FLEET_KEY)]
+    if config.FLEET_KEY.exists() and str(config.FLEET_KEY) != ep.identity:
+        argv += ["-i", str(config.FLEET_KEY)]
     if ep.jump:
         argv += ["-J", ep.jump]
     argv.append(f"{ep.user}@{ep.target}" if ep.user else ep.target)

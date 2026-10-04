@@ -22,7 +22,7 @@ import time
 from contextlib import suppress
 from pathlib import Path
 
-from ..config import FLEET_KEY
+from .. import config
 from .cmd import Endpoint, build_enroll_argv, run as sshrun
 
 # sshd's prompt varies ("Password:", "root@host's password:", a PAM phrasing), so match
@@ -45,7 +45,7 @@ def ensure_keypair(path: Path | None = None) -> tuple[Path, str]:
     import socket
     import subprocess
 
-    path = path or FLEET_KEY
+    path = path or config.FLEET_KEY     # at call time: a redirected key must be the one made
     pub = path.with_suffix(".pub")
     if path.exists() and pub.exists():
         return path, pub.read_text().strip()

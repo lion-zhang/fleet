@@ -63,9 +63,11 @@ def test_the_process_is_replaced_rather_than_wrapped(box):
 def test_the_fleet_key_is_offered(box, tmp_path, monkeypatch):
     """Otherwise the most-used command connects with a personal key that fleet no longer
     installs anywhere."""
+    import fleet.config
+
     key = tmp_path / "id_ed25519"
     key.write_text("x")
-    monkeypatch.setattr(cli, "FLEET_KEY", key)
+    monkeypatch.setattr(fleet.config, "FLEET_KEY", key)
     CliRunner().invoke(cli.app, ["ssh", "lin-xps"])
     argv = box[-1][1]
     assert "-i" in argv and str(key) in argv
