@@ -292,8 +292,13 @@ over PowerShell, and `fleet ssh machine_A -- cmd` passes the command through rat
 wrapping it in a shell that does not exist there. fleet works this out from the last
 probe; you never declare it.
 
-Install OpenSSH Server yourself first — fleet does not set it up. Running fleet *on*
-Windows is not supported yet.
+Install OpenSSH Server yourself first — fleet does not set it up.
+
+fleet also runs *on* Windows, center included: `fleet install` and `fleet update` use a
+PowerShell installer there, and `fleet center --listen` serves without a console window.
+One thing it cannot do is type a password, because Windows has no pty. A Windows center
+therefore enrols only machines that already accept a key it holds — put `fleet center
+--pubkey` on the host first, and `fleet add` needs no password at all.
 
 ---
 
