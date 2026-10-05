@@ -135,6 +135,17 @@ def apply_edge(acc: Access, edge: tuple[str, str, str], ep: Endpoint, *,
     if install and not pinned:
         return False, (f"no pinned key for {acc.name_of(src)} -- `fleet sync` enrols it, "
                        "or `fleet center --pubkey` if the center cannot get in")
+    if _dst == acc.center and acc_mod.is_center(acc):
+        # The center's own authorized_keys, edited in place. Over ssh it meant the center
+        # dialling itself -- which fails, since nothing installs the center's key on the
+        # center -- so the outgoing center's key, the one edge that lands here after a
+        # handover, stayed on the new center for good.
+        from .ssh.cmd import local_platform, local_shell_argv
+
+        script = sync_command(acc.fleet_id, src, user=user,
+                              pubkey=pinned if install else None, platform=local_platform())
+        p = subprocess.run(local_shell_argv(), input=script.encode(), capture_output=True)
+        return p.returncode == 0, (p.stdout + p.stderr).decode(errors="replace")
     script = sync_command(acc.fleet_id, src, user=user,
                           pubkey=pinned if install else None, platform=platform)
     return _remote(ep, script, platform=platform)

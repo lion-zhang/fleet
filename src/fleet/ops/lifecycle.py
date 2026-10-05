@@ -98,6 +98,10 @@ def dissolve(acc, *, force: bool) -> None:
     finally:
         conn.close()
 
+    # One line per machine, not per edge: a machine holding three grants is one machine
+    # to visit, and listing it three times read as three machines.
+    seen: set[str] = set()
+    left = [(n, why) for n, why in left if not (n in seen or seen.add(n))]
     if left and not force:
         rec.save_ledger(ledger)
         err.print(f"\n[yellow]{len(left)} machine(s) still hold keys[/yellow] and the "

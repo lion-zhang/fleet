@@ -107,6 +107,9 @@ def give_away(acc, name: str, *, force: bool) -> None:
         "record": record, "signature": acl.sign(record),
         "chain": acl.handover_chain(),
         "access": acl.dumps(acc),
+        # The inventory too: a successor sweeping from its own older copy tried to enrol
+        # a machine removed since, and reported renamed machines by their old names.
+        "inventory": inv.dumps(inv.load()),
         "ledger": acl.LEDGER_PATH.read_text() if acl.LEDGER_PATH.exists() else "",
     }, sort_keys=False)
     bundle = yaml.safe_dump({"kind": BUNDLE_KIND, "body": body,
@@ -174,6 +177,9 @@ def receive(raw: str) -> str:
     os.replace(tmp, acl.ACCESS_PATH)
     if inner.get("ledger"):
         acl.LEDGER_PATH.write_text(inner["ledger"])
+    if inner.get("inventory"):
+        incoming = inv.loads(inner["inventory"])
+        inv.update(lambda current: inv.merge(current, incoming, authoritative=True))
     return record.get("fleet_id", "")
 
 
@@ -245,8 +251,10 @@ def accept(acc) -> None:
         raise FleetError("the successor cannot write every machine", code=2)
 
     outgoing = acc.name_of(acc.center)
+    old_fp = acc.center
     acc.center = mine
     acl.save(acc)
+    _retire_key(acc, old_fp, mine)
     if inbox.get("record"):
         acl.save_handover_chain(list(inbox.get("chain") or [])
                                 + [{"record": inbox["record"],
@@ -268,6 +276,32 @@ def accept(acc) -> None:
     console.print(f"\n  [dim]start serving here: [bold]fleet service install[/bold] or "
                   f"[bold]fleet center --listen[/bold]. {outgoing} steps down by itself "
                   "the next time it is used as center.[/dim]")
+
+
+def _retire_key(acc, old_fp: str, mine: str) -> None:
+    """Mark the outgoing center's key for removal everywhere, and take it off here now.
+
+    The planner removes what the ledger says is there. A machine that joined on an
+    invite placed the center's key itself, so no ledger ever recorded it -- and on a
+    real handover the old center's key stayed on exactly those machines, the new center
+    among them. Its key is on every machine by construction, so say so outright.
+    """
+    import subprocess
+
+    from ..ssh.cmd import local_platform, local_shell_argv
+
+    ledger = rec.load_ledger()
+    for fp, meta in acc.keys.items():
+        if fp in (old_fp, mine):
+            continue
+        key = ">".join((old_fp, fp, meta.get("user", "root")))
+        st = ledger.get(key) or rec.EdgeState()
+        st.desired, st.pending_since = "absent", int(time.time())
+        st.dst_device = st.dst_device or meta.get("device_id", "")
+        ledger[key] = st
+    rec.save_ledger(ledger)
+    script = sync_command(acc.fleet_id, old_fp, pubkey=None, platform=local_platform())
+    subprocess.run(local_shell_argv(), input=script.encode(), capture_output=True)
 
 
 # --------------------------------------------------------- the outgoing center

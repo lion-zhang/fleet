@@ -243,3 +243,81 @@ def test_a_handover_that_cannot_be_delivered_retires_nothing(outgoing, monkeypat
         handover.give_away(acl.load(), "worker", force=True)
     assert not acl.HANDING_PATH.exists()
     assert acl.is_center()
+
+
+# ---------------------------------------------- found on the second from-scratch run
+
+def test_the_handover_carries_the_inventory(successor):
+    """The successor swept from its own older copy: it tried to enrol a machine removed
+    since, and named renamed machines by their old names."""
+    (ok, opub), (_, tpub) = successor["old"], successor["new"]
+    acc = acl.Access(fleet_id="f1", center=acl.fingerprint(opub), keys={
+        acl.fingerprint(opub): {"name": "hub", "pubkey": opub},
+        acl.fingerprint(tpub): {"name": "builder", "pubkey": tpub}})
+    record = acl.handover_record(acc, acl.fingerprint(tpub))
+    body = yaml.safe_dump({"record": record, "signature": acl.sign(record, ok), "chain": [],
+                           "access": acl.dumps(acc), "ledger": "",
+                           "inventory": inv.dumps([Device(id="id:w", name="builder")])})
+    inv.save([Device(id="id:w", name="worker", updated_at=1)])
+    handover.receive(yaml.safe_dump({"kind": handover.BUNDLE_KIND, "body": body,
+                                     "signature": acl.sign(body, ok)}))
+    assert [d.name for d in inv.live(inv.load())] == ["builder"]
+
+
+def test_accepting_retires_the_old_key_even_where_no_ledger_recorded_it(successor, monkeypatch):
+    """A machine that joined on an invite placed the center's key itself, so no ledger
+    held it -- and the old key stayed on those machines, the new center among them."""
+    from fleet import reconcile as rec
+    from fleet.ops import sweep
+
+    handover.receive(_bundle(successor))
+    acc = acl.load()
+    old_fp = acc.center
+    acc.keys["SHA256:gpu"] = {"name": "gpu", "pubkey": "ssh-ed25519 AAAA g",
+                              "device_id": "id:gpu", "user": "root"}
+    acl.save(acc)
+    inv.save([Device(id="id:gpu", name="gpu", kind=Kind.PERMANENT,
+                     endpoints=[{"target": "g", "user": "root", "port": 22}])])
+    monkeypatch.setattr(rec, "_remote", lambda *a, **k: (True, ""))
+    monkeypatch.setattr(sweep, "run", lambda devices: None)
+    ran = []
+    monkeypatch.setattr(subprocess, "run", lambda argv, **k: ran.append(k.get("input", b"")) or
+                        subprocess.CompletedProcess(argv, 0, b"", b""))
+    handover.accept(acl.load())
+    st = rec.load_ledger()[f"{old_fp}>SHA256:gpu>root"]
+    assert st.desired == "absent" and st.dst_device == "id:gpu"
+    assert any(old_fp.encode() in r for r in ran), "and taken off this machine's own file"
+
+
+def test_the_center_edits_its_own_authorized_keys_in_place(tmp_path, monkeypatch):
+    """Over ssh it meant the center dialling itself, which fails."""
+    from fleet import reconcile as rec
+    from fleet.ssh.cmd import Endpoint
+
+    monkeypatch.setattr(acl, "is_center", lambda *a, **k: True)
+    monkeypatch.setattr(rec, "_remote", lambda *a, **k: pytest.fail("dialled itself"))
+    ran = []
+    monkeypatch.setattr(subprocess, "run", lambda argv, **k: ran.append(argv) or
+                        subprocess.CompletedProcess(argv, 0, b"", b""))
+    acc = acl.Access(fleet_id="f1", center="SHA256:me", keys={
+        "SHA256:me": {"name": "me"}, "SHA256:old": {"name": "old", "pubkey": "ssh-ed25519 A"}})
+    ok, _ = rec.apply_edge(acc, ("SHA256:old", "SHA256:me", "root"),
+                           Endpoint(target="me"), install=False)
+    assert ok and ran
+
+
+def test_mid_handover_the_old_center_refuses_changes(outgoing, monkeypatch):
+    """Found on a real run: with no word from its successor it went on issuing invites,
+    which the successor's copy of the list would never have."""
+    from typer.testing import CliRunner
+
+    from fleet import cli
+    from fleet.ops import sync
+
+    monkeypatch.setattr(sync, "post", lambda *a, **k: None)
+    r = CliRunner().invoke(cli.app, ["invite"])
+    assert r.exit_code == 2 and "being handed to worker" in r.output
+    r = CliRunner().invoke(cli.app, ["center", "--cancel"])
+    assert r.exit_code == 0 and not acl.HANDING_PATH.exists()
+    monkeypatch.setattr(cli, "_listening", lambda url: True)
+    assert CliRunner().invoke(cli.app, ["invite", "--json"]).exit_code == 0

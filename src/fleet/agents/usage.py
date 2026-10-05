@@ -91,7 +91,9 @@ where to run them: report that to the user, nothing is queued.
 - `{cmd} center NAME` -- hand the role over. Grants NAME everything and delivers the
   handover to it (fleet must be installed there); then NAME runs `{cmd} center
   --accept`, which verifies it can write every machine before taking the role. Every
-  machine, and the old center, follows by itself. Irreversible: a human runs it
+  machine, and the old center, follows by itself. Irreversible: a human runs it.
+  Until NAME accepts, the old center refuses changes (they would not carry over);
+  `{cmd} center --cancel` there keeps the role if NAME never will
 - `{cmd} center --init` / `--dissolve` -- create a fleet, or take it down. Dissolving
   removes every key from every machine first; never delete the access list by hand,
   which orphans those keys instead of removing them

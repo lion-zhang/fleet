@@ -75,8 +75,10 @@ fleet center --accept           # on machine_B: checks it can write every machin
 Every machine follows on its own: the new center's messages carry the old center's
 signed handover, so each machine moves its trust across without being asked. The old
 center steps down by itself the next time you use it as center, and stays in the fleet
-as an ordinary member. Make access changes after the handover, not between the two
-commands — the successor holds a copy of the list as it was.
+as an ordinary member. Between the two commands the old center refuses changes, since
+the successor holds a copy of the list as it was; `fleet center --cancel` on the old
+center keeps the role if the successor never accepts. The successor needs to be
+listening (`fleet center --listen`, or its service) for the old center to notice.
 
 If the center is lost outright, you rebuild the fleet by hand; `fleet center --export`
 is worth keeping somewhere for that day.
@@ -333,12 +335,15 @@ fleet.
 
 | What you see | What it means |
 |---|---|
-| `This machine is not in a fleet` | Run `fleet center --init` first. The fleet comes before the machines. |
+| `This machine is not in a fleet` | Start one with `fleet center --init`, or join one with a code from `fleet invite`. |
 | `<name> did not answer` | Nothing was recorded. Fix reachability and add it again. |
 | `auth_failed` | The host is up and refused our key. Only the center can install one. |
 | A grant that stays `pending` | The sweep has not reached that machine. Not a failure. |
 | `the center has not swept this machine for N days` | Normal. Everything already granted keeps working; only *changes* wait. |
-| `no access list ... not a center` | You are on a spoke. Run the command on the center. |
+| `Only the center can ... Run it on NAME` | You are on a member. Run it on the machine named. |
+| `The role is being handed to NAME` | Mid-handover: `fleet center --accept` on NAME, or `--cancel` here. |
+| `no service manager for this user here` | A container or rental. Keep `fleet center --listen` running yourself. |
+| `fleet: command not found` after installing | `uv tool update-shell`, then open a new shell. |
 | `No machine named exactly ...` | `fleet rm` will not act on a prefix. Give the full name. |
 | `this invite has already been used` | Each invite admits one machine. `fleet invite` for another. |
 | `this invite has expired` | Invites last 15 minutes by default. Issue a new one, with `--ttl` if needed. |

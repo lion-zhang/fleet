@@ -56,6 +56,11 @@ SIGN_NAMESPACE = "fleet-access"
 VERSION = 1
 
 
+def suppress_oserror():
+    import contextlib
+    return contextlib.suppress(OSError)
+
+
 class AccessError(RuntimeError):
     """Anything that would otherwise silently become "no access anywhere"."""
 
@@ -170,6 +175,8 @@ def save(acc: Access, path: Path | None = None) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     tmp = path.with_suffix(".tmp")
     tmp.write_text(dumps(acc))
+    with suppress_oserror():
+        os.chmod(tmp, 0o600)           # the authority: owner-only, whatever the umask
     os.replace(tmp, path)
 
 

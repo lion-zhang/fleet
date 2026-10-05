@@ -301,3 +301,24 @@ def test_an_unreachable_target_stays_pending_rather_than_failing(a_center, monke
     r = CliRunner().invoke(cli.app, ["access", "box", "--allow", "hub"])
     assert r.exit_code == 0, "a machine being off is not a failure of the grant"
     assert "not reached" in r.output and "pending" in r.output
+
+
+def test_a_member_cannot_delete_another_machine_by_syncing(a_center):
+    """Found on a real fleet: `fleet rm nas` on a member tombstoned nas locally, and the
+    next sync deleted it from the center -- keys still installed, record gone."""
+    from fleet.models import Device, Kind
+
+    gone = Device(id="id:hub", name="hub", kind=Kind.PERMANENT, deleted_at=2_000_000_000,
+                  updated_at=2_000_000_000)
+    code, _ = serve.exchange(_sealed(a_center["skey"], [gone]))
+    assert code == 200
+    assert "hub" in {d.name for d in inv.live(inv.load(inv.INVENTORY_PATH))}
+
+
+def test_a_member_may_remove_itself(a_center):
+    from fleet.models import Device, Kind
+
+    me = Device(id="id:box", name="box", kind=Kind.PERMANENT, deleted_at=2_000_000_000,
+                updated_at=2_000_000_000)
+    serve.exchange(_sealed(a_center["skey"], [me]))
+    assert "box" not in {d.name for d in inv.live(inv.load(inv.INVENTORY_PATH))}

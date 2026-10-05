@@ -124,6 +124,12 @@ def exchange(raw: str) -> tuple[int, str]:
         # A truncated body must never be read as "that machine has no devices".
         return 400, f"unreadable inventory: {exc}\n"
 
+    # A member may describe machines -- adding one from a spoke is allowed -- but only
+    # the center removes them. A deletion is honoured from the machine it is about and
+    # from nobody else: otherwise any member, by syncing, could erase any machine from
+    # the fleet while its keys stayed installed with no record left of them.
+    own = (acc.keys.get(acl.fingerprint(signer)) or {}).get("device_id", "")
+    incoming = [d for d in incoming if not d.deleted_at or d.id == own]
     merged, _ = inv.update(lambda current: inv.merge(current, incoming))
     if note["telemetry"]:
         record_relayed(note["telemetry"])

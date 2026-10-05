@@ -95,3 +95,9 @@ def test_sync_on_a_member_asks_the_listener(member, monkeypatch):
     r = CliRunner().invoke(cli.app, ["sync"])
     assert asked == [True]
     assert "did not answer" in r.output and r.exit_code == 1
+
+
+def test_a_member_cannot_remove_another_machine(member):
+    r = CliRunner().invoke(cli.app, ["rm", "hub", "-y"])
+    assert r.exit_code == 2 and "Only the center" in r.output
+    assert "hub" in {d.name for d in inv.live(inv.load())}

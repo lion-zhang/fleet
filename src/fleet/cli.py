@@ -479,10 +479,17 @@ def cmd_invite(name: str = typer.Argument(None, help="what the machine will be c
 
     try:
         acc = acl.load()
-    except acl.AccessError as exc:
-        err.print(f"[red]{exc}[/red]")
-        err.print("  [dim]invites are issued by the center[/dim]")
+    except acl.AccessError:
+        from .ops import member
+
+        if _fleet_membership() != "member":
+            _not_in_a_fleet(False)
+            return
+        err.print(f"[red]Only the center can invite a machine.[/red] Run this on "
+                  f"[bold]{member.center_name()}[/bold].")
         raise typer.Exit(2)
+    if not (list_ or withdraw):
+        _refuse_while_handing_over(acc)
     if not acl.is_center(acc) or _stepped_down(acc):
         err.print(f"[red]Only the center can invite a machine.[/red] Run this on "
                   f"[bold]{acc.name_of(acc.center)}[/bold].")
@@ -832,6 +839,31 @@ def cmd_install(name: str = typer.Argument(None,
     what = output.strip().splitlines()[-1] if output.strip() else "installed"
     console.print(f"[green]✓[/green] {dev.name}: {what}"
                   + (f" — role [bold]{role}[/bold]" if role and role != "none" else ""))
+    _hand_the_fleet_to(dev)
+
+
+def _hand_the_fleet_to(dev) -> None:
+    """Make a machine that just got fleet a member now, not at the next sweep.
+
+    Found on a real fleet: `fleet install gpu` succeeded, and on gpu every command then
+    said "not in a fleet" -- membership arrives in the signed copy a sweep hands over,
+    and the install was the moment fleet was first there to receive one. The center is
+    connected already; one more envelope is cheaper than a confused hour.
+    """
+    try:
+        acc = acl.load()
+    except acl.AccessError:
+        return
+    if not acl.is_center(acc):
+        return
+    eps = sorted(inv.endpoints_of(dev), key=lambda e: e.preference)
+    if not eps:
+        return
+    with contextlib.suppress(Exception):
+        code, _ = _sync.run_sync(eps[0], inv.dumps(inv.load()))
+        if code == 0:
+            console.print(f"  [dim]{dev.name} has the fleet now and keeps itself "
+                          "current[/dim]")
 
 
 
@@ -1218,15 +1250,22 @@ def cmd_rm(name: str, yes: bool = typer.Option(False, "--yes", "-y")):
     itself = bool(dev.id) and dev.id == identity.local_device_id()
     if not itself:
         try:
-            if not acl.is_center(acl.load()):
-                err.print(f"[red]Only the center can remove {dev.name}.[/red]")
-                err.print("  [dim]a machine can remove itself -- that is leaving -- but "
-                          "removing another revokes its keys, which only the center "
-                          "can do[/dim]")
-                raise typer.Exit(2)
+            centre = acl.is_center(acl.load())
         except acl.AccessError:
-            pass          # no fleet yet: the inventory is just a list, remove freely
+            # No access list. On a member that is the normal state, not "no fleet yet":
+            # treating it as a free-for-all let a member tombstone any machine, and the
+            # tombstone then rode the merge to the center and deleted it fleet-wide.
+            centre = _fleet_membership() == ""
+        if not centre:
+            err.print(f"[red]Only the center can remove {dev.name}.[/red]")
+            err.print("  [dim]a machine can remove itself -- that is leaving -- but "
+                      "removing another revokes its keys, which only the center "
+                      "can do[/dim]")
+            raise typer.Exit(2)
 
+    with contextlib.suppress(acl.AccessError):
+        if not itself:
+            _refuse_while_handing_over(acl.load())
     if not yes and not typer.confirm(f"Remove {dev.name} ({dev.kind.value})?"):
         raise typer.Exit(1)
 
@@ -1428,6 +1467,8 @@ def cmd_access(target: str = typer.Argument(None, help="one machine, instead of 
                       "answer for any one machine[/dim]")
         return
 
+    if allow or deny:
+        _refuse_while_handing_over(current)
     if (allow or deny) and _stepped_down(current):
         err.print("[red]Only the center can change who may reach what.[/red] Run it on "
                   "the new center.")
@@ -1523,6 +1564,9 @@ def cmd_center(name: str = typer.Argument(None, help="hand the role to this mach
                                                   "key from every machine"),
                leave: bool = typer.Option(False, "--leave",
                                           help="remove this fleet's keys from this machine"),
+               cancel: bool = typer.Option(False, "--cancel",
+                                           help="keep the role after handing it over, "
+                                                "if the successor never accepted"),
                receive: bool = typer.Option(False, "--receive", hidden=True,
                                             help="store a handover the center delivers "
                                                  "on stdin; run by the center over ssh"),
@@ -1637,6 +1681,19 @@ def cmd_center(name: str = typer.Argument(None, help="hand the role to this mach
                                export=export, name=name, json_out=json_out)
         return
 
+    if cancel:
+        if not acl.HANDING_PATH.exists():
+            console.print("[dim]· no handover is outstanding[/dim]")
+            return
+        acl.HANDING_PATH.unlink()
+        console.print("[green]✓[/green] this machine keeps the role; the handover is "
+                      "cancelled here")
+        console.print("  [dim]the successor still holds the record you signed and could "
+                      "accept with it; to make sure it cannot manage the fleet, take its "
+                      "grants away with [bold]fleet access[/bold][/dim]")
+        return
+    if dissolve or name:
+        _refuse_while_handing_over(acc)
     if dissolve:
         with _as_exit():
             _dissolve(acc, force=force)
@@ -1712,6 +1769,27 @@ def _stepped_down(acc) -> bool:
     from .ops.handover import settle
 
     return settle(acc)
+
+
+def _refuse_while_handing_over(acc) -> None:
+    """Refuse a change on a center that has handed the role over but not heard back.
+
+    Found on a real fleet: the outgoing center, with no word yet from its successor,
+    went on issuing invites. The successor took a copy of the list at handover, so
+    anything changed here in between is simply lost when it accepts -- silently.
+    """
+    if not acl.HANDING_PATH.exists() or _stepped_down(acc):
+        return
+    try:
+        to = (yaml.safe_load(acl.HANDING_PATH.read_text()) or {}).get("to_name", "the successor")
+    except (OSError, yaml.YAMLError):
+        to = "the successor"
+    err.print(f"[red]The role is being handed to {to},[/red] so this machine makes no "
+              "changes meanwhile -- they would not carry over.")
+    err.print(f"  [dim]on {to}: [bold]fleet center --accept[/bold] (it needs to be "
+              f"listening for this machine to notice). To keep the role instead: "
+              f"[bold]fleet center --cancel[/bold] here.[/dim]")
+    raise typer.Exit(2)
 
 
 def _not_in_a_fleet(json_out: bool) -> None:
