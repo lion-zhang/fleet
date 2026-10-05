@@ -49,7 +49,9 @@ Anywhere. A name may be omitted where the obvious subject is the machine you are
 - `{cmd} center --leave` -- take this machine out of the fleet. Needs nobody's
   permission: you own the machine you are on
 - `{cmd} top` -- live view; needs a terminal, so not for an agent
-- `{cmd} update [NAME]` / `--all` -- deploy the newest fleet from git
+- `{cmd} update [NAME]` / `--all` -- deploy the newest fleet from git. It also
+  rewrites this description on each machine, so what you read here stays current;
+  `{cmd} setup --refresh` does just that part
 - Windows hosts work as targets: they are probed and keyed over PowerShell, and
   `{cmd} ssh box -- cmd` passes the command through rather than wrapping it in a
   POSIX shell. Nothing to configure -- it is read from the last probe
@@ -159,9 +161,23 @@ where to run them: report that to the user, nothing is queued.
 
 
 
+def stamp(cmd: str) -> str:
+    """Which fleet wrote this text, and which text it is.
+
+    The version alone cannot say: it stayed at 0.4.0 through a run of changes to what
+    agents are told, so a copy written weeks apart read as the same. A hash of the words
+    does. An HTML comment, so it renders as nothing in every agent that reads markdown.
+    """
+    import hashlib
+
+    digest = hashlib.sha256((_DESCRIPTION + _usage(cmd)).encode()).hexdigest()[:12]
+    return (f"<!-- fleet {package_version()} #{digest} -- written by `fleet setup`; "
+            "`fleet setup --refresh` rewrites it -->")
+
+
 def skill_text(cmd: str) -> str:
     """A Claude Code skill file. fleet owns this file entirely."""
-    return (f"---\nname: fleet\ndescription: {_DESCRIPTION}\n---\n\n"
+    return (f"---\nname: fleet\ndescription: {_DESCRIPTION}\n---\n\n{stamp(cmd)}\n\n"
             f"# fleet\n\nYour personal compute inventory.\n\n{_usage(cmd)}")
 
 
@@ -180,11 +196,12 @@ def hermes_skill_text(cmd: str) -> str:
             "metadata:\n  hermes:\n"
             "    tags: [fleet, inventory, gpu, ssh, remote, compute]\n"
             "    requires_tools: [terminal]\n"
-            f"---\n\n# fleet\n\nYour personal compute inventory.\n\n{_usage(cmd)}")
+            f"---\n\n{stamp(cmd)}\n\n# fleet\n\nYour personal compute inventory.\n\n"
+            f"{_usage(cmd)}")
 
 
 
 def agents_block(cmd: str) -> str:
     """The body of the managed region in a shared AGENTS.md."""
-    return f"# fleet\n\n{_DESCRIPTION}\n\n{_usage(cmd)}"
+    return f"{stamp(cmd)}\n# fleet\n\n{_DESCRIPTION}\n\n{_usage(cmd)}"
 

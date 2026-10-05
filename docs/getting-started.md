@@ -156,7 +156,10 @@ fleet setup
 ```
 
 Sets up whichever agents are actually installed, and nothing else — it will not create a
-config directory for an agent you do not use. Re-run it after upgrading fleet.
+config directory for an agent you do not use. You do not need to re-run it after an
+upgrade: `fleet install` and `fleet update` refresh what is already set up, on every
+machine they touch, and never add fleet to an agent you left alone. `fleet ls` says so
+if an agent here is reading an older description — `fleet setup --refresh` fixes that.
 
 **Agents with a shell** — Claude Code, Codex, Gemini CLI, Hermes — get a skill, which
 costs nothing until a task actually needs a machine. Where fleet owns the file it writes
@@ -425,7 +428,7 @@ fleet center --dissolve        # take the whole fleet down
 ```bash
 fleet install machine_A        # put fleet on a machine that has none
 fleet update --all             # deploy the newest fleet everywhere
-fleet setup                    # re-teach your agents after an upgrade
+fleet setup                    # teach your agents; updates keep them current
 fleet paths                    # where the inventory, keys and access list live
 ```
 

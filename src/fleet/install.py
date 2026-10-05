@@ -82,6 +82,11 @@ uv tool install --force --reinstall-package fleet-broker --quiet "$DIR"
 # to find out about afterwards.
 uv tool update-shell >/dev/null 2>&1 || true
 
+# What the agents on this machine are told about fleet, rewritten to match the fleet
+# just installed. Only what is already there: never adds fleet to an agent. Without it
+# every update left agents describing commands as they used to be.
+PATH="$HOME/.local/bin:$PATH" fleet setup --refresh >/dev/null 2>&1 || true
+
 PATH="$HOME/.local/bin:$PATH" fleet --version
 
 # Back up if it was there. `install` is idempotent, so this must not start a service on a
@@ -312,6 +317,11 @@ uv tool install --force --reinstall-package fleet-broker --quiet $dir
 # it the shim lands in a directory nothing has ever added to PATH, and fleet installs
 # correctly and then is not there when they type its name.
 try {{ uv tool update-shell 2>&1 | Out-Null }} catch {{ }}
+
+# The agents' copy of what fleet does, rewritten to match. Only what is already there.
+if (Test-Path $fleet) {{
+  try {{ & $fleet setup --refresh 2>&1 | Out-Null }} catch {{ }}
+}}
 
 & $fleet --version
 if (Test-Path $fleet) {{

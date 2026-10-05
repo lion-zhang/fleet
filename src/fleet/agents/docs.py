@@ -79,6 +79,38 @@ def detect_targets(root: Path) -> list[str]:
 
 
 
+def installed_targets(root: Path, *, project: bool = False) -> list[str]:
+    """Agents fleet has already taught here: a skill file it owns, or a marked region.
+
+    What `fleet setup --refresh` rewrites. Deliberately not `detect_targets`: an agent
+    being installed is not the user asking for fleet to be in it, and a refresh that ran
+    on every update must never add fleet to an agent somebody chose to leave alone.
+    """
+    out = []
+    for target, path in plan(root, project=project).items():
+        try:
+            text = path.read_text()
+        except OSError:
+            continue
+        if path.name == "SKILL.md" or BEGIN in text:
+            out.append(target)
+    return out
+
+
+def stale_targets(root: Path, cmd: str, *, project: bool = False) -> list[str]:
+    """Installed agents whose copy differs from what this fleet would write now."""
+    paths = plan(root, project=project)
+    out = []
+    for target in installed_targets(root, project=project):
+        path = paths[target]
+        try:
+            if path.read_text() != _desired(target, path, cmd):
+                out.append(target)
+        except OSError:
+            continue
+    return out
+
+
 def _desired(target: str, path: Path, cmd: str) -> str:
     # A SKILL.md is a file fleet owns outright; anything else belongs to the user and
     # gets a marked region. Read from the filename rather than declared per agent,

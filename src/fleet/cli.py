@@ -29,7 +29,8 @@ from . import reconcile as rec
 from . import service
 from .agents import (MCP_CLIENTS, TARGETS, detect_mcp_clients, detect_targets,
                      fleet_command, fleet_executable, install, install_mcp,
-                     package_version, uninstall, uninstall_mcp)
+                     installed_mcp_clients, installed_targets, package_version,
+                     stale_mcp_clients, stale_targets, uninstall, uninstall_mcp)
 from .config import DEFAULT_PORT, INVENTORY_PATH, load_config
 from .edit import apply_edits
 from .install import (NOTHING_TO_UPDATE, build_install_argv, install_script,
@@ -183,6 +184,8 @@ def cmd_ls(names: list[str] = typer.Argument(None, help="only these devices"),
                   age, note)
     console.print(t)
     if note := staleness_note():
+        console.print(f"[yellow]![/yellow] [dim]{note}[/dim]")
+    if note := _skills_note():
         console.print(f"[yellow]![/yellow] [dim]{note}[/dim]")
     s = view["summary"]
     console.print(f"\n[dim]{s['online']}/{s['total']} online · {s['gpus_free']} free GPU(s)"
@@ -1795,6 +1798,25 @@ def _stepped_down(acc) -> bool:
     return settle(acc)
 
 
+def _skills_note() -> str:
+    """Say so when this machine's agents read an older description of fleet.
+
+    In the human view of `fleet ls` only, the command people actually look at. An update
+    refreshes the skills itself now, so this mostly catches a fleet upgraded by hand.
+    Never fatal: it is advice, and a read must not fail over it.
+    """
+    try:
+        root = Path.home()
+        stale = stale_targets(root, fleet_command()) + stale_mcp_clients(
+            root, fleet_executable())
+    except Exception:
+        return ""
+    if not stale:
+        return ""
+    return (f"{', '.join(stale)} read{'s' if len(stale) == 1 else ''} an older "
+            "description of fleet -- [bold]fleet setup --refresh[/bold]")
+
+
 def _refuse_while_handing_over(acc) -> None:
     """Refuse a change on a center that has handed the role over but not heard back.
 
@@ -1887,6 +1909,9 @@ def cmd_setup(
                                  help="write into the current directory, not your home"),
     dry_run: bool = typer.Option(False, "--dry-run", help="show what would change; write nothing"),
     remove: bool = typer.Option(False, "--uninstall", help="remove what setup installed"),
+    refresh: bool = typer.Option(False, "--refresh",
+                                 help="rewrite only what fleet already installed, so it "
+                                      "matches this fleet; adds nothing new"),
 ):
     """Teach your coding agents to use fleet.
 
@@ -1901,6 +1926,24 @@ def cmd_setup(
     # `--project` never touches them -- their config is per-user, not per-repo.
 
     mcp_names = tuple(c.name for c in MCP_CLIENTS)
+    if refresh:
+        # Run by every install and update, on the machine being updated. So it may only
+        # rewrite what is already there -- never teach an agent fleet that someone chose
+        # to leave alone -- and finding nothing to refresh is not a failure.
+        targets = installed_targets(root, project=project)
+        clients = [] if project else installed_mcp_clients(root)
+        if not targets and not clients:
+            console.print("[dim]· no agent here has fleet installed; nothing to refresh"
+                          "[/dim]")
+            return
+        changes = (install(root, targets, fleet_command(), dry_run=dry_run, project=project)
+                   + install_mcp(root, clients, fleet_executable(), dry_run=dry_run))
+        changed = [c for c in changes if c.action != "unchanged"]
+        for c in changed:
+            console.print(f"  [green]{c.action:<9}[/green] {c.path}")
+        if not changed:
+            console.print("[dim]· agent skills already match this fleet[/dim]")
+        return
     if target == "auto":
         # cwd tells us nothing about which agents you use, so a project install
         # assumes the one whose layout is identical in both scopes.
