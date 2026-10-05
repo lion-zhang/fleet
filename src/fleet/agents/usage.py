@@ -125,6 +125,10 @@ these either refuse or file a request for the center to act on later.
 - Reading the fleet refreshes it. `{cmd} ls` and `{cmd} show` pull from the center when
   this machine's copy has gone stale, so you do not need `{cmd} sync` to see current
   data -- and a center that is down costs you freshness, never the command.
+- A machine that keeps not answering is asked less often by a bare `{cmd} ls`: the
+  wait doubles per miss, up to half an hour. So `timeout` with an old "last seen" can
+  be minutes stale. Before concluding a machine is down -- or when the user says it
+  is back -- ask it directly: `{cmd} ls NAME -r --json`
 - The center is expected to be offline -- it is usually a laptop. Everything already
   granted keeps working without it; only *changes* wait. "The center was last seen 3h
   ago" is a normal state to report, not an error.

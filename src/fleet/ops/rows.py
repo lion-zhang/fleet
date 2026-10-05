@@ -89,10 +89,14 @@ def snapshot(names: list[str] | None = None, *, refresh: bool = False,
     try:
         me = identity.local_device_id()
         stale = []
+        # Backing off is for the reads nobody aimed at that machine. Naming it -- `fleet
+        # ls machine_A`, `fleet show machine_A` -- is asking about it, so it is asked.
+        backoff = 0 if names else int(cfg.offline_backoff_max_s or 0)
         for d in devices:
             st, _ = store.latest(conn, d.id)
             eligible = d.probeable or (bool(names) and d.probe_policy != "never")
-            if eligible and (refresh or not store.is_fresh(st, int(cfg.telemetry_ttl_s))):
+            if eligible and (refresh or not store.is_fresh(
+                    st, int(cfg.telemetry_ttl_s), backoff_max=backoff)):
                 stale.append(d)
         if stale:
             _probe(conn, stale, cfg, me=me)

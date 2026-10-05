@@ -341,7 +341,9 @@ example for every one.
 ```bash
 fleet ls                       # every machine, with what is free right now
 fleet ls --online              # only the reachable ones
-fleet ls machine_A -r          # just this one, freshly probed
+fleet ls machine_A -r          # just this one, freshly probed -- also how to ask a
+                               # machine that was off: a bare `ls` retries those less
+                               # often, so being off never makes `ls` slow
 fleet show                     # this machine in detail; `fleet show NAME` for another
 fleet top                      # live view; needs a terminal
 ```

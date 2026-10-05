@@ -555,6 +555,8 @@ def note_center_seen(cache_path: Path | None = None) -> None:
     except (OSError, yaml.YAMLError):
         data = {}
     data["seen_at"] = int(time.time())
+    data.pop("unanswered_at", None)        # it answered: any backoff is over
+    data.pop("unanswered", None)
     path.parent.mkdir(parents=True, exist_ok=True)
     tmp = path.with_suffix(".tmp")
     tmp.write_text(yaml.safe_dump(data, sort_keys=False))
@@ -627,3 +629,44 @@ def handover_record(acc: Access, successor_fp: str) -> str:
         "to_pubkey": meta.get("pubkey", ""),
         "at": int(time.time()),
     }, sort_keys=False)
+
+
+# ------------------------------------------------------------ a center not answering
+
+def note_center_unanswered(cache_path: Path | None = None) -> None:
+    """Record that asking the center for a fresh copy got nowhere.
+
+    Without this nothing remembered the failure, so every read asked again: a laptop
+    center closed for the weekend cost every machine a full connect timeout on every
+    `fleet ls` until it came back -- which is the sync outage the design says must cost
+    freshness and nothing else.
+    """
+    path = cache_path or CACHE_PATH
+    try:
+        data = yaml.safe_load(path.read_text()) or {}
+    except (OSError, yaml.YAMLError):
+        data = {}
+    data["unanswered_at"] = int(time.time())
+    data["unanswered"] = int(data.get("unanswered") or 0) + 1
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = path.with_suffix(".tmp")
+    tmp.write_text(yaml.safe_dump(data, sort_keys=False))
+    os.replace(tmp, path)
+
+
+def center_retry_after(base_s: int, max_s: int, cache_path: Path | None = None) -> int:
+    """Seconds until the center is worth asking again; 0 means now.
+
+    `base_s` after the first failure, doubling per failure after that, up to `max_s`.
+    """
+    path = cache_path or CACHE_PATH
+    try:
+        data = yaml.safe_load(path.read_text()) or {}
+        failures, at = int(data.get("unanswered") or 0), int(data.get("unanswered_at") or 0)
+    except (OSError, yaml.YAMLError, TypeError, ValueError):
+        return 0
+    if failures <= 0 or not at:
+        return 0
+    wait = min(max_s, base_s * 2 ** min(failures - 1, 20)) if max_s else base_s
+    return max(0, at + wait - int(time.time()))
+

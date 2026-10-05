@@ -34,6 +34,11 @@ DEFAULTS: dict = {
     # the center. Lazy on purpose: a machine nobody is using does not need fresh data,
     # and the moment someone uses it, it gets some.
     "sync_ttl_s": 300,
+    # The longest a machine that is not answering is left alone before being tried
+    # again. Waiting starts at telemetry_ttl_s / one minute and doubles per failure: a
+    # dead host costs a connect timeout per attempt, and paying it on every `fleet ls`
+    # made a machine being off cost seconds on every read, not just freshness.
+    "offline_backoff_max_s": 1800,
     "presence_ttl_s": 10,       # tailscale presence is nearly free, so refresh often
     "probe_timeout_s": 20,
     "connect_timeout_s": 8,

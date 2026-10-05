@@ -11,6 +11,10 @@ from pathlib import Path
 from ..config import DB_PATH, ensure_dirs, load_config
 from ..models import ProbeResult, Snapshot, Status
 
+# The outcomes that cost a wait to learn: nothing answered, so the probe sat out the
+# connect timeout. These are what back off; everything else answers at once.
+SLOW_FAILURES = frozenset({Status.TIMEOUT, Status.UNREACHABLE})
+
 # Bumped whenever the shape below changes. `CREATE TABLE IF NOT EXISTS` is silent about
 # a table that exists with the wrong columns, so without this an upgraded fleet keeps the
 # old schema and raises "no such column" on the first command. The telemetry tables are a
@@ -22,7 +26,7 @@ CREATE TABLE IF NOT EXISTS device_state (
   device_id TEXT NOT NULL, source TEXT NOT NULL DEFAULT 'self',
   status TEXT, error_class TEXT, error_detail TEXT,
   endpoint_used TEXT, last_probe_at INTEGER, last_ok_at INTEGER, probe_ms INTEGER,
-  stderr_tail TEXT, probed_by TEXT,
+  stderr_tail TEXT, probed_by TEXT, fail_streak INTEGER NOT NULL DEFAULT 0,
   PRIMARY KEY (device_id, source));
 CREATE TABLE IF NOT EXISTS snapshot (
   id INTEGER PRIMARY KEY AUTOINCREMENT, device_id TEXT NOT NULL, ts INTEGER NOT NULL,
@@ -54,10 +58,29 @@ def _migrate(conn: sqlite3.Connection) -> None:
     """
     if conn.execute("PRAGMA user_version").fetchone()[0] == SCHEMA_VERSION \
             and _shape_matches(conn):
+        _add_columns(conn)
         return
     for table in ("device_state", "snapshot", "event"):
         conn.execute(f"DROP TABLE IF EXISTS {table}")
     conn.execute(f"PRAGMA user_version={SCHEMA_VERSION}")
+    conn.commit()
+
+
+# Columns added after a table first shipped, with their definitions. Added in place
+# rather than by bumping SCHEMA_VERSION: an additive column is the one change that does
+# not need the drop-and-refill, and dropping would throw away every machine's history
+# to gain a counter.
+_ADDED_COLUMNS = {"device_state": {"fail_streak": "INTEGER NOT NULL DEFAULT 0"}}
+
+
+def _add_columns(conn: sqlite3.Connection) -> None:
+    for table, columns in _ADDED_COLUMNS.items():
+        have = {row[1] for row in conn.execute(f"PRAGMA table_info({table})")}
+        if not have:
+            continue                       # not created yet; the schema script will
+        for name, ddl in columns.items():
+            if name not in have:
+                conn.execute(f"ALTER TABLE {table} ADD COLUMN {name} {ddl}")
     conn.commit()
 
 
@@ -87,24 +110,30 @@ def record(conn: sqlite3.Connection, device_id: str, res: ProbeResult, *,
     """Store a probe result. `source` is 'self' for one we ran, 'broadcast' for one
     relayed by the center for a device we cannot reach ourselves."""
     now = int(time.time())
-    prev = conn.execute("SELECT last_ok_at FROM device_state WHERE device_id=? AND source=?",
-                        (device_id, source)).fetchone()
+    prev = conn.execute("SELECT last_ok_at, fail_streak FROM device_state "
+                        "WHERE device_id=? AND source=?", (device_id, source)).fetchone()
     # A failed probe degrades a device to "stale but known" -- last_ok_at is preserved
     # so the UI can say "last seen 2h ago" instead of blanking the device.
     last_ok = now if res.ok else (prev["last_ok_at"] if prev else None)
+    # Only the failures that cost a wait count. A rejected key or a refused port answers
+    # instantly, so re-asking is cheap -- and a key rejected a minute ago may have been
+    # granted since, which is exactly when someone looks again.
+    streak = ((prev["fail_streak"] or 0) if prev else 0) + 1 if res.status in SLOW_FAILURES \
+        else 0
     conn.execute(
         """INSERT INTO device_state
              (device_id,source,status,error_class,error_detail,endpoint_used,
-              last_probe_at,last_ok_at,probe_ms,stderr_tail,probed_by)
-           VALUES (?,?,?,?,?,?,?,?,?,?,?)
+              last_probe_at,last_ok_at,probe_ms,stderr_tail,probed_by,fail_streak)
+           VALUES (?,?,?,?,?,?,?,?,?,?,?,?)
            ON CONFLICT(device_id,source) DO UPDATE SET
              status=excluded.status, error_class=excluded.error_class,
              error_detail=excluded.error_detail, endpoint_used=excluded.endpoint_used,
              last_probe_at=excluded.last_probe_at, last_ok_at=excluded.last_ok_at,
              probe_ms=excluded.probe_ms, stderr_tail=excluded.stderr_tail,
-             probed_by=excluded.probed_by""",
+             probed_by=excluded.probed_by, fail_streak=excluded.fail_streak""",
         (device_id, source, res.status.value, res.error_class, res.error_detail,
-         res.endpoint_used, now, last_ok, res.latency_ms, res.stderr_tail, probed_by))
+         res.endpoint_used, now, last_ok, res.latency_ms, res.stderr_tail, probed_by,
+         streak))
     if res.snapshot is not None:
         conn.execute("INSERT INTO snapshot (device_id, ts, source, payload) VALUES (?,?,?,?)",
                      (device_id, res.snapshot.ts, source,
@@ -165,6 +194,22 @@ def age_s(state: dict | None) -> int | None:
     return int(time.time()) - int(state["last_probe_at"])
 
 
-def is_fresh(state: dict | None, ttl: int) -> bool:
+def is_fresh(state: dict | None, ttl: int, *, backoff_max: int = 0) -> bool:
+    """Whether the last probe still stands. With `backoff_max`, a machine that has not
+    answered for several probes in a row stands longer: `ttl`, doubled per failure past
+    the first, up to `backoff_max`.
+
+    Without it, a switched-off machine was dialled again on every read once a minute,
+    and every read waited out the connect timeout to learn what it already knew.
+    """
     a = age_s(state)
-    return a is not None and a <= ttl
+    if a is None:
+        return False
+    return a <= effective_ttl(state, ttl, backoff_max=backoff_max)
+
+
+def effective_ttl(state: dict | None, ttl: int, *, backoff_max: int = 0) -> int:
+    streak = int((state or {}).get("fail_streak") or 0)
+    if not backoff_max or streak <= 1:
+        return ttl
+    return max(ttl, min(backoff_max, ttl * 2 ** min(streak - 1, 20)))

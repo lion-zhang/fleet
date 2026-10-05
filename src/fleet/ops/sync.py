@@ -179,8 +179,13 @@ def ensure_fresh(*, force: bool = False) -> None:
     pinned = acl.trusted_center_pubkey()
     if not url or not pinned:
         return                             # never been told where to ask, or who to trust
-    if not force and int(time.time()) - acl.center_last_seen() < int(
-            load_config().sync_ttl_s):
+    cfg = load_config()
+    if not force and int(time.time()) - acl.center_last_seen() < int(cfg.sync_ttl_s):
+        return
+    # A center that did not answer last time is left alone for a while, doubling per
+    # miss. Reads keep working from local state either way; what this saves is the
+    # connect timeout every one of them was paying to rediscover that it is away.
+    if not force and acl.center_retry_after(60, int(cfg.offline_backoff_max_s or 0)):
         return
     try:
         payload = acl.seal(inv.dumps(inv.load()), telemetry=telemetry_to_relay())
@@ -188,12 +193,16 @@ def ensure_fresh(*, force: bool = False) -> None:
         return                             # no key of our own yet; nothing to say
     body = post(url, payload)
     if body is None:
+        acl.note_center_unanswered()
         return
     try:
         note = acl.unseal(body, pinned)
         incoming = inv.loads(note["inventory"])
     except Exception:
-        return                             # unsigned, or not from the center we pinned
+        # unsigned, or not from the center we pinned. Backed off too: asking again
+        # will not change who answers, and it costs a round trip each time.
+        acl.note_center_unanswered()
+        return
     inv.update(lambda current: inv.merge(current, incoming, authoritative=True))
     if note["telemetry"]:
         record_relayed(note["telemetry"])
