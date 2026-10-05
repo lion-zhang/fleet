@@ -385,7 +385,8 @@ def _code(f, **kw):
 def test_joining_leaves_a_machine_the_center_can_manage(joining):
     f = joining
     out = join_mod.join(_code(f))
-    assert f["sent"] == ["http://hub.example:7373/join"]
+    # the join, then the signed confirmation that the center's key is in place here
+    assert f["sent"] == ["http://hub.example:7373/join", "http://hub.example:7373/sync"]
     assert out["name"] == "newbox" and out["center_key_installed"], out
     # the center is pinned, and it is the one the code named
     assert acl.fingerprint(acl.trusted_center_pubkey()) == f["cfp"]
@@ -509,3 +510,68 @@ def test_durations(text, seconds):
     from fleet.cli import _duration_s
 
     assert _duration_s(text) == seconds
+
+
+
+# ------------------------------------------------- the invite path, finished
+
+def test_after_joining_the_centers_access_reads_present(joining, monkeypatch):
+    """It read "not applied yet" until a sweep, though the joiner had placed the key --
+    and for a machine the center cannot dial, no sweep ever comes."""
+    from fleet import reconcile as rec
+    from fleet import serve
+    from fleet.ops import sync
+
+    f = joining
+    def post(url, payload, **k):
+        f["sent"].append(url)
+        with being(f["c"]):
+            if url.endswith("/join"):
+                code, body = join_mod.handle(payload, peer="10.0.0.7",
+                                             center_url="http://hub.example:7373/sync")
+            else:
+                code, body = serve.exchange(payload)
+        return body if code == 200 else (code, body)
+    monkeypatch.setattr(sync, "post", post)
+    join_mod.join(_code(f))
+    with being(f["c"]):
+        st = rec.load_ledger()[f"{f['cfp']}>{acl.fingerprint(f['jpub'])}>alice"]
+    assert st.observed == "present"
+
+
+def test_a_clone_joining_on_an_invite_is_kept_apart(fleet_of_two, tmp_path):
+    """Same machine-id as box, a different key, a different hostname: a clone of box's
+    image, not box rebuilt. Refusing it as an impersonation left it no way in."""
+    from fleet.models import ProbeResult, Snapshot, Status
+
+    f = fleet_of_two
+    with being(f["c"]):
+        conn = store.connect()
+        store.record(conn, "id:box", ProbeResult(status=Status.OK,
+                                                 snapshot=Snapshot(ts=1, hostname="box")))
+        conn.close()
+    invite, secret = _invite(f)
+    request = join_mod.build_request(_me("box-clone", "id:box"), invite_id=invite.id,
+                                     secret=secret, key_path=f["jkey"], hostname="box-clone")
+    code, body = _ask(f, request)
+    assert code == 200, body
+    with being(f["c"]):
+        names = {d.name: d.id for d in inv.live(inv.load())}
+    assert names["box-clone"] == "id:box:box-clone" and names["box"] == "id:box"
+
+
+def test_the_same_machine_rebuilt_is_still_refused(fleet_of_two):
+    """Same id and same hostname with a new key is a rebuild or an impersonation, and an
+    invite is not where to decide which."""
+    from fleet.models import ProbeResult, Snapshot, Status
+
+    f = fleet_of_two
+    with being(f["c"]):
+        conn = store.connect()
+        store.record(conn, "id:box", ProbeResult(status=Status.OK,
+                                                 snapshot=Snapshot(ts=1, hostname="box")))
+        conn.close()
+    invite, secret = _invite(f)
+    request = join_mod.build_request(_me("box", "id:box"), invite_id=invite.id,
+                                     secret=secret, key_path=f["jkey"], hostname="box")
+    assert _ask(f, request)[0] == 409

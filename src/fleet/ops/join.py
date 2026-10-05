@@ -101,14 +101,15 @@ def _request_body(invite_id: str, sealed: str, mac: str) -> str:
 
 
 def build_request(device: Device, *, invite_id: str, secret: str,
-                  key_path=None) -> str:
+                  key_path=None, hostname: str = "") -> str:
     """The joiner's half: its own record, sealed with its own key, MAC'd with the invite.
 
     Sealing is what proves the joiner holds the key it is asking to have pinned -- the
     same proof every envelope in the fleet carries. The MAC is over the whole sealed
     envelope, so the invite cannot be lifted off this request and stapled to another.
     """
-    sealed = acl.seal(inv.dumps([device]), key_path=key_path)
+    sealed = acl.seal(inv.dumps([device]), key_path=key_path,
+                      claims={"hostname": hostname} if hostname else None)
     return _request_body(invite_id, sealed,
                          invites_mod.mac(invites_mod.secret_key(secret), sealed))
 
@@ -224,11 +225,35 @@ def handle(raw: str, *, peer: str = "", center_url: str = "") -> tuple[int, str]
     dev = offered[0]
 
     with _ADMIT:
-        return _admit(dev, signer, fp, invite, peer=peer, center_url=center_url)
+        return _admit(dev, signer, fp, invite, peer=peer, center_url=center_url,
+                      hostname=str(note.get("claims", {}).get("hostname") or ""))
+
+
+def _slug(text: str) -> str:
+    from ..onboard import slugify
+
+    return slugify(text)
+
+
+def _is_a_clone(acc, known: Device, fp: str, hostname: str) -> bool:
+    if not hostname:
+        return False
+    pinned = [k for k, m in acc.keys.items() if m.get("device_id") == known.id]
+    if not pinned or fp in pinned:
+        return False                       # unpinned, or this very key: same machine
+    from ..state import store
+
+    conn = store.connect()
+    try:
+        _, snap = store.latest(conn, known.id)
+    finally:
+        conn.close()
+    before = (snap or {}).get("hostname") or ""
+    return bool(before) and before != hostname
 
 
 def _admit(dev: Device, signer: str, fp: str, invite, *, peer: str,
-           center_url: str) -> tuple[int, str]:
+           center_url: str, hostname: str = "") -> tuple[int, str]:
     """Pin, record and spend, against an access list read under the admission lock."""
     from ..ops.sync import telemetry_to_relay
 
@@ -240,6 +265,12 @@ def _admit(dev: Device, signer: str, fp: str, invite, *, peer: str,
     dev.pubkey = signer                    # the key that signed, not whatever it claimed
     stable = _stable_id(dev)
     known = inv.find_exact(devices, stable) if stable else None
+    if known is not None and _is_a_clone(acc, known, fp, hostname):
+        # Same machine-id, a different key and a different hostname: another machine
+        # cloned from the same image, not this one rebuilt. Kept apart, as `fleet add`
+        # does, rather than refused as an impersonation of the first.
+        stable, known = f"{stable}:{_slug(hostname)}", None
+        dev.name = dev.name if dev.name != "device" else _slug(hostname)
     pinned_name = (acc.keys.get(fp) or {}).get("name", "")
     if pinned_name:
         name = pinned_name                 # this key joined before; keep what it is called
@@ -254,6 +285,7 @@ def _admit(dev: Device, signer: str, fp: str, invite, *, peer: str,
         name = _unique_name(wanted, taken)
 
     record = _admitted_record(dev, name=name, peer=peer)
+    record.id = stable
     if not record.endpoints:
         return 400, ("could not tell how the center would reach this machine -- "
                      "join again with --ssh \"ssh user@address\"\n")
@@ -313,6 +345,21 @@ def _install_center_key(fleet_id: str, center_fp: str, user: str, pubkey: str) -
     return p.returncode == 0, (p.stdout + p.stderr).decode(errors="replace")
 
 
+def _confirm_center_key(url: str) -> None:
+    """Tell the center its key is in place here, so `fleet access` says so.
+
+    Best effort: a center that does not hear it learns the same from its first sweep.
+    """
+    from .sync import post, telemetry_to_relay
+
+    try:
+        payload = acl.seal(inv.dumps(inv.load()), telemetry=telemetry_to_relay(),
+                           claims={"center_key": "present"})
+    except Exception:
+        return
+    post(url, payload)
+
+
 def join(code: str, *, name: str = "", ssh_command: str = "") -> dict:
     """Join the fleet the code names. Returns a summary; raises FleetError on refusal."""
     from ..onboard import endpoint_dict, onboard_self
@@ -341,7 +388,11 @@ def join(code: str, *, name: str = "", ssh_command: str = "") -> dict:
     except KeyError as exc:
         raise FleetError(str(exc), code=2) from exc
 
-    dev, _res = onboard_self(name=name or None)
+    dev, res = onboard_self(name=name or None)
+    import socket
+
+    hostname = (res.snapshot.hostname if res is not None and res.snapshot else "") \
+        or socket.gethostname()
     dev.pubkey = pub
     if ssh_command:
         parsed = parse_ssh_command(ssh_command)
@@ -356,7 +407,8 @@ def join(code: str, *, name: str = "", ssh_command: str = "") -> dict:
         ep = Endpoint(target="", user=local_user(), port=22)
     dev.endpoints = [endpoint_dict(ep)]
 
-    body = build_request(dev, invite_id=parts["id"], secret=parts["secret"])
+    body = build_request(dev, invite_id=parts["id"], secret=parts["secret"],
+                         hostname=hostname)
     url = join_url(parts["url"])
     reply = post(url, body, timeout=30.0, errors=True)
     if reply is None:
@@ -401,6 +453,8 @@ def join(code: str, *, name: str = "", ssh_command: str = "") -> dict:
     reach = eps[0] if eps else None
     user = (reach.user if reach else "") or local_user() or "root"
     ok, out = _install_center_key(fleet_id, parts["center"], user, center_pub)
+    if ok:
+        _confirm_center_key(note["center_url"] or parts["url"])
     reached_as = ""
     if reach:
         reached_as = f"{reach.user}@{reach.target}" if reach.user else reach.target

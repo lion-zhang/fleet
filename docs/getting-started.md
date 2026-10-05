@@ -75,7 +75,8 @@ fleet center --accept           # on machine_B: checks it can write every machin
 Every machine follows on its own: the new center's messages carry the old center's
 signed handover, so each machine moves its trust across without being asked. The old
 center steps down by itself the next time you use it as center, and stays in the fleet
-as an ordinary member. Between the two commands the old center refuses changes, since
+as an ordinary member. It has no address on record, so the new center leaves it alone;
+`fleet edit OLD --ssh "ssh user@host"` on the new center brings it under management. Between the two commands the old center refuses changes, since
 the successor holds a copy of the list as it was; `fleet center --cancel` on the old
 center keeps the role if the successor never accepts. The successor needs to be
 listening (`fleet center --listen`, or its service) for the old center to notice.

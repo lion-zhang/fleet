@@ -116,7 +116,11 @@ class Access:
         out = {e.key for e in self.allow}
         if self.center:
             for fp, meta in self.keys.items():
-                if fp != self.center:
+                # `no_route`: a machine the center has no way to dial and was never
+                # meant to -- a center that handed the role over, whose record has no
+                # address by design. Its edge could only ever read "pending" forever.
+                # Giving it an address (`fleet edit --ssh`) clears the mark.
+                if fp != self.center and not meta.get("no_route"):
                     out.add((self.center, fp, meta.get("user", "root")))
         return out
 
@@ -367,7 +371,7 @@ def digest_of(body: str) -> str:
 
 def seal(inventory_yaml: str, *, key_path: Path | None = None,
          telemetry: list | None = None, center_url: str = "",
-         fleet_id: str = "") -> str:
+         fleet_id: str = "", claims: dict | None = None) -> str:
     """Wrap an inventory in a signature the receiver can check.
 
     The inventory is not incidental cargo: it holds the endpoints that decide where
@@ -401,6 +405,11 @@ def seal(inventory_yaml: str, *, key_path: Path | None = None,
              "center_url": center_url}
     if fleet_id:
         inner["fleet_id"] = fleet_id
+    if claims:
+        # What the sender says about itself -- its hostname, that it has placed the
+        # center's key in its own authorized_keys. Signed like everything else, and
+        # only ever about the signer: a machine is the authority on its own files.
+        inner["claims"] = dict(claims)
     body = yaml.safe_dump(inner, sort_keys=False)
     env = {
         "protocol": PROTOCOL,
@@ -454,7 +463,8 @@ def unseal(payload: str, signer_pubkey: str) -> dict:
     return {"inventory": inner.get("inventory", ""),
             "telemetry": list(inner.get("telemetry") or []),
             "center_url": str(inner.get("center_url") or ""),
-            "fleet_id": str(inner.get("fleet_id") or "")}
+            "fleet_id": str(inner.get("fleet_id") or ""),
+            "claims": dict(inner.get("claims") or {})}
 
 
 def claimed_signer(payload: str) -> str:

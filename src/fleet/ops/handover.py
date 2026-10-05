@@ -253,6 +253,12 @@ def accept(acc) -> None:
     outgoing = acc.name_of(acc.center)
     old_fp = acc.center
     acc.center = mine
+    # The outgoing center stays in the list -- it is a member now, and its listener
+    # requests must still be answered -- but its record has no address by design, so an
+    # edge to it would sit "pending" for ever. Marked, until someone gives it a route.
+    old_dev = devices.get((acc.keys.get(old_fp) or {}).get("device_id", ""))
+    if old_dev is None or not inv.endpoints_of(old_dev):
+        acc.keys.setdefault(old_fp, {})["no_route"] = True
     acl.save(acc)
     _retire_key(acc, old_fp, mine)
     if inbox.get("record"):

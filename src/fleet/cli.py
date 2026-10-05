@@ -674,6 +674,8 @@ def cmd_edit(name: str = typer.Argument(None, help="defaults to this machine"),
     inv.save(devices)
     if dev.name != old_name:
         _rename_in_access_list(dev, old_name)
+    if endpoint is not None:
+        _route_known(dev)
     if result.previous_id:
         # the cache is keyed by id; without this the device looks brand new
         conn = store.connect()
@@ -687,6 +689,23 @@ def cmd_edit(name: str = typer.Argument(None, help="defaults to this machine"),
         console.print(f"  {line}")
     if endpoint is not None:
         console.print(f"  [dim]run `fleet ls {dev.name} -r` to confirm it answers.[/dim]")
+
+
+def _route_known(dev) -> None:
+    """A machine marked as having no route has one now: let the center manage it again."""
+    try:
+        acc = acl.load()
+    except acl.AccessError:
+        return
+    if not acl.is_center(acc):
+        return
+    changed = False
+    for meta in acc.keys.values():
+        if meta.get("device_id") == dev.id and meta.pop("no_route", None):
+            changed = True
+    if changed:
+        acl.save(acc)
+        console.print("  [dim]the center will manage it again from its next sweep[/dim]")
 
 
 def _rename_in_access_list(dev, old_name: str) -> None:
@@ -1379,7 +1398,12 @@ def cmd_ssh(ctx: typer.Context, name: str):
     # machine it had just been granted failed "Host key verification failed" -- ssh asks
     # a question there is no terminal to answer when an agent is the one asking, so a
     # grant that had landed was unusable by exactly the caller it was made for.
-    argv = ["ssh", "-o", "StrictHostKeyChecking=accept-new"]
+    # Keys only. fleet never handles a password, and falling back to one meant a
+    # machine you hold no grant on answered "Permission denied, please try again" --
+    # a password prompt, twice, which reads as though one would work. Without a grant
+    # the answer is simply no, and ssh says so at once.
+    argv = ["ssh", "-o", "StrictHostKeyChecking=accept-new",
+            "-o", "PasswordAuthentication=no", "-o", "KbdInteractiveAuthentication=no"]
     # The fleet key, or `fleet ssh` connects with a personal key that fleet no longer
     # installs anywhere -- and this is the most-used command in the tool.
     if _cfg.FLEET_KEY.exists():
@@ -1994,7 +2018,6 @@ def cmd_paths():
     console.print(f"ledger     {acl.LEDGER_PATH}   [dim](center only — what has landed)[/dim]")
     console.print(f"seen       {acl.CACHE_PATH}   [dim](the center's key, and when it "
                   "last swept)[/dim]")
-    console.print(f"outbox     {acl.OUTBOX_PATH}   [dim](requests we have filed)[/dim]")
     from .state import invites as _invites
     console.print(f"invites    {_invites.INVITES_PATH}   [dim](center only — open "
                   "invites, as hashes)[/dim]")

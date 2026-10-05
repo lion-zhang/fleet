@@ -261,7 +261,7 @@ def test_paths_names_every_file_and_the_shared_directory(fleet_at):
     mostly installed."""
     runner, _ = fleet_at
     out = runner.invoke(cli.app, ["paths"]).output
-    for expected in ("inventory", "fleet key", "access", "ledger", "outbox", "cache"):
+    for expected in ("inventory", "fleet key", "access", "ledger", "invites", "cache"):
         assert expected in out
     assert "same directory" in out
 

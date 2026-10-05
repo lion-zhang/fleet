@@ -112,3 +112,12 @@ def test_a_stale_rejection_does_not_block_a_grant_that_has_since_landed(box, mon
     assert r.exit_code == 0, r.output
     assert box, "it must try the connection rather than refuse on an old reading"
     assert box[-1][1][-1] == "lin@lin-xps.example.ts.net"
+
+
+
+def test_fleet_ssh_never_falls_back_to_a_password(box, monkeypatch):
+    """Without a grant it asked for a password twice, which reads as though one would
+    work. fleet never handles a password."""
+    CliRunner().invoke(cli.app, ["ssh", "lin-xps"])
+    argv = box[-1][1]
+    assert "PasswordAuthentication=no" in argv and "KbdInteractiveAuthentication=no" in argv

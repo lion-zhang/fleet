@@ -133,8 +133,32 @@ def exchange(raw: str) -> tuple[int, str]:
     merged, _ = inv.update(lambda current: inv.merge(current, incoming))
     if note["telemetry"]:
         record_relayed(note["telemetry"])
+    if note.get("claims", {}).get("center_key") == "present":
+        _note_center_key_present(acc, acl.fingerprint(signer))
     return 200, acl.seal(inv.dumps(merged), telemetry=telemetry_to_relay(),
                          center_url=current_url(), fleet_id=acc.fleet_id)
+
+
+def _note_center_key_present(acc, fp: str) -> None:
+    """A machine that joined says it placed the center's key. Record the edge as landed.
+
+    It wrote the block into its own authorized_keys, so no ledger had it, and `fleet
+    access` said "not applied yet" until some sweep reached the machine -- which for one
+    the center cannot dial is never. The machine is the authority on its own file, and
+    the claim is signed by its pinned key.
+    """
+    from . import reconcile as rec
+
+    meta = acc.keys.get(fp)
+    if not meta or fp == acc.center:
+        return
+    key = ">".join((acc.center, fp, meta.get("user", "root")))
+    ledger = rec.load_ledger()
+    st = ledger.get(key) or rec.EdgeState()
+    st.desired = st.observed = "present"
+    st.last_error, st.dst_device = "", st.dst_device or meta.get("device_id", "")
+    ledger[key] = st
+    rec.save_ledger(ledger)
 
 
 _URL = {"value": ""}

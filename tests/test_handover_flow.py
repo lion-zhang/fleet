@@ -321,3 +321,20 @@ def test_mid_handover_the_old_center_refuses_changes(outgoing, monkeypatch):
     assert r.exit_code == 0 and not acl.HANDING_PATH.exists()
     monkeypatch.setattr(cli, "_listening", lambda url: True)
     assert CliRunner().invoke(cli.app, ["invite", "--json"]).exit_code == 0
+
+
+
+def test_a_retired_center_with_no_route_leaves_no_edge_pending(successor, monkeypatch):
+    """Its record has no address by design, so an edge to it read "pending" for ever."""
+    from fleet.ops import sweep
+
+    handover.receive(_bundle(successor))
+    inv.save([Device(id="id:hub", name="hub", kind=Kind.PERMANENT)])
+    monkeypatch.setattr(sweep, "run", lambda devices: None)
+    monkeypatch.setattr(subprocess, "run", lambda argv, **k:
+                        subprocess.CompletedProcess(argv, 0, b"", b""))
+    old = acl.load().center
+    handover.accept(acl.load())
+    acc = acl.load()
+    assert acc.keys[old].get("no_route")
+    assert not any(dst == old for _, dst, _ in acc.edges())
