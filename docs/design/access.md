@@ -64,7 +64,10 @@ interrupted. Neither ever prompts outside case 2, and the sweep never prompts at
 | `access.yaml` | center only | Authority. Never travels upward |
 | `access-ledger.yaml` | center only | Desired vs observed, retries, last error |
 | `access-cache.yaml` | each machine | The center's pinned key, when it last swept |
-| `access-outbox.yaml` | each machine | Requests we have filed |
+| `access-invites.yaml` | center only | Open invites, as hashes of their secrets |
+| `access-chain.yaml` | a center that took the role | Every signed handover from the first center to this one |
+| `access-handover-in.yaml` | the successor, until `--accept` | The handover the outgoing center delivered |
+| `access-handover-out.yaml` | the outgoing center, until settled | Who it named, and where to ask whether they took it |
 
 Every name is globally distinct and **nothing is ever deleted by globbing a directory**:
 `CONFIG_DIR` and `STATE_DIR` are the same directory on macOS, so tidying up "the state
@@ -174,6 +177,29 @@ refuse.
 
 There is no `backup` role. It meant a second machine holding a key on every device
 forever — a standing total-compromise target, to save an occasional manual recovery.
+
+A handover moves the role in two signed steps, and the fleet follows by itself:
+
+1. **On the center, `fleet center NAME`.** Grants the successor every machine, as the
+   user each is reached as, and applies those grants now. Then delivers over ssh the
+   access list, the ledger and a handover record naming the successor's key -- the
+   bundle signed by the outgoing center, which the successor has pinned and checks.
+2. **On the successor, `fleet center --accept`.** Proves it can *write* every machine
+   (probing would only prove its key is present), takes the role, and sweeps.
+3. **Everyone else follows the chain.** Every envelope the new center signs carries the
+   handover records, oldest first. A member that still trusts an older key walks from it
+   one record at a time, each signed by the key it hands *from*, and pins where the walk
+   ends. A forged record leads nowhere, so this is never trust on first use.
+4. **The outgoing center steps down on proof.** The next time it acts as center it asks
+   the successor; a reply signed by the successor that carries the record it signed is
+   the proof, and it becomes a member. Its key comes off every machine on the new
+   center's first sweep, because the new list no longer wants it.
+
+A member the new center cannot reach learns of the handover only by asking: `fleet sync
+--from` the new center's address once.
+
+This shipped as a single-machine design first and could not complete between two real
+machines: the record stayed on the outgoing center's disk, and no member could check one.
 
 So an unplanned loss of the center means re-configuring by hand. That is the accepted
 price of there being exactly one machine that can open every door. Hand over before you

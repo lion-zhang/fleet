@@ -108,6 +108,7 @@ def test_starting_does_nothing_when_nothing_is_installed(monkeypatch, tmp_path):
 def test_status_reads_absent_before_installed_before_running(monkeypatch, tmp_path):
     unit = tmp_path / UNITNAME
     monkeypatch.setattr(service, "_unit_path", lambda: unit)
+    monkeypatch.setattr(service, "_no_user_manager", lambda: False)
     assert service._linux_status() == service.ABSENT
     unit.write_text("[Unit]\n")
     monkeypatch.setattr(service, "_run", lambda *a, **k: _ok(stdout="inactive\n"))
@@ -346,3 +347,41 @@ def test_stopping_gives_up_rather_than_hanging(monkeypatch):
     clock = iter([0.0] + [i * 4.0 for i in range(1, 20)])
     monkeypatch.setattr(service.time, "monotonic", lambda: next(clock))
     assert service._windows_await_exit(timeout_s=10.0) is False
+
+
+# ------------------------------------------------------------ no service manager at all
+
+def test_a_machine_with_no_user_manager_says_so_rather_than_installing(monkeypatch, tmp_path):
+    """A container, or a GPU rental: found on a real one, where the unit file wrote fine,
+    `enable` failed, and the one line printed was systemd's warning about the file's
+    mode -- which named the wrong problem entirely."""
+    unit = tmp_path / UNITNAME
+    monkeypatch.setattr(service, "_unit_path", lambda: unit)
+    monkeypatch.setattr(service, "_no_user_manager", lambda: True)
+    out = service._linux_install("fleet", 7373)
+    assert "no service manager" in out and "fleet center --listen" in out
+    assert not unit.exists(), "nothing written for a manager that is not there"
+    assert service._linux_status() == service.UNAVAILABLE
+
+
+def test_a_failed_start_reports_the_reason_not_the_first_warning(monkeypatch, tmp_path):
+    import subprocess
+
+    monkeypatch.setattr(service, "_unit_path", lambda: tmp_path / UNITNAME)
+    monkeypatch.setattr(service, "_no_user_manager", lambda: False)
+
+    def run(argv, **k):
+        if "enable" in argv:
+            return subprocess.CompletedProcess(argv, 1, "", "Warning: unit file is world-writable\n"
+                                               "Failed to enable unit: Access denied\n")
+        return _ok()
+    monkeypatch.setattr(service, "_run", run)
+    assert service._linux_install("fleet", 7373) == \
+        "could not start it: Failed to enable unit: Access denied"
+
+
+def test_a_listener_started_by_hand_counts_as_serving(monkeypatch):
+    """`fleet center` said "not serving" beside a running `fleet center --listen`."""
+    monkeypatch.setattr(service, "_impl", lambda: (None, None, lambda: service.UNAVAILABLE))
+    monkeypatch.setattr(service, "_answers", lambda port, **k: True)
+    assert service.status(7373) == service.RUNNING

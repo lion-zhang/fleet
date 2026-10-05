@@ -109,7 +109,8 @@ def dissolve(acc, *, force: bool) -> None:
                   "with nothing left to remove them[/dim]")
         raise FleetError("some machines could not be reached", code=1)
 
-    for path in (acl.ACCESS_PATH, acl.LEDGER_PATH, acl.CACHE_PATH, acl.OUTBOX_PATH):
+    for path in (acl.ACCESS_PATH, acl.LEDGER_PATH, acl.CACHE_PATH, acl.OUTBOX_PATH,
+                 acl.CHAIN_PATH, acl.INBOX_PATH, acl.HANDING_PATH):
         with suppress(OSError):
             path.unlink()
     console.print(f"\n[green]✓[/green] fleet {acc.fleet_id} dissolved; "

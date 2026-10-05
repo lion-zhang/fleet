@@ -211,7 +211,7 @@ class Device:
     @property
     def probeable(self) -> bool:
         """Eligible for the automatic sweep. on_demand hosts are probed only when named
-        explicitly (`fleet refresh koa04`), never by a bare `fleet ls`."""
+        explicitly (`fleet ls koa04 -r`), never by a bare `fleet ls`."""
         return self.probe_policy == "auto" and self.kind is not Kind.MOBILE
 
     @property

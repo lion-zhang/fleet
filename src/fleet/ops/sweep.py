@@ -76,6 +76,81 @@ def endpoint_for(dev, user: str):
     ep = eps[0]
     return replace(ep, user=user or ep.user)
 
+def settle_center_edge(device_id: str) -> None:
+    """Make the center's own access to a just-enrolled machine true now, and recorded.
+
+    It used to wait for a sweep, so `fleet access` reported "not applied yet" for a key
+    the center had just used to read the machine's own. Applying the edge here writes
+    the labelled block if it is not already there -- idempotent -- and records it in the
+    ledger as present.
+    """
+    try:
+        acc = acl.load()
+    except acl.AccessError:
+        return
+    for fp, meta in acc.keys.items():
+        if fp != acc.center and meta.get("device_id") == device_id:
+            apply_now(acc, acc.center, fp, meta.get("user", "root"), install=True)
+
+
+def remove_now(acc, dev) -> tuple[int, list[str]]:
+    """Revoke everything a machine being removed touches, now, while it can be found.
+
+    Two directions, and `fleet rm` used to leave both to a sweep that could do only one.
+    Its key on other machines comes off there -- that is the access being revoked, and
+    revokes are pushed, never waited for. And every key this fleet put *on* it comes off
+    it, the center's included: removing a machine you sold or gave back must not leave
+    the center able to log into it. That second half was never done at all, because the
+    record is tombstoned straight after and no sweep can reach a machine with no record.
+
+    Returns (keys removed, what could not be reached). The caller drops the pins after.
+    """
+    fps = {fp for fp, m in acc.keys.items() if m.get("device_id") == dev.id}
+    if not fps:
+        return 0, []
+    ledger = rec.plan(acc, rec.load_ledger())
+    by_id = {d.id: d for d in inv.live(inv.load())}
+    removed, unreached = 0, []
+    conn = store.connect()
+    try:
+        for key, st in sorted(ledger.items()):
+            src, dst, user = key.split(">")
+            if src not in fps and dst not in fps:
+                continue
+            target = dev if dst in fps else by_id.get(
+                st.dst_device or (acc.keys.get(dst) or {}).get("device_id", ""))
+            ep = endpoint_for(target, user) if target is not None else None
+            if ep is None:
+                if dst not in fps:
+                    unreached.append(f"{acc.name_of(dst)}: no endpoint recorded")
+                    st.desired = "absent"
+                else:
+                    ledger.pop(key, None)
+                    unreached.append(f"{dev.name}: no endpoint recorded")
+                continue
+            _, snap = store.latest(conn, target.id)
+            ok, out = rec.apply_edge(acc, (src, dst, user), ep, install=False,
+                                     platform=remote_platform(snap))
+            st.desired, st.attempts = "absent", st.attempts + 1
+            if ok:
+                st.observed, st.last_error = "absent", ""
+                removed += 1
+                console.print(f"  [green]✓[/green] {acc.name_of(src)}'s key removed "
+                              f"from {target.name}")
+            elif dst in fps:
+                # Nothing will ever retry this: the machine is about to have no record.
+                # Say so now, with what to do, rather than leave a row pending forever.
+                ledger.pop(key, None)
+                unreached.append(f"{dev.name}: {out.strip()[:80]}")
+            else:
+                st.last_error = out
+                unreached.append(f"{target.name}: {out.strip()[:80]} (retried by sync)")
+    finally:
+        conn.close()
+    rec.save_ledger(ledger)
+    return removed, unreached
+
+
 def apply_now(acc, src: str, dst: str, user: str, *, install: bool) -> None:
     """Reconcile one edge immediately, on the machine it affects.
 

@@ -38,6 +38,10 @@ def two_machines(tmp_path, monkeypatch):
 
     mine = acl.fingerprint(pub)
     other = "SHA256:otherotherotherotherotherotherotherother"
+    # Accepting ends in a sweep, so every machine learns the new center at once. These
+    # tests are about the decision to take the role; the sweep has its own.
+    from fleet.ops import sweep
+    monkeypatch.setattr(sweep, "run", lambda devices: None)
     inv.save([Device(id="id:me", name="macbook", kind=Kind.PERMANENT),
               Device(id="id:old", name="old-center", kind=Kind.PERMANENT,
                      endpoints=[{"target": "1.2.3.4", "user": "lin", "port": 22}]),

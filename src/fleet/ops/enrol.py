@@ -63,8 +63,9 @@ def install_our_key(dev, *, quiet: bool = False) -> bool:
         err.print(f"[red]{exc}[/red]")
         return False
     ep = sorted(eps, key=lambda e: e.preference)[0]
+    block = _center_block(ep, pubkey)
 
-    ok, output = install_key_over_existing_access(ep, pubkey)
+    ok, output = install_key_over_existing_access(ep, pubkey, posix_command=block)
     if ok:
         confirm_key(dev, ep)
         console.print(f"[green]✓[/green] key installed on {dev.name}, "
@@ -93,7 +94,7 @@ def install_our_key(dev, *, quiet: bool = False) -> bool:
     console.print(f"[dim]installing {path} on {ep.user}@{ep.target}[/dim]")
     password = getpass.getpass(f"Password for {ep.user}@{ep.target}: ")
     try:
-        ok, output = install_key(ep, password, pubkey)
+        ok, output = install_key(ep, password, pubkey, posix_command=block)
     finally:
         password = ""                      # not security, just hygiene: drop it promptly
     if ok:
@@ -104,6 +105,27 @@ def install_our_key(dev, *, quiet: bool = False) -> bool:
     err.print(f"  [dim]put [bold]fleet center --pubkey[/bold] on {dev.name} "
               "and add it again[/dim]")
     return False
+
+def _center_block(ep, pubkey: str) -> str:
+    """The first install, written as the reconciler's own labelled block.
+
+    A bare appended line is a key fleet put there that nothing in fleet can find again:
+    `--dissolve` and `--leave` remove only labelled blocks, so the center's key stayed
+    on every machine enrolled by password, permanently. "" when this is not a center,
+    which keeps the plain append for that case.
+    """
+    from ..state import access as acl
+    from ..ssh.authkeys import sync_command
+
+    try:
+        acc = acl.load()
+    except acl.AccessError:
+        return ""
+    if not acc.center or not acc.fleet_id:
+        return ""
+    return sync_command(acc.fleet_id, acc.center, user=ep.user or "root",
+                        pubkey=pubkey, platform="posix")
+
 
 def register_identity(dev) -> str:
     """Give the machine its own fleet keypair and pin it. Returns the fingerprint.

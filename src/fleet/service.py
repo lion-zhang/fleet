@@ -31,10 +31,19 @@ TASK = "fleet-center"
 UNIT = "fleet-center.service"
 
 ABSENT, INSTALLED, RUNNING = "absent", "installed", "running"
+# No service manager this user can talk to: a container, most GPU rentals, WSL without
+# systemd. Not a failure to install -- there is nothing to install into.
+UNAVAILABLE = "unavailable"
+
+MANUAL = ("run [bold]fleet center --listen[/bold] under whatever keeps processes alive "
+          "here -- tmux, `nohup fleet center --listen &`, or the container's entrypoint")
 
 
 def _run(argv: list[str], **kw) -> subprocess.CompletedProcess:
-    return subprocess.run(argv, capture_output=True, text=True, **kw)
+    try:
+        return subprocess.run(argv, capture_output=True, text=True, **kw)
+    except FileNotFoundError as exc:
+        return subprocess.CompletedProcess(argv, 127, "", str(exc))
 
 
 # --------------------------------------------------------------------- macOS
@@ -70,7 +79,9 @@ def _darwin_install(cmd: str, port: int) -> str:
     _run(["launchctl", "bootout", target, str(path)])      # idempotent: ignore failure
     p = _run(["launchctl", "bootstrap", target, str(path)])
     if p.returncode != 0:
-        return f"could not start it: {(p.stderr or p.stdout).strip()[:160]}"
+        # The last line, not the first: systemd leads with warnings and ends with why.
+        lines = [ln for ln in (p.stderr or p.stdout).strip().splitlines() if ln.strip()]
+        return f"could not start it: {(lines[-1] if lines else 'no reason given')[:200]}"
     return f"running, and again at login ({path})"
 
 
@@ -118,14 +129,30 @@ WantedBy=default.target
 """
 
 
+def _no_user_manager() -> bool:
+    """Whether there is no systemd user instance to install into.
+
+    Asked directly rather than inferred from a failed install. In a container the unit
+    file writes fine and `enable` then fails with whatever systemd says first -- which
+    under a permissive umask was a warning about the file's mode, so the one line
+    printed named the wrong problem entirely.
+    """
+    p = _run(["systemctl", "--user", "show-environment"])
+    return p.returncode != 0
+
+
 def _linux_install(cmd: str, port: int) -> str:
+    if _no_user_manager():
+        return f"no service manager for this user here, so nothing to install -- {MANUAL}"
     path = _unit_path()
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(_unit(cmd, port))
     _run(["systemctl", "--user", "daemon-reload"])
     p = _run(["systemctl", "--user", "enable", "--now", UNIT])
     if p.returncode != 0:
-        return f"could not start it: {(p.stderr or p.stdout).strip()[:160]}"
+        # The last line, not the first: systemd leads with warnings and ends with why.
+        lines = [ln for ln in (p.stderr or p.stdout).strip().splitlines() if ln.strip()]
+        return f"could not start it: {(lines[-1] if lines else 'no reason given')[:200]}"
     # Without this the unit stops when the last session for this user ends, which on a
     # headless box is the moment you close the ssh connection that installed it.
     _run(["loginctl", "enable-linger", os.environ.get("USER", "")])
@@ -141,7 +168,9 @@ def _linux_remove() -> str:
 
 def _linux_status() -> str:
     if not _unit_path().exists():
-        return ABSENT
+        return UNAVAILABLE if _no_user_manager() else ABSENT
+    if _no_user_manager():
+        return UNAVAILABLE
     p = _run(["systemctl", "--user", "is-active", UNIT])
     return RUNNING if p.stdout.strip() == "active" else INSTALLED
 
@@ -345,6 +374,11 @@ def status(port: int = 0) -> str:
     state = _impl()[2]()
     if state == RUNNING and port and not _answers(port):
         return INSTALLED
+    # A listener started by hand is serving whatever the service manager thinks. Saying
+    # "not serving" beside a running `fleet center --listen` sent people to install a
+    # service on machines that cannot have one.
+    if state != RUNNING and port and _answers(port):
+        return RUNNING
     return state
 
 

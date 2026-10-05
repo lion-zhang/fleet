@@ -75,9 +75,16 @@ def build_server():
     try:
         from mcp.server.mcpserver import MCPServer
     except ModuleNotFoundError as exc:     # pragma: no cover - depends on the extra
+        # fleet is not on PyPI, so the hint this used to give -- install
+        # 'fleet-broker[mcp]' by name -- failed as "unsatisfiable" for everyone. It has
+        # to come from the clone fleet was installed from, which uv recorded.
+        from .install import install_source
+
+        src = install_source()
+        where = f"'{src}[mcp]'" if src else "'./fleet[mcp]' (from where you cloned fleet)"
         raise McpUnavailable(
-            "the MCP extra is not installed -- `uv tool install --force "
-            "'fleet-broker[mcp]'`, or `pip install 'mcp>=2'`") from exc
+            f"the MCP extra is not installed -- `uv tool install --reinstall {where}`"
+        ) from exc
 
     from .agents import package_version
 

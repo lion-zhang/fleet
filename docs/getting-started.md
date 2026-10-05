@@ -30,10 +30,17 @@ fleet is not on PyPI; it installs from the repo.
 ```bash
 git clone git@github.com:lion-zhang/fleet.git
 uv tool install ./fleet
+uv tool update-shell            # puts uv's bin directory on PATH; then open a new shell
 fleet --version
 ```
 
-Later, `fleet update` re-runs exactly this on any machine that already has it.
+`uv tool update-shell` is not optional everywhere: on Ubuntu, root's shell never has
+`~/.local/bin` on its PATH, so without it `fleet` is installed and "command not found".
+
+Later, `fleet update` re-runs this on every machine that has fleet, from the clone you
+installed from. To re-install by hand after a `git pull`, use `uv tool install
+--reinstall ./fleet` — `--force` alone keeps the old build, because the version number
+has not changed.
 
 ## 2. Create the fleet
 
@@ -48,11 +55,31 @@ The machine you run this on is now **the center**: the one that decides who may 
 what, and the only one that can install or remove a key. Pick the machine you actually
 work from. A laptop is fine, and being closed half the day is expected.
 
-**The center stays the center.** There is no self-promotion and no election — the only
-way the role moves is `fleet center machine_B`, run on the current center, which installs
-the successor's key everywhere and verifies it can write before retiring the old one. If
-the center is lost outright, you rebuild the fleet by hand; `fleet center --export` is
-worth keeping somewhere for that day.
+`--init` also installs a background service, so the center listens for machines that
+refresh themselves (launchd on macOS, a systemd user unit on Linux, a scheduled task on
+Windows). A machine with no service manager — a container, most GPU rentals — says so,
+and there you keep `fleet center --listen` running yourself: tmux, `nohup fleet center
+--listen &`, or the container's entrypoint. `fleet center` tells you whether it is
+serving either way.
+
+**The center stays the center.** There is no self-promotion and no election — the role
+moves only when the current center hands it over:
+
+```bash
+fleet center machine_B          # on the center: grants machine_B everything, and
+                                # delivers the handover to it (it needs fleet installed)
+fleet center --accept           # on machine_B: checks it can write every machine, then
+                                # takes the role and sweeps
+```
+
+Every machine follows on its own: the new center's messages carry the old center's
+signed handover, so each machine moves its trust across without being asked. The old
+center steps down by itself the next time you use it as center, and stays in the fleet
+as an ordinary member. Make access changes after the handover, not between the two
+commands — the successor holds a copy of the list as it was.
+
+If the center is lost outright, you rebuild the fleet by hand; `fleet center --export`
+is worth keeping somewhere for that day.
 
 ## 3. Add your machines
 
@@ -140,7 +167,7 @@ cannot parse is left alone and reported rather than rewritten. That half needs t
 optional extra:
 
 ```bash
-uv tool install --force 'fleet-broker[mcp]'
+uv tool install --reinstall './fleet[mcp]'   # from where you cloned fleet
 ```
 
 Supporting another agent is one entry in `AGENTS` (or `MCP_CLIENTS`) in `setup.py`. The
@@ -273,11 +300,13 @@ Most things do not. The split matters because it decides whether something happe
 waits.
 
 **Anywhere:** `ls`, `show`, `top`, `ssh`, `add`, `edit`, `install`, `update`, `paths`,
-`setup`, `center --pubkey`, and reading `access`. Also `fleet center --leave`, which takes
+`join`, `sync` (on a member it fetches from the center),
+`setup`, `center --pubkey`, and reading `center` and `access` — on a member they name the
+center and send you there. Also `fleet center --leave`, which takes
 this machine out of a fleet and needs nobody's permission — you own the machine you are
 standing on.
 
-**Only on the center:** `access --allow` and `--deny`, `sync`, `rm`, `invite`, handing
+**Only on the center:** `access --allow` and `--deny`, the sweep, `rm`, `invite`, handing
 the role over, and `center --init` / `--dissolve`. On any other machine these refuse and say which
 machine to run them on.
 
@@ -290,7 +319,8 @@ machine holding a key can bypass fleet and use plain `ssh`. The list governs wha
 
 ```bash
 fleet center --leave         # take this machine out of a fleet
-fleet rm machine_A           # the center removes a machine, revoking its keys
+fleet rm machine_A           # the center removes a machine: its keys come off every
+                             # other machine, and the fleet's keys come off it, now
 fleet center --dissolve      # take the whole fleet down: every key off every machine
 ```
 

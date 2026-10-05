@@ -261,7 +261,13 @@ def _admit(dev: Device, signer: str, fp: str, invite, *, peer: str,
     try:
         acl.enroll(acc, name, signer, record.id, user=user)
     except acl.AccessError as exc:
-        return 409, f"{exc}\n"
+        hint = ""
+        if known is not None:
+            hint = (f" If this is a different machine from {known.name} -- cloned from the "
+                    "same image, so sharing its machine-id -- give it its own "
+                    "(`systemd-machine-id-setup` after emptying /etc/machine-id) and "
+                    "join again.")
+        return 409, f"{exc}{hint}\n"
 
     try:
         invites_mod.redeem(invite.id, fp, name)
@@ -385,6 +391,7 @@ def join(code: str, *, name: str = "", ssh_command: str = "") -> dict:
         record_relayed(note["telemetry"])
     acl.note_center_seen()
     acl.note_center_url(note["center_url"] or parts["url"])
+    acl.note_fleet_id(fleet_id)
 
     # Found by key, not id: the center may have given us an id of its own (see
     # `_stable_id`), and the key is the one thing both sides agree this machine is.

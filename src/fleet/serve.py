@@ -128,7 +128,7 @@ def exchange(raw: str) -> tuple[int, str]:
     if note["telemetry"]:
         record_relayed(note["telemetry"])
     return 200, acl.seal(inv.dumps(merged), telemetry=telemetry_to_relay(),
-                         center_url=current_url())
+                         center_url=current_url(), fleet_id=acc.fleet_id)
 
 
 _URL = {"value": ""}

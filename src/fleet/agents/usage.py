@@ -71,27 +71,32 @@ Anywhere. A name may be omitted where the obvious subject is the machine you are
 - `{cmd} install NAME` -- put fleet on a machine that has none
 - `{cmd} paths` -- where the inventory, keys and access list live on this machine
 
-Only on the center. `{cmd} center --json` has `is_center`; if it is false,
-these either refuse or file a request for the center to act on later.
+Only on the center. `{cmd} center --json` has `is_center` -- on a member it is false
+and `center` names the machine that decides. These refuse anywhere else and say
+where to run them: report that to the user, nothing is queued.
 
 - `{cmd} access NAME --allow MACHINE` -- grant, and it is applied on the spot.
   `--user` names whose authorized_keys, since a box answers as both root@ and ubuntu@
 - `{cmd} access NAME --deny MACHINE` -- revoke
-- `{cmd} sync` -- the sweep: enrol anything not yet enrolled, install and remove keys,
-  and collect telemetry. Rarely needed now: a grant applies itself, and machines refresh
-  from the center on their own. Reach for it to retry something left pending
+- `{cmd} sync` -- on the center, the sweep: enrol anything not yet enrolled, install and
+  remove keys, and collect telemetry. On a member, fetch a fresh copy from the center
+  now. Rarely needed: a grant applies itself, and machines refresh on their own. Reach
+  for it to retry something left pending
 - `{cmd} sync --from URL` -- run on a machine the center cannot reach, to dial the
   center instead. A machine learns where the center is only when the center reaches it,
   so one behind a firewall, or on a path that fails in that direction, is a full member
   with no way to find it. This is the way in. Ask the user for the address
 - `{cmd} center --listen` -- serve the fleet so machines refresh themselves instead of
   waiting to be swept. Long-running: tell the user to run it, do not start it yourself
-- `{cmd} center NAME` -- hand the role over; the successor then runs
-  `{cmd} center --accept`, which verifies it can write before taking it
+- `{cmd} center NAME` -- hand the role over. Grants NAME everything and delivers the
+  handover to it (fleet must be installed there); then NAME runs `{cmd} center
+  --accept`, which verifies it can write every machine before taking the role. Every
+  machine, and the old center, follows by itself. Irreversible: a human runs it
 - `{cmd} center --init` / `--dissolve` -- create a fleet, or take it down. Dissolving
   removes every key from every machine first; never delete the access list by hand,
   which orphans those keys instead of removing them
-- `{cmd} rm NAME` -- remove another machine. Any machine may remove *itself*
+- `{cmd} rm NAME` -- remove another machine: its keys come off every other machine and
+  the fleet's keys come off it, at once. Any machine may remove *itself*
 - `{cmd} invite [NAME]` -- let one machine join by itself: prints `{cmd} join CODE` to
   run there. Single use; `--ttl 30m` for how long (default 15m), `--list` for what
   became of recent ones, `--revoke ID` to withdraw one, `--url` when the machine must

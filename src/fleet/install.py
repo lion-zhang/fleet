@@ -13,6 +13,7 @@ connected, so it can be declined for a host you do not trust with that.
 from __future__ import annotations
 
 import shlex
+from pathlib import Path
 
 from . import config
 from .ssh.cmd import WINDOWS, Endpoint, local_platform
@@ -347,3 +348,29 @@ def install_script(repo: str, *, ref: str = "main", platform: str = "",
     if platform == WINDOWS:
         return _windows_script(repo, ref, update_only=update_only)
     return _posix_script(repo, ref=ref, update_only=update_only)
+
+
+def install_source() -> Path | None:
+    """The directory `uv tool install` built this fleet from, if uv recorded one.
+
+    The third way to be running fleet, and the one the getting-started guide teaches:
+    clone anywhere, `uv tool install ./fleet`. Neither place `configured_repo` looked
+    held that clone, so a machine set up by the guide answered "No repo to update from"
+    to the `fleet update` the same guide promised would work. uv writes where the tool
+    came from into a receipt beside the environment, so read that rather than guess.
+    """
+    import tomllib
+
+    for parent in Path(__file__).resolve().parents:
+        receipt = parent / "uv-receipt.toml"
+        if not receipt.is_file():
+            continue
+        try:
+            reqs = tomllib.loads(receipt.read_text()).get("tool", {}).get("requirements", [])
+        except (OSError, tomllib.TOMLDecodeError):
+            return None
+        for req in reqs:
+            if isinstance(req, dict) and req.get("directory"):
+                return Path(req["directory"])
+        return None
+    return None

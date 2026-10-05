@@ -169,3 +169,58 @@ def test_a_name_and_an_alias_can_be_mixed_in_one_filter(tmp_path, monkeypatch):
     monkeypatch.setattr(identity, "local_device_id", lambda: "")
     rows = cli._rows(["x", "lin-workstation"], refresh=False)
     assert {r["name"] for r in rows} == {"lin-xps", "lin-workstation"}
+
+
+def test_a_clone_sharing_a_machine_id_is_kept_apart(tmp_path, monkeypatch):
+    """Found on a real fleet: two containers from one image, one machine-id. The second
+    was merged into the first as "one device, not two"."""
+    from typer.testing import CliRunner
+
+    from fleet import cli
+    from fleet.models import Device, Kind, ProbeResult, Snapshot, Status
+    from fleet.state import inventory as inv
+    from fleet.state import store
+
+    inv.save([Device(id="linux:machine-id:same", name="clone3", kind=Kind.PERMANENT,
+                     endpoints=[{"target": "clone3", "user": "root", "port": 22}])])
+    conn = store.connect()
+    store.record(conn, "linux:machine-id:same",
+                 ProbeResult(status=Status.OK, snapshot=Snapshot(ts=1, hostname="clone3")))
+    conn.close()
+
+    def onboard(cmd, **k):
+        dev = Device(id="linux:machine-id:same", name="clone4", kind=Kind.PERMANENT,
+                     endpoints=[{"target": "clone4", "user": "root", "port": 22}])
+        return dev, ProbeResult(status=Status.OK, snapshot=Snapshot(ts=2, hostname="clone4"))
+
+    monkeypatch.setattr(cli, "onboard", onboard)
+    monkeypatch.setattr(cli, "_fleet_membership", lambda: "member")
+    r = CliRunner().invoke(cli.app, ["add", "ssh root@clone4"])
+    assert r.exit_code == 0, r.output
+    names = {d.name for d in inv.live(inv.load())}
+    assert names == {"clone3", "clone4"}, names
+    assert "cloned from the same image" in r.output
+
+
+def test_one_box_reached_two_ways_is_still_one_record(tmp_path, monkeypatch):
+    from typer.testing import CliRunner
+
+    from fleet import cli
+    from fleet.models import Device, Kind, ProbeResult, Snapshot, Status
+    from fleet.state import inventory as inv
+    from fleet.state import store
+
+    inv.save([Device(id="linux:machine-id:box", name="box", kind=Kind.PERMANENT,
+                     endpoints=[{"target": "10.0.0.5", "user": "root", "port": 22}])])
+    conn = store.connect()
+    store.record(conn, "linux:machine-id:box",
+                 ProbeResult(status=Status.OK, snapshot=Snapshot(ts=1, hostname="box")))
+    conn.close()
+    monkeypatch.setattr(cli, "onboard", lambda cmd, **k: (
+        Device(id="linux:machine-id:box", name="box-2", kind=Kind.PERMANENT,
+               endpoints=[{"target": "box.example.ts.net", "user": "root", "port": 22}]),
+        ProbeResult(status=Status.OK, snapshot=Snapshot(ts=2, hostname="box"))))
+    monkeypatch.setattr(cli, "_fleet_membership", lambda: "member")
+    r = CliRunner().invoke(cli.app, ["add", "ssh root@box.example.ts.net"])
+    assert r.exit_code == 0, r.output
+    assert [d.name for d in inv.live(inv.load())] == ["box"]
