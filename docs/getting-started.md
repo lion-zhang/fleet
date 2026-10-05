@@ -166,6 +166,8 @@ costs nothing until a task actually needs a machine. Where fleet owns the file i
 the whole thing; where you own it (`AGENTS.md`, `GEMINI.md`) it marks a region and leaves
 every other byte alone.
 
+Each skill goes where that agent actually looks, which is not always the same place on every OS: Hermes reads `%LOCALAPPDATA%\hermes` on Windows (or `$HERMES_HOME` wherever it is set), and fleet writes there — removing any copy it left in `~/.hermes` before, which Hermes could not see.
+
 **Clients without a shell** get `fleet mcp` registered as an MCP server instead, merged
 into their own config beside whatever servers are already there — Claude Desktop, VS Code,
 Cursor and Windsurf. Only the ones actually installed are touched, and a config fleet
