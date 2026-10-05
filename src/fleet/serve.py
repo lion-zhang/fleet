@@ -26,6 +26,7 @@ import threading
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 from .config import DEFAULT_PORT
+from .ops.join import MAX_JOIN_BODY, handle as join_handle
 from .ops.sync import record_relayed, telemetry_to_relay
 
 MAX_BODY = 8 * 1024 * 1024                 # an inventory, not a payload to be generous to
@@ -58,7 +59,8 @@ class _Handler(BaseHTTPRequestHandler):
             self._reply(404, "not found\n")
 
     def do_POST(self) -> None:             # noqa: N802 - the handler contract
-        if self.path.rstrip("/") != "/sync":
+        path = self.path.rstrip("/")
+        if path not in ("/sync", "/join"):
             self._reply(404, "not found\n")
             return
         try:
@@ -66,12 +68,20 @@ class _Handler(BaseHTTPRequestHandler):
         except ValueError:
             self._reply(400, "bad length\n")
             return
-        if length <= 0 or length > MAX_BODY:
+        limit = MAX_JOIN_BODY if path == "/join" else MAX_BODY
+        if length <= 0 or length > limit:
             self._reply(413, "body too large\n")
             return
         raw = self.rfile.read(length).decode(errors="replace")
 
-        code, body = self.server.exchange(raw)      # type: ignore[attr-defined]
+        if path == "/join":
+            # The one door a stranger may knock on, and only with an invite. Everything
+            # it can do is in `join.handle`; the address it called from is passed along
+            # because it is the best answer to "how will the center reach it".
+            code, body = self.server.join(raw, peer=self.client_address[0],  # type: ignore[attr-defined]
+                                          center_url=current_url())
+        else:
+            code, body = self.server.exchange(raw)      # type: ignore[attr-defined]
         self._reply(code, body, "text/yaml" if code == 200 else "text/plain")
 
 
@@ -95,11 +105,12 @@ def exchange(raw: str) -> tuple[int, str]:
 
     signer = acl.claimed_signer(raw)
     if not acl.is_pinned(acc, signer):
-        # **Never first contact.** `fleet sync --serve` falls back to trust-on-first-use,
-        # which is safe only because the center always spoke first: it pinned whoever it
-        # had just dialled. A listener reverses who speaks first, so the same fallback
-        # would let the earliest caller pin itself as the center. Enrolment stays the
-        # only way in, and it is still the center that dials for it.
+        # **Never first contact** on this path. `fleet sync --serve` falls back to
+        # trust-on-first-use, which is safe only because the center always spoke first:
+        # it pinned whoever it had just dialled. A listener reverses who speaks first, so
+        # the same fallback would let the earliest caller pin itself as the center. A
+        # machine not yet pinned comes in through /join instead, holding an invite the
+        # center issued -- which is the center speaking first, just earlier.
         return 403, "not a machine this fleet knows\n"
 
     try:
@@ -131,6 +142,7 @@ def current_url() -> str:
 def build(host: str, port: int) -> ThreadingHTTPServer:
     httpd = ThreadingHTTPServer((host, port), _Handler)
     httpd.exchange = staticmethod(exchange)         # type: ignore[attr-defined]
+    httpd.join = staticmethod(join_handle)          # type: ignore[attr-defined]
     return httpd
 
 

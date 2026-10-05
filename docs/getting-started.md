@@ -89,6 +89,32 @@ Three ways fleet gets in, and it works out which:
   point: it is what you paste into a provisioning template, a cloud-init file, or the
   provider's console. Then add the machine, and no password is needed at all.
 
+### Or let the machine join by itself
+
+When the center cannot get in -- no key it holds works, and you would rather not type a
+password -- turn it round. On the center:
+
+```bash
+fleet invite gpu-box            # prints: fleet join fleet1:...
+```
+
+and run what it prints on the new machine, which needs fleet installed. The machine
+dials the center, is admitted, and puts the center's key in its own `authorized_keys`.
+No password, and nothing to approve afterwards: the invite *was* the approval.
+
+An invite is single use and lasts fifteen minutes (`--ttl 2h` for longer). `fleet invite
+--list` says what became of recent ones, and `--revoke ID` withdraws one before it is
+used. It is safe to drop into a provisioning script, since a used code is worth nothing.
+
+The code also names the center's key, so the new machine trusts that center and no
+other: an impostor answering at the address is refused, not pinned. And the secret in
+it never crosses the network — the machine proves it holds the invite without sending it.
+
+Two things it does not change. The center must be listening (`fleet invite` warns
+when it is not). And it still manages the machine over ssh afterwards, so sshd must be
+running there and reachable from the center; if the address the center sees is not
+that, say which one is with `fleet join CODE --ssh "ssh me@10.0.0.5"`.
+
 `fleet add` is **not** center-only. Run it anywhere, and on a machine that is not the
 center it records the machine and says so — the center picks it up and enrols it on its
 next `fleet sync`, because only the center can write the access list.
@@ -251,8 +277,8 @@ waits.
 this machine out of a fleet and needs nobody's permission — you own the machine you are
 standing on.
 
-**Only on the center:** `access --allow` and `--deny`, `sync`, `rm`, handing the role
-over, and `center --init` / `--dissolve`. On any other machine these refuse and say which
+**Only on the center:** `access --allow` and `--deny`, `sync`, `rm`, `invite`, handing
+the role over, and `center --init` / `--dissolve`. On any other machine these refuse and say which
 machine to run them on.
 
 Nothing already granted stops working when the center is off. Access is enforced by sshd
@@ -284,6 +310,9 @@ fleet.
 | `the center has not swept this machine for N days` | Normal. Everything already granted keeps working; only *changes* wait. |
 | `no access list ... not a center` | You are on a spoke. Run the command on the center. |
 | `No machine named exactly ...` | `fleet rm` will not act on a prefix. Give the full name. |
+| `this invite has already been used` | Each invite admits one machine. `fleet invite` for another. |
+| `this invite has expired` | Invites last 15 minutes by default. Issue a new one, with `--ttl` if needed. |
+| `no answer from .../join` | The center is not listening. `fleet service install` on it. |
 
 ## Windows
 
@@ -328,6 +357,8 @@ fleet ssh machine_A -- nvidia-smi      # run one command there
 
 ```bash
 fleet add "ssh user@host"              # add and enrol a machine
+fleet invite gpu-box                   # on the center: a code for a machine to join with
+fleet join fleet1:...                  # on the new machine: join with that code
 fleet add "ssh user@host" --name machine_A --alias a     # naming it yourself
 fleet edit machine_A --ssh "ssh -p 40001 root@1.2.3.4"   # it moved
 fleet edit machine_A --alias a                           # a short handle to type

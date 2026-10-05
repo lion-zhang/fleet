@@ -349,7 +349,8 @@ def digest_of(body: str) -> str:
 
 
 def seal(inventory_yaml: str, *, key_path: Path | None = None,
-         telemetry: list | None = None, center_url: str = "") -> str:
+         telemetry: list | None = None, center_url: str = "",
+         fleet_id: str = "") -> str:
     """Wrap an inventory in a signature the receiver can check.
 
     The inventory is not incidental cargo: it holds the endpoints that decide where
@@ -366,6 +367,10 @@ def seal(inventory_yaml: str, *, key_path: Path | None = None,
 
     The signature covers the telemetry too. Relayed readings decide where work gets sent,
     so an unsigned one is a way to steer a job onto a machine of the sender's choosing.
+
+    `fleet_id` is carried only when it is set -- a joining machine needs it to label the
+    center's block in its own authorized_keys -- so every envelope sealed before it
+    existed, and every peer that has never heard of it, reads exactly as before.
     """
     # config.FLEET_KEY at call time, as `sign` and `is_center` do. This was the one
     # reader left on the import-bound name, and it hid well: a test that redirected the
@@ -374,8 +379,11 @@ def seal(inventory_yaml: str, *, key_path: Path | None = None,
     # Linux checkout, every CI runner -- it raised, which `ensure_fresh` swallows and
     # `join` reports as having no key at all.
     key_path = key_path or config.FLEET_KEY
-    body = yaml.safe_dump({"inventory": inventory_yaml, "telemetry": telemetry or [],
-                           "center_url": center_url}, sort_keys=False)
+    inner = {"inventory": inventory_yaml, "telemetry": telemetry or [],
+             "center_url": center_url}
+    if fleet_id:
+        inner["fleet_id"] = fleet_id
+    body = yaml.safe_dump(inner, sort_keys=False)
     return yaml.safe_dump({
         "protocol": PROTOCOL,
         # named for the common case; it is simply whoever signed, and a listening center
@@ -393,7 +401,7 @@ def seal(inventory_yaml: str, *, key_path: Path | None = None,
 
 
 def unseal(payload: str, signer_pubkey: str) -> dict:
-    """The verified body: inventory, telemetry and center_url. Raises, never guesses.
+    """The verified body: inventory, telemetry, center_url, fleet_id. Raises, never guesses.
 
     An unsigned or unsealed payload is refused outright rather than accepted as a legacy
     format: "old peer" and "hostile peer" look identical from here, and one of them must
@@ -421,7 +429,8 @@ def unseal(payload: str, signer_pubkey: str) -> dict:
     inner = yaml.safe_load(env["body"]) or {}
     return {"inventory": inner.get("inventory", ""),
             "telemetry": list(inner.get("telemetry") or []),
-            "center_url": str(inner.get("center_url") or "")}
+            "center_url": str(inner.get("center_url") or ""),
+            "fleet_id": str(inner.get("fleet_id") or "")}
 
 
 def claimed_signer(payload: str) -> str:

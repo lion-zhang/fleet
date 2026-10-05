@@ -368,6 +368,176 @@ def cmd_add(ssh_command: str = typer.Argument(None, help='e.g. "ssh -p 58418 roo
         raise typer.Exit(1)
 
 
+def _duration_s(text: str) -> int:
+    """`15m`, `2h`, `90s`, or plain minutes. 0 for anything unreadable."""
+    m = re.fullmatch(r"\s*(\d+)\s*([smhd]?)\s*", text or "")
+    if not m:
+        return 0
+    return int(m.group(1)) * {"s": 1, "m": 60, "h": 3600, "d": 86400, "": 60}[m.group(2)]
+
+
+def _listening(sync_url: str) -> bool:
+    """Whether a listener answers where the invite will send the machine.
+
+    Asked of the address itself, not of the service manager: a listener started by hand
+    with `--listen` is not a service, and a service can report running while its port is
+    closed -- either way the question the person needs answered is whether a join would
+    get through.
+    """
+    import urllib.request
+
+    from .ops.join import join_url
+
+    health = join_url(sync_url)[: -len("/join")] + "/health"
+    try:
+        with urllib.request.urlopen(health, timeout=3) as resp:
+            return resp.status == 200
+    except Exception:
+        return False
+
+
+@app.command("invite")
+def cmd_invite(name: str = typer.Argument(None, help="what the machine will be called; "
+                                                     "omit to let it say"),
+               ttl: str = typer.Option("15m", "--ttl", metavar="TIME",
+                                       help="how long it may be used for: 15m, 2h, 1d"),
+               list_: bool = typer.Option(False, "--list", help="show recent invites"),
+               withdraw: str = typer.Option(None, "--revoke", metavar="ID",
+                                            help="withdraw an invite before it is used"),
+               url_opt: str = typer.Option("", "--url", metavar="URL",
+                                           help="the address the machine should dial; "
+                                                "defaults to where the center listens"),
+               json_out: bool = typer.Option(False, "--json")):
+    """Let one machine join by itself: print a code to run there with `fleet join`.
+
+    The other way in. `fleet add` has the center dial the machine; an invite has the
+    machine dial the center, so no password is typed and a machine the center cannot
+    reach can still join. Single use, and valid for minutes.
+
+    [dim]Example:[/dim]  fleet invite gpu-box --ttl 30m
+    """
+    from .state import invites as invites_mod
+    from .ops.join import encode_code
+
+    try:
+        acc = acl.load()
+    except acl.AccessError as exc:
+        err.print(f"[red]{exc}[/red]")
+        err.print("  [dim]invites are issued by the center[/dim]")
+        raise typer.Exit(2)
+    if not acl.is_center(acc):
+        err.print(f"[red]Only the center can invite a machine.[/red] Run this on "
+                  f"[bold]{acc.name_of(acc.center)}[/bold].")
+        raise typer.Exit(2)
+
+    if list_:
+        rows = invites_mod.load()
+        now = int(time.time())
+        if _emit([{"id": i.id, "name": i.name, "state": i.state(now),
+                   "expires_at": i.expires_at, "used_as": i.used_as,
+                   "used_by": i.used_by} for i in rows], json_out):
+            return
+        if not rows:
+            console.print("[dim]no invites in the last day[/dim]")
+            return
+        for i in rows:
+            state = i.state(now)
+            what = {"open": f"open, {max(0, i.expires_at - now) // 60}m left",
+                    "used": f"used by {i.used_as or i.used_by[:20]}",
+                    "expired": "expired", "revoked": "withdrawn"}[state]
+            console.print(f"{i.id}  {i.name or '[dim](any name)[/dim]'}  {what}")
+        return
+
+    if withdraw:
+        try:
+            got = invites_mod.revoke(withdraw)
+        except invites_mod.InviteError as exc:
+            err.print(f"[red]{exc}[/red]")
+            raise typer.Exit(1)
+        state = got.state()
+        if state == "revoked":
+            console.print(f"[green]✓[/green] invite {got.id} withdrawn")
+        else:
+            console.print(f"[dim]· invite {got.id} is already {state}; nothing to "
+                          "withdraw[/dim]")
+        return
+
+    seconds = _duration_s(ttl)
+    if seconds <= 0:
+        err.print(f"[red]Not a duration: {ttl!r}[/red] -- try 15m, 2h or 1d")
+        raise typer.Exit(2)
+    if name:
+        if name in inv.handles(inv.load()):
+            err.print(f"[red]{name} is already the name of a machine here.[/red]")
+            raise typer.Exit(2)
+    invite, secret = invites_mod.create(name=name or "", ttl_s=seconds)
+    # Where the listener said it answers, when it has run here; the computed default
+    # only for a center that has never listened.
+    url = url_opt or acl.center_url() or center_advertise_url(acc)
+    code = encode_code(url, acc.center, invite.id, secret)
+    serving = _listening(url)
+    if _emit({"id": invite.id, "name": invite.name, "expires_at": invite.expires_at,
+              "code": code, "command": f"fleet join {code}", "center_url": url,
+              "listening": serving}, json_out):
+        return
+    minutes = max(1, seconds // 60)
+    console.print(f"[green]✓[/green] invite {invite.id}"
+                  + (f" for [bold]{invite.name}[/bold]" if invite.name else "")
+                  + f" -- single use, valid {minutes} minute{'s' if minutes != 1 else ''}")
+    console.print("  run this on the new machine:\n")
+    # print, not console.print: rich would wrap a long code across lines, and a code
+    # that does not survive copy-paste is no code at all.
+    print(f"    fleet join {code}\n")
+    console.print(f"  [dim]it will dial {url}; the center reaches it back over ssh, "
+                  "so sshd must be running there[/dim]")
+    if not serving:
+        console.print("[yellow]![/yellow] the center is not listening, so nothing can "
+                      "join yet -- start it with [bold]fleet service install[/bold] or "
+                      "[bold]fleet center --listen[/bold]")
+
+
+@app.command("join")
+def cmd_join(code: str = typer.Argument(..., help="the code `fleet invite` printed"),
+             name: str = typer.Option(None, "--name",
+                                      help="what to call this machine, if the invite "
+                                           "did not say"),
+             ssh_command: str = typer.Option(None, "--ssh", metavar="CMD",
+                                             help='how the center reaches this machine, '
+                                                  'e.g. "ssh -p 2222 me@10.0.0.5"; '
+                                                  "defaults to the address it sees"),
+             json_out: bool = typer.Option(False, "--json")):
+    """Join a fleet with an invite from its center. No password, nothing to approve.
+
+    [dim]Example:[/dim]  fleet join fleet1:eyJ1Ijoi...
+    """
+    from .ops.join import join as _join
+
+    try:
+        summary = _join(code, name=name or "",
+                        ssh_command=ssh_command or "")
+    except FleetError as exc:
+        err.print(f"[red]{exc}[/red]")
+        raise typer.Exit(exc.code)
+    if _emit(summary, json_out):
+        if not summary["center_key_installed"]:
+            raise typer.Exit(1)
+        return
+    console.print(f"[green]✓[/green] joined fleet {summary['fleet_id']} as "
+                  f"[bold]{summary['name']}[/bold] -- {summary['machines']} machine(s) known")
+    if summary["reached_as"]:
+        console.print(f"  [dim]the center will reach this machine as "
+                      f"{summary['reached_as']}[/dim]")
+    if summary["center_key_installed"]:
+        console.print("  [dim]the center's key is in this machine's authorized_keys; "
+                      "it keeps itself current from now on[/dim]")
+    else:
+        err.print("[yellow]Joined, but the center's key could not be installed here,[/yellow] "
+                  "so the center cannot manage this machine yet:")
+        err.print(f"  [dim]{escape(summary['install_output'])}[/dim]")
+        err.print("  [dim]run [bold]fleet join[/bold] again with the same code to retry[/dim]")
+        raise typer.Exit(1)
+
+
 
 
 
@@ -1214,6 +1384,10 @@ def cmd_center(name: str = typer.Argument(None, help="hand the role to this mach
             raise typer.Exit(2)
         where = port or DEFAULT_PORT
         url = advertise or center_advertise_url(acc, where)
+        # Remembered, so `fleet invite` -- another process, run later -- hands out the
+        # address this listener actually answers on rather than recomputing a default
+        # that is wrong the moment --port or --advertise was given.
+        acl.note_center_url(url)
         console.print(f"[green]✓[/green] serving fleet {acc.fleet_id} on port {where}")
         console.print(f"  [dim]machines are told to dial {url}[/dim]")
         console.print("  [dim]only keys this fleet has pinned are answered; "

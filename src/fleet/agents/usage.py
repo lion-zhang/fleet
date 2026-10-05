@@ -60,6 +60,10 @@ Anywhere. A name may be omitted where the obvious subject is the machine you are
   `--kind` override what is guessed, `--alias SHORT` gives it a short handle you can
   type anywhere a name goes, and `--tag NAME` (repeatable) labels it
 - `{cmd} add --self` -- record the machine you are on, without ssh
+- `{cmd} join CODE` -- join a fleet with an invite the center issued. The machine dials
+  the center, so no password is typed and a machine the center cannot reach can still
+  join. `--name` names it if the invite did not, `--ssh "ssh user@addr"` says how the
+  center reaches it back when the address it sees is not that (NAT, a jump host)
 - `{cmd} edit [NAME] --ssh "ssh ..."` -- a rental moved; point the record at the new
   address. `--disk-path /workspace` to watch the volume that matters, `--name` to
   rename, `--alias` to set or clear the short handle, `--tag`/`--untag` to add and
@@ -88,6 +92,12 @@ these either refuse or file a request for the center to act on later.
   removes every key from every machine first; never delete the access list by hand,
   which orphans those keys instead of removing them
 - `{cmd} rm NAME` -- remove another machine. Any machine may remove *itself*
+- `{cmd} invite [NAME]` -- let one machine join by itself: prints `{cmd} join CODE` to
+  run there. Single use; `--ttl 30m` for how long (default 15m), `--list` for what
+  became of recent ones, `--revoke ID` to withdraw one, `--url` when the machine must
+  dial some other address than the one the center listens on. The code admits a
+  machine, so hand it to the user and nowhere else: not into a file, a commit or a
+  message to anyone. Prefer this to `{cmd} add` when the host takes no key from here
 
 ## Rules
 
@@ -102,8 +112,9 @@ these either refuse or file a request for the center to act on later.
 - **Never type a password or accept one from the user.** The only command that asks for
   one is `{cmd} add` on the center, for a host that accepts no key yet, and a human must
   run that themselves. You are not stuck, though: `{cmd} center --pubkey` prints the key
-  to put on the host instead, after which enrolment needs no password at all. Say that
-  rather than giving up.
+  to put on the host instead, after which enrolment needs no password at all, or
+  `{cmd} invite` issues a code the machine joins with by itself. Say that rather than
+  giving up.
 - **Ask rather than guess.** These commands need a machine name, sometimes a user,
   sometimes a whole ssh command. If the request does not say, ask -- do not infer a
   machine from a partial name or from whatever was being discussed. `{cmd} rm`,

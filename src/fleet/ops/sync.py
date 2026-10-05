@@ -88,8 +88,13 @@ def run_sync(ep, payload: str) -> tuple[int, str]:
     this filter for anyone holding a key on it."""
     return send_sealed(ep, sealed_envelope(payload))
 
-def post(url: str, payload: str, timeout: float = 8.0) -> str | None:
-    """One request to the center. None on any failure, which is never fatal here."""
+def post(url: str, payload: str, timeout: float = 8.0, *, errors: bool = False):
+    """One request to the center. None on any failure, which is never fatal here.
+
+    With `errors`, a failure is `(status, text)` instead -- status None when nothing
+    answered -- for the one caller that has a person waiting on why: a refused join
+    says which way the invite was wrong, and "no answer" would hide that.
+    """
     import urllib.error
     import urllib.request
 
@@ -98,8 +103,16 @@ def post(url: str, payload: str, timeout: float = 8.0) -> str | None:
     try:
         with urllib.request.urlopen(req, timeout=timeout) as resp:
             return resp.read().decode(errors="replace")
-    except (urllib.error.URLError, OSError, ValueError):
-        return None
+    except urllib.error.HTTPError as exc:
+        if not errors:
+            return None
+        try:
+            text = exc.read().decode(errors="replace")
+        except OSError:
+            text = ""
+        return exc.code, text or str(exc.reason)
+    except (urllib.error.URLError, OSError, ValueError) as exc:
+        return (None, str(getattr(exc, "reason", "") or exc)) if errors else None
 
 def telemetry_to_relay() -> list[dict]:
     """What we measured ourselves, for machines the far side may not be able to reach.
