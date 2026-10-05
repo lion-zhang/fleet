@@ -33,7 +33,7 @@ from pathlib import Path
 import yaml
 
 from .. import config
-from ..config import CONFIG_DIR, FLEET_KEY, STATE_DIR
+from ..config import CONFIG_DIR, STATE_DIR
 
 # CONFIG_DIR and STATE_DIR are the *same directory* on macOS (platformdirs gives both as
 # ~/Library/Application Support/fleet). So every name here is globally distinct, and
@@ -43,9 +43,22 @@ ACCESS_PATH = CONFIG_DIR / "access.yaml"           # authority. center only
 LEDGER_PATH = STATE_DIR / "access-ledger.yaml"     # desired vs observed. center only
 CACHE_PATH = STATE_DIR / "access-cache.yaml"       # signed copy of our row. spokes
 OUTBOX_PATH = STATE_DIR / "access-outbox.yaml"     # requests we have filed
+# The handover, in three places. CHAIN: on a center that took the role, every signed
+# record from the first center to this one -- carried on every envelope, so a member
+# that still trusts an older key can walk to the current one. INBOX: on a successor,
+# the handover the outgoing center delivered, waiting for `--accept`. HANDING: on the
+# outgoing center, who it named and where to ask whether they took it.
+CHAIN_PATH = STATE_DIR / "access-chain.yaml"       # center only
+INBOX_PATH = STATE_DIR / "access-handover-in.yaml"  # successor, until it accepts
+HANDING_PATH = STATE_DIR / "access-handover-out.yaml"  # outgoing center, until settled
 
 SIGN_NAMESPACE = "fleet-access"
 VERSION = 1
+
+
+def suppress_oserror():
+    import contextlib
+    return contextlib.suppress(OSError)
 
 
 class AccessError(RuntimeError):
@@ -103,7 +116,11 @@ class Access:
         out = {e.key for e in self.allow}
         if self.center:
             for fp, meta in self.keys.items():
-                if fp != self.center:
+                # `no_route`: a machine the center has no way to dial and was never
+                # meant to -- a center that handed the role over, whose record has no
+                # address by design. Its edge could only ever read "pending" forever.
+                # Giving it an address (`fleet edit --ssh`) clears the mark.
+                if fp != self.center and not meta.get("no_route"):
                     out.add((self.center, fp, meta.get("user", "root")))
         return out
 
@@ -157,9 +174,13 @@ def save(acc: Access, path: Path | None = None) -> None:
     """Write atomically, bumping the generation so a stale copy is recognisable."""
     path = path or ACCESS_PATH
     acc.generation += 1
+    if path == ACCESS_PATH:
+        config.ensure_dirs()                # owner-only, before the authority lands in it
     path.parent.mkdir(parents=True, exist_ok=True)
     tmp = path.with_suffix(".tmp")
     tmp.write_text(dumps(acc))
+    with suppress_oserror():
+        os.chmod(tmp, 0o600)           # the authority: owner-only, whatever the umask
     os.replace(tmp, path)
 
 
@@ -349,7 +370,8 @@ def digest_of(body: str) -> str:
 
 
 def seal(inventory_yaml: str, *, key_path: Path | None = None,
-         telemetry: list | None = None, center_url: str = "") -> str:
+         telemetry: list | None = None, center_url: str = "",
+         fleet_id: str = "", claims: dict | None = None) -> str:
     """Wrap an inventory in a signature the receiver can check.
 
     The inventory is not incidental cargo: it holds the endpoints that decide where
@@ -366,11 +388,30 @@ def seal(inventory_yaml: str, *, key_path: Path | None = None,
 
     The signature covers the telemetry too. Relayed readings decide where work gets sent,
     so an unsigned one is a way to steer a job onto a machine of the sender's choosing.
+
+    `fleet_id` is carried only when it is set -- a joining machine needs it to label the
+    center's block in its own authorized_keys -- so every envelope sealed before it
+    existed, and every peer that has never heard of it, reads exactly as before.
     """
-    key_path = key_path or FLEET_KEY
-    body = yaml.safe_dump({"inventory": inventory_yaml, "telemetry": telemetry or [],
-                           "center_url": center_url}, sort_keys=False)
-    return yaml.safe_dump({
+    # config.FLEET_KEY at call time, as `sign` and `is_center` do. This was the one
+    # reader left on the import-bound name, and it hid well: a test that redirected the
+    # key still sealed with the real one, so on a machine that had a real key it passed
+    # while signing with a production identity, and on a machine without one -- a fresh
+    # Linux checkout, every CI runner -- it raised, which `ensure_fresh` swallows and
+    # `join` reports as having no key at all.
+    key_path = key_path or config.FLEET_KEY
+    chain = handover_chain() if key_path == config.FLEET_KEY else []
+    inner = {"inventory": inventory_yaml, "telemetry": telemetry or [],
+             "center_url": center_url}
+    if fleet_id:
+        inner["fleet_id"] = fleet_id
+    if claims:
+        # What the sender says about itself -- its hostname, that it has placed the
+        # center's key in its own authorized_keys. Signed like everything else, and
+        # only ever about the signer: a machine is the authority on its own files.
+        inner["claims"] = dict(claims)
+    body = yaml.safe_dump(inner, sort_keys=False)
+    env = {
         "protocol": PROTOCOL,
         # named for the common case; it is simply whoever signed, and a listening center
         # checks it against the keys it has pinned before reading anything else
@@ -383,11 +424,17 @@ def seal(inventory_yaml: str, *, key_path: Path | None = None,
         "signature": sign(body, key_path),
         "signature_digest": sign(digest_of(body), key_path),
         "body": body,
-    }, sort_keys=False)
+    }
+    if chain:
+        # Outside the body on purpose: each record is signed by the key it hands *from*,
+        # so it vouches for itself, and a peer that has never heard of handovers reads
+        # the envelope exactly as before.
+        env["handovers"] = chain
+    return yaml.safe_dump(env, sort_keys=False)
 
 
 def unseal(payload: str, signer_pubkey: str) -> dict:
-    """The verified body: inventory, telemetry and center_url. Raises, never guesses.
+    """The verified body: inventory, telemetry, center_url, fleet_id. Raises, never guesses.
 
     An unsigned or unsealed payload is refused outright rather than accepted as a legacy
     format: "old peer" and "hostile peer" look identical from here, and one of them must
@@ -415,7 +462,9 @@ def unseal(payload: str, signer_pubkey: str) -> dict:
     inner = yaml.safe_load(env["body"]) or {}
     return {"inventory": inner.get("inventory", ""),
             "telemetry": list(inner.get("telemetry") or []),
-            "center_url": str(inner.get("center_url") or "")}
+            "center_url": str(inner.get("center_url") or ""),
+            "fleet_id": str(inner.get("fleet_id") or ""),
+            "claims": dict(inner.get("claims") or {})}
 
 
 def claimed_signer(payload: str) -> str:
@@ -540,6 +589,8 @@ def note_center_seen(cache_path: Path | None = None) -> None:
     except (OSError, yaml.YAMLError):
         data = {}
     data["seen_at"] = int(time.time())
+    data.pop("unanswered_at", None)        # it answered: any backoff is over
+    data.pop("unanswered", None)
     path.parent.mkdir(parents=True, exist_ok=True)
     tmp = path.with_suffix(".tmp")
     tmp.write_text(yaml.safe_dump(data, sort_keys=False))
@@ -612,3 +663,158 @@ def handover_record(acc: Access, successor_fp: str) -> str:
         "to_pubkey": meta.get("pubkey", ""),
         "at": int(time.time()),
     }, sort_keys=False)
+
+
+# ------------------------------------------------------------ a center not answering
+
+def note_center_unanswered(cache_path: Path | None = None) -> None:
+    """Record that asking the center for a fresh copy got nowhere.
+
+    Without this nothing remembered the failure, so every read asked again: a laptop
+    center closed for the weekend cost every machine a full connect timeout on every
+    `fleet ls` until it came back -- which is the sync outage the design says must cost
+    freshness and nothing else.
+    """
+    path = cache_path or CACHE_PATH
+    try:
+        data = yaml.safe_load(path.read_text()) or {}
+    except (OSError, yaml.YAMLError):
+        data = {}
+    data["unanswered_at"] = int(time.time())
+    data["unanswered"] = int(data.get("unanswered") or 0) + 1
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = path.with_suffix(".tmp")
+    tmp.write_text(yaml.safe_dump(data, sort_keys=False))
+    os.replace(tmp, path)
+
+
+def center_retry_after(base_s: int, max_s: int, cache_path: Path | None = None) -> int:
+    """Seconds until the center is worth asking again; 0 means now.
+
+    `base_s` after the first failure, doubling per failure after that, up to `max_s`.
+    """
+    path = cache_path or CACHE_PATH
+    try:
+        data = yaml.safe_load(path.read_text()) or {}
+        failures, at = int(data.get("unanswered") or 0), int(data.get("unanswered_at") or 0)
+    except (OSError, yaml.YAMLError, TypeError, ValueError):
+        return 0
+    if failures <= 0 or not at:
+        return 0
+    wait = min(max_s, base_s * 2 ** min(failures - 1, 20)) if max_s else base_s
+    return max(0, at + wait - int(time.time()))
+
+
+# ------------------------------------------------------------ which fleet, on a member
+
+def note_fleet_id(fleet_id: str, cache_path: Path | None = None) -> None:
+    """Remember which fleet this machine is in, learned from a payload already verified.
+
+    A member holds no access list, so until this it did not know its own fleet's id --
+    and the id is what names the blocks in its authorized_keys, which `--leave` must
+    find to remove.
+    """
+    if not fleet_id:
+        return
+    path = cache_path or CACHE_PATH
+    try:
+        data = yaml.safe_load(path.read_text()) or {}
+    except (OSError, yaml.YAMLError):
+        data = {}
+    if data.get("fleet_id") == fleet_id:
+        return
+    data["fleet_id"] = fleet_id
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = path.with_suffix(".tmp")
+    tmp.write_text(yaml.safe_dump(data, sort_keys=False))
+    os.replace(tmp, path)
+
+
+def member_fleet_id(cache_path: Path | None = None) -> str:
+    path = cache_path or CACHE_PATH
+    try:
+        return str((yaml.safe_load(path.read_text()) or {}).get("fleet_id") or "")
+    except (OSError, yaml.YAMLError):
+        return ""
+
+
+# ------------------------------------------------------------- following a handover
+
+def handover_chain(path: Path | None = None) -> list[dict]:
+    """Every handover from the first center to this one, oldest first. [] if none."""
+    path = path or CHAIN_PATH
+    try:
+        raw = yaml.safe_load(path.read_text()) or {}
+    except (OSError, yaml.YAMLError):
+        return []
+    return [e for e in (raw.get("chain") or []) if isinstance(e, dict)]
+
+
+def save_handover_chain(chain: list[dict], path: Path | None = None) -> None:
+    path = path or CHAIN_PATH
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = path.with_suffix(".tmp")
+    tmp.write_text(yaml.safe_dump({"chain": chain}, sort_keys=False))
+    os.replace(tmp, path)
+
+
+def follow_chain(chain: list, trusted_pubkey: str) -> str:
+    """Walk signed handovers from a key we trust. Returns the key they lead to.
+
+    Each record must be signed by the key it hands *from*, and that key must be the one
+    the walk has reached -- so the walk can only ever move along a path the fleet's own
+    centers signed, starting from the one this machine pinned. A record that does not
+    chain is skipped, not trusted: a forged one simply leads nowhere.
+    """
+    current = trusted_pubkey.strip()
+    try:
+        current_fp = fingerprint(current)
+    except AccessError:
+        return current
+    for entry in chain or []:
+        record = str(entry.get("record") or "")
+        try:
+            rec = yaml.safe_load(record) or {}
+        except yaml.YAMLError:
+            continue
+        if not isinstance(rec, dict) or rec.get("kind") != "fleet-handover":
+            continue
+        if rec.get("from") != current_fp:
+            continue
+        nxt = str(rec.get("to_pubkey") or "").strip()
+        try:
+            if not nxt or fingerprint(nxt) != rec.get("to"):
+                continue
+        except AccessError:
+            continue
+        if not verify(record, str(entry.get("signature") or ""), current):
+            continue
+        current, current_fp = nxt, rec["to"]
+    return current
+
+
+def unseal_trusting(payload: str, pinned: str) -> tuple[dict, str]:
+    """`unseal` against the key we pinned, or the one a signed handover chain leads to.
+
+    Returns (note, the key that verified it). The caller pins that key when it differs:
+    this is how a member that has never heard from the new center moves over to it --
+    on the strength of the old center's signature, never on first use.
+    """
+    try:
+        return unseal(payload, pinned), pinned
+    except AccessError as first:
+        try:
+            env = yaml.safe_load(payload) or {}
+        except yaml.YAMLError:
+            raise first
+        if not isinstance(env, dict) or not env.get("handovers"):
+            raise first
+        signer = str(env.get("center_pubkey") or "").strip()
+        reached = follow_chain(env["handovers"], pinned)
+        try:
+            if not signer or fingerprint(reached) != fingerprint(signer):
+                raise first
+        except AccessError:
+            raise first
+        return unseal(payload, reached), reached
+

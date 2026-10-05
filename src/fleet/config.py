@@ -34,6 +34,11 @@ DEFAULTS: dict = {
     # the center. Lazy on purpose: a machine nobody is using does not need fresh data,
     # and the moment someone uses it, it gets some.
     "sync_ttl_s": 300,
+    # The longest a machine that is not answering is left alone before being tried
+    # again. Waiting starts at telemetry_ttl_s / one minute and doubles per failure: a
+    # dead host costs a connect timeout per attempt, and paying it on every `fleet ls`
+    # made a machine being off cost seconds on every read, not just freshness.
+    "offline_backoff_max_s": 1800,
     "presence_ttl_s": 10,       # tailscale presence is nearly free, so refresh often
     "probe_timeout_s": 20,
     "connect_timeout_s": 8,
@@ -58,8 +63,22 @@ class Config:
 
 
 def ensure_dirs() -> None:
-    CONFIG_DIR.mkdir(parents=True, exist_ok=True)
-    STATE_DIR.mkdir(parents=True, exist_ok=True)
+    """Create fleet's directories, owner-only whatever the umask says.
+
+    The access list is the center's authority, read unsigned from its own disk. Under a
+    permissive umask -- `docker exec` runs with 0000, and so do some service managers --
+    it came out world-writable, so any local user could grant themselves every machine
+    and the next sweep would install their key everywhere. The directory is the boundary
+    that holds regardless of each file's own mode, and both are fleet's alone, so
+    tightening them can surprise nobody.
+    """
+    for d in (CONFIG_DIR, STATE_DIR):
+        d.mkdir(parents=True, exist_ok=True, mode=0o700)
+        try:
+            if d.stat().st_mode & 0o077:
+                d.chmod(0o700)
+        except OSError:
+            pass                    # not ours to change; reading must still work
 
 
 def load_config() -> Config:

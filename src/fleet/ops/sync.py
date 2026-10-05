@@ -62,10 +62,12 @@ def sealed_envelope(payload: str) -> str:
     bytes once per spoke.
     """
     try:
-        url = center_advertise_url(acl.load())
+        acc = acl.load()
+        url, fleet_id = center_advertise_url(acc), acc.fleet_id
     except acl.AccessError:
-        url = ""                           # not a center; nothing to advertise
-    return acl.seal(payload, telemetry=telemetry_to_relay(), center_url=url)
+        url, fleet_id = "", ""             # not a center; nothing to advertise
+    return acl.seal(payload, telemetry=telemetry_to_relay(), center_url=url,
+                    fleet_id=fleet_id)
 
 
 def send_sealed(ep, sealed: str) -> tuple[int, str]:
@@ -88,8 +90,13 @@ def run_sync(ep, payload: str) -> tuple[int, str]:
     this filter for anyone holding a key on it."""
     return send_sealed(ep, sealed_envelope(payload))
 
-def post(url: str, payload: str, timeout: float = 8.0) -> str | None:
-    """One request to the center. None on any failure, which is never fatal here."""
+def post(url: str, payload: str, timeout: float = 8.0, *, errors: bool = False):
+    """One request to the center. None on any failure, which is never fatal here.
+
+    With `errors`, a failure is `(status, text)` instead -- status None when nothing
+    answered -- for the one caller that has a person waiting on why: a refused join
+    says which way the invite was wrong, and "no answer" would hide that.
+    """
     import urllib.error
     import urllib.request
 
@@ -98,8 +105,16 @@ def post(url: str, payload: str, timeout: float = 8.0) -> str | None:
     try:
         with urllib.request.urlopen(req, timeout=timeout) as resp:
             return resp.read().decode(errors="replace")
-    except (urllib.error.URLError, OSError, ValueError):
-        return None
+    except urllib.error.HTTPError as exc:
+        if not errors:
+            return None
+        try:
+            text = exc.read().decode(errors="replace")
+        except OSError:
+            text = ""
+        return exc.code, text or str(exc.reason)
+    except (urllib.error.URLError, OSError, ValueError) as exc:
+        return (None, str(getattr(exc, "reason", "") or exc)) if errors else None
 
 def telemetry_to_relay() -> list[dict]:
     """What we measured ourselves, for machines the far side may not be able to reach.
@@ -166,8 +181,13 @@ def ensure_fresh(*, force: bool = False) -> None:
     pinned = acl.trusted_center_pubkey()
     if not url or not pinned:
         return                             # never been told where to ask, or who to trust
-    if not force and int(time.time()) - acl.center_last_seen() < int(
-            load_config().sync_ttl_s):
+    cfg = load_config()
+    if not force and int(time.time()) - acl.center_last_seen() < int(cfg.sync_ttl_s):
+        return
+    # A center that did not answer last time is left alone for a while, doubling per
+    # miss. Reads keep working from local state either way; what this saves is the
+    # connect timeout every one of them was paying to rediscover that it is away.
+    if not force and acl.center_retry_after(60, int(cfg.offline_backoff_max_s or 0)):
         return
     try:
         payload = acl.seal(inv.dumps(inv.load()), telemetry=telemetry_to_relay())
@@ -175,17 +195,24 @@ def ensure_fresh(*, force: bool = False) -> None:
         return                             # no key of our own yet; nothing to say
     body = post(url, payload)
     if body is None:
+        acl.note_center_unanswered()
         return
     try:
-        note = acl.unseal(body, pinned)
+        note, signer = acl.unseal_trusting(body, pinned)
         incoming = inv.loads(note["inventory"])
     except Exception:
-        return                             # unsigned, or not from the center we pinned
+        # unsigned, or not from the center we pinned. Backed off too: asking again
+        # will not change who answers, and it costs a round trip each time.
+        acl.note_center_unanswered()
+        return
+    if signer != pinned:
+        acl.pin_center_pubkey(signer)      # a signed handover led here from our pin
     inv.update(lambda current: inv.merge(current, incoming, authoritative=True))
     if note["telemetry"]:
         record_relayed(note["telemetry"])
     acl.note_center_seen()
     acl.note_center_url(note["center_url"] or url)
+    acl.note_fleet_id(note.get("fleet_id", ""))
 
 def join(url: str) -> str:
     """Dial a center at an address given by hand, and remember it. Returns a summary.
@@ -219,7 +246,9 @@ def join(url: str) -> str:
         if not pinned:
             acl.unseal_first_contact(body)         # pins whoever answered
             pinned = acl.trusted_center_pubkey()
-        note = acl.unseal(body, pinned)
+        note, signer = acl.unseal_trusting(body, pinned)
+        if signer != pinned:
+            acl.pin_center_pubkey(signer)
     except acl.AccessError as exc:
         raise FleetError(f"the answer from {url} is not one we can trust: {exc}")
 
@@ -235,26 +264,9 @@ def join(url: str) -> str:
     acl.note_center_seen()
     # Whatever the center says to use from now on, falling back to what was typed.
     acl.note_center_url(note["center_url"] or url)
+    acl.note_fleet_id(note.get("fleet_id", ""))
     # Live devices, not records: a fleet that has ever removed a machine carries the
     # tombstone for TOMBSTONE_TTL_S so the deletion can propagate, and counting those
     # told a seven-machine fleet it had joined fourteen.
-    return f"joined: {len(inv.live(incoming))} machine(s) known, {changes} changed"
-
-
-def file_request(current, target: str, allow: str, user: str) -> None:
-    """Ask the center for an edge we cannot create ourselves.
-
-    Written to our own outbox and carried by the next sweep. A request is not a grant --
-    the center decides -- but a request matching an edge that already exists is simply
-    key placement that failed, and reconciles without anyone being asked.
-    """
-
-    out = []
-    if acl.OUTBOX_PATH.exists():
-        out = (yaml.safe_load(acl.OUTBOX_PATH.read_text()) or {}).get("requests", [])
-    entry = {"to": target, "from": allow, "user": user, "at": int(time.time())}
-    if entry not in [{k: v for k, v in r.items() if k != "at"} | {"at": r.get("at")}
-                     for r in out]:
-        out.append(entry)
-    acl.OUTBOX_PATH.parent.mkdir(parents=True, exist_ok=True)
-    acl.OUTBOX_PATH.write_text(yaml.safe_dump({"requests": out}, sort_keys=False))
+    changed = len(changes) if isinstance(changes, (list, tuple, set)) else int(changes or 0)
+    return f"joined: {len(inv.live(incoming))} machine(s) known, {changed} changed"

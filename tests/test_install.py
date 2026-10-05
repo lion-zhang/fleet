@@ -543,11 +543,31 @@ def test_the_installer_offers_the_fleet_key(tmp_path, monkeypatch):
     whatever personal key the machine happened to have, so it worked from the laptop
     whose key was everywhere and failed with "Permission denied (publickey)" from any
     machine fleet had enrolled -- every machine that would run `fleet update` itself."""
+    import fleet.config
     from fleet import install as install_mod
     from fleet.ssh.cmd import Endpoint
 
     key = tmp_path / "id_ed25519"
     key.write_text("x")
-    monkeypatch.setattr(install_mod, "FLEET_KEY", key)
+    monkeypatch.setattr(fleet.config, "FLEET_KEY", key)
     argv = install_mod.build_install_argv(Endpoint(target="b", user="u"))
     assert argv[argv.index("-i") + 1] == str(key)
+
+
+def test_installing_on_a_machine_makes_it_a_member_at_once(tmp_path, monkeypatch):
+    """Found on a real fleet: `fleet install gpu` succeeded and gpu then said "not in a
+    fleet" -- membership arrives in a signed copy, and nothing handed it one."""
+    from fleet import cli
+    from fleet.models import Device, Kind
+    from fleet.ops import sync
+    from fleet.state import access as acl
+    from fleet.state import inventory as inv
+
+    inv.save([Device(id="id:gpu", name="gpu", kind=Kind.PERMANENT,
+                     endpoints=[{"target": "gpu", "user": "root", "port": 22}])])
+    monkeypatch.setattr(acl, "load", lambda *a, **k: acl.Access(fleet_id="f", center="c"))
+    monkeypatch.setattr(acl, "is_center", lambda *a, **k: True)
+    sent = []
+    monkeypatch.setattr(sync, "run_sync", lambda ep, payload: sent.append(ep.target) or (0, ""))
+    cli._hand_the_fleet_to(inv.find_exact(inv.load(), "gpu"))
+    assert sent == ["gpu"]

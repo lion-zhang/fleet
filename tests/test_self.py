@@ -183,6 +183,9 @@ def test_a_machine_not_in_the_inventory_is_told_what_to_run(tmp_path, monkeypatc
     monkeypatch.setattr(store, "DB_PATH", tmp_path / "cache.db")
     monkeypatch.setattr(identity, "local_device_id", lambda: "id:me")
     inv.save([], inv.INVENTORY_PATH)
+    # in a fleet, an unrecorded machine is told to record itself; a machine in no fleet
+    # at all is simply shown (test_view covers that first run)
+    monkeypatch.setattr(cli, "_fleet_membership", lambda: "member")
 
     r = CliRunner().invoke(cli.app, ["show"])
     assert r.exit_code == 2

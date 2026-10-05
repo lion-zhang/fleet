@@ -29,10 +29,12 @@ from . import reconcile as rec
 from . import service
 from .agents import (MCP_CLIENTS, TARGETS, detect_mcp_clients, detect_targets,
                      fleet_command, fleet_executable, install, install_mcp,
-                     package_version, uninstall, uninstall_mcp)
-from .config import DEFAULT_PORT, FLEET_KEY, INVENTORY_PATH, load_config
+                     installed_mcp_clients, installed_targets, package_version,
+                     stale_mcp_clients, stale_targets, uninstall, uninstall_mcp)
+from .config import DEFAULT_PORT, INVENTORY_PATH, load_config
 from .edit import apply_edits
 from .install import (NOTHING_TO_UPDATE, build_install_argv, install_script,
+                      install_source,
                       local_install_argv, payload_for)
 from .mcpserver import McpUnavailable, serve as serve_mcp
 from .models import Device, Kind, Status
@@ -49,10 +51,12 @@ from .ops.migrate import run as _migrate_passwords
 from .ops.names import canonical as _canonical
 from .ops.rows import snapshot as _rows, tick as _live_tick
 from .ops.sweep import (apply_now as _apply_now, broadcast as _broadcast,
+                        remove_now as _remove_now,
+                        settle_center_edge as _settle_center_edge,
                         endpoint_for as _endpoint_for,
                         enrol_unpinned as _enrol_unpinned, run as _sweep)
 from .ops.sync import (center_advertise_url, ensure_fresh,
-                       file_request as _file_request, post as _post,
+                       post as _post,
                        record_relayed as _record_relayed,
                        telemetry_to_relay as _telemetry_to_relay,
                        this_host as _this_host)
@@ -60,7 +64,7 @@ from .probe.runner import PAYLOAD, probe_env, probe_many, run_probe, run_probe_l
 from .render import view as view_mod
 from .render.staleness import staleness_note
 from .render.top import (Schedule, device_lines, disk_cell, gpu_cells_compact,
-                         name_cell, render_device, render_fleet)
+                         name_cell, render_device, render_fleet, render_ls)
 from .render.view import Detail, auth_of, device_view, fleet_view, matches_tag
 from .serve import serve as serve_center
 from .ssh.cmd import (build_argv, local_platform, local_shell_argv, remote_command,
@@ -148,38 +152,11 @@ def cmd_ls(names: list[str] = typer.Argument(None, help="only these devices"),
                   "[bold]fleet add \"ssh user@host\"[/bold]")
         raise typer.Exit(0)
 
-    t = Table(box=None, pad_edge=False, header_style="bold")
-    # Right-justifying a multi-line cell pads its short lines from the left and comes
-    # out ragged, so these two flip left only when some device really has more than one
-    # card. A fleet of single-GPU boxes renders exactly as it always did.
-    tall = any(device_lines(r) > 1 for r in rows)
-    for col, kw in (("", {}), ("NAME", {"no_wrap": True}), ("KIND", {"no_wrap": True}),
-                    ("GPU", {"no_wrap": True, "overflow": "ellipsis",
-                             "max_width": 24}),
-                    ("VRAM FREE", {"justify": "left" if tall else "right",
-                                   "no_wrap": True}),
-                    ("CPU", {"justify": "right", "no_wrap": True}),
-                    ("RAM FREE", {"justify": "right", "no_wrap": True}),
-                    ("DISK FREE", {"justify": "left" if tall else "right",
-                                   "no_wrap": True}),
-                    ("$/HR", {"justify": "right", "no_wrap": True}),
-                    ("AGE", {"justify": "right", "no_wrap": True}),
-                    ("NOTE", {"no_wrap": True, "overflow": "ellipsis", "max_width": 42})):
-        t.add_column(col, **kw)
-    for r in rows:
-        gpu, vram = gpu_cells_compact(r)
-        note = r.get("error", {}).get("detail", "") if r["status"] != "ok" else (
-            r["alerts"][0] if r["alerts"] else "")
-        age = f"{r['telemetry_age_s']}s" if r["telemetry_age_s"] is not None else "-"
-        t.add_row(_DOT.get(r["status"], "?"), name_cell(r),
-                  r["kind"], gpu, vram,
-                  str(r["cpu_cores"] or "-"),
-                  f"{r['ram_free_gb']:.0f}G" if r["ram_free_gb"] else "-",
-                  disk_cell(r),
-                  f"${r['usd_per_hour']:.2f}" if r["usd_per_hour"] else "-",
-                  age, note)
+    t = render_ls(rows)
     console.print(t)
     if note := staleness_note():
+        console.print(f"[yellow]![/yellow] [dim]{note}[/dim]")
+    if note := _skills_note():
         console.print(f"[yellow]![/yellow] [dim]{note}[/dim]")
     s = view["summary"]
     console.print(f"\n[dim]{s['online']}/{s['total']} online · {s['gpus_free']} free GPU(s)"
@@ -195,15 +172,46 @@ def cmd_show(name: str = typer.Argument(None, help="defaults to this machine"),
     [dim]Example:[/dim]  fleet show machine_A
     """
     ensure_fresh()
+    unrecorded = False
     if name is None:
-        name = _this_machine(inv.load(), "show").name
-    rows = _rows([name], refresh=refresh, detail=Detail.FULL)
-    if not rows:
-        err.print(f"[red]No device named {name!r}.[/red]  Try [bold]fleet ls[/bold]")
-        raise typer.Exit(1)
-    r = rows[0]
+        me = identity.local_device_id()
+        if me and inv.find(inv.load(), me) is None and _fleet_membership() == "":
+            # Nothing set up yet. The first command anyone runs -- often through
+            # `uvx`, before installing anything -- used to answer "not in the
+            # inventory, so there is nothing to show". Show the machine anyway: one
+            # local probe, kept in the disposable cache, the inventory left alone.
+            r, unrecorded = _show_unrecorded_self(), True
+        else:
+            name = _this_machine(inv.load(), "show").name
+    if not unrecorded:
+        rows = _rows([name], refresh=refresh, detail=Detail.FULL)
+        if not rows:
+            err.print(f"[red]No device named {name!r}.[/red]  Try [bold]fleet ls[/bold]")
+            raise typer.Exit(1)
+        r = rows[0]
     if _emit(r, json_out):
         return
+    _print_show(r)
+    if unrecorded:
+        console.print("\n  [dim]this machine is not in a fleet yet: [bold]fleet center "
+                      "--init[/bold] starts one here, [bold]fleet add --self[/bold] just "
+                      "records it[/dim]")
+
+
+def _show_unrecorded_self() -> dict:
+    from .render.view import device_view
+
+    dev, res = onboard_self()
+    conn = store.connect()
+    try:
+        store.record(conn, dev.id, res)
+        state, snap = store.latest(conn, dev.id)
+    finally:
+        conn.close()
+    return device_view(dev, state, snap, Detail.FULL, self_id=dev.id)
+
+
+def _print_show(r: dict) -> None:
     console.print(f"\n{_DOT.get(r['status'],'?')} [bold]{r['name']}[/bold]  "
                   f"[dim]{r['kind']} · {r['status']} · {r.get('os') or '?'} · {r.get('arch') or ''}[/dim]")
     if r.get("error"):
@@ -321,6 +329,8 @@ def cmd_add(ssh_command: str = typer.Argument(None, help='e.g. "ssh -p 58418 roo
                   "managed at all: the center installs and removes keys over ssh, so "
                   "one it cannot dial cannot be granted or revoked anything.[/dim]")
         raise typer.Exit(1)
+    if not this_machine:
+        _split_a_clone(devices, dev, res)
     if dry_run:
         _emit({"device": dev.name, "id": dev.id, "kind": dev.kind.value,
                "status": res.status.value}, True)
@@ -352,9 +362,19 @@ def cmd_add(ssh_command: str = typer.Argument(None, help='e.g. "ssh -p 58418 roo
         elif action == "unchanged":
             console.print(f"[dim]· {dev.name} already recorded with this endpoint.[/dim]")
         else:
+            # A key refused on first contact is the normal start of enrolling, not a
+            # fault: printed as "auth_failed: credentials rejected" it read as the add
+            # having failed, one line before the key went in and it succeeded.
+            enrolling = (res.status is Status.AUTH_FAILED and where == "center"
+                         and not this_machine)
             console.print(f"[green]✓[/green] added [bold]{dev.name}[/bold] "
-                          f"({dev.kind.value}, {res.status.value})")
-        if not res.ok:
+                          f"({dev.kind.value}"
+                          + (")" if enrolling else f", {res.status.value})"))
+            if enrolling:
+                console.print("  [dim]it does not accept a key from here yet -- "
+                              "installing one[/dim]")
+        if not res.ok and not (res.status is Status.AUTH_FAILED and where == "center"
+                               and not this_machine and action == "added"):
             console.print(f"  [yellow]{res.status.value}[/yellow]: {res.error_detail}")
 
     # --json still enrols. An agent uses --json, and a flag that quietly did half the
@@ -362,9 +382,229 @@ def cmd_add(ssh_command: str = typer.Argument(None, help='e.g. "ssh -p 58418 roo
     # must not land in the middle of the document.
     with _chatter_to_stderr(json_out):
         outcome = _enrol_after_add(dev, res, where=where, this_machine=this_machine)
+        if outcome == "enrolled":
+            _settle_center_edge(dev.id)
     _emit({"action": action, "name": dev.name, "id": dev.id, "kind": dev.kind.value,
            "status": res.status.value, "enrolment": outcome}, json_out)
     if outcome == "failed":
+        raise typer.Exit(1)
+
+
+def _split_a_clone(devices, dev, res) -> None:
+    """Keep two machines apart when they share a machine-id but are not the same host.
+
+    Dedupe on machine-id is what makes one box reached two ways into one record. But VMs
+    and containers cloned from one image share the id too, and on a real fleet the
+    second clone was merged into the first as "one device, not two": unreachable by its
+    own name, with two pinned keys claiming one device. A machine's own hostname,
+    measured from inside it, is what tells them apart -- one box answering on two
+    addresses still reports one hostname.
+    """
+    from .onboard import slugify
+
+    existing = inv.find_exact(devices, dev.id)
+    host = res.snapshot.hostname if res.snapshot else ""
+    if existing is None or not host:
+        return
+    conn = store.connect()
+    try:
+        _, snap = store.latest(conn, existing.id)
+    finally:
+        conn.close()
+    before = (snap or {}).get("hostname") or ""
+    if not before or before == host:
+        return
+    dev.id = f"{dev.id}:{slugify(host)}"
+    if dev.name == existing.name:
+        dev.name = inv_unique(devices, slugify(host))
+    console.print(f"  [yellow]![/yellow] {dev.name} shares a machine-id with "
+                  f"{existing.name} but calls itself {host!r}, not {before!r} -- most "
+                  "likely cloned from the same image. Recorded as a separate machine.")
+    console.print("  [dim]give it its own id to make this go away: "
+                  "`systemd-machine-id-setup` (after emptying /etc/machine-id) on it[/dim]")
+
+
+def inv_unique(devices, wanted: str) -> str:
+    taken, name, n = inv.handles(devices), wanted, 2
+    while name in taken:
+        name, n = f"{wanted}-{n}", n + 1
+    return name
+
+
+def _duration_s(text: str) -> int:
+    """`15m`, `2h`, `90s`, or plain minutes. 0 for anything unreadable."""
+    m = re.fullmatch(r"\s*(\d+)\s*([smhd]?)\s*", text or "")
+    if not m:
+        return 0
+    return int(m.group(1)) * {"s": 1, "m": 60, "h": 3600, "d": 86400, "": 60}[m.group(2)]
+
+
+def _listening(sync_url: str) -> bool:
+    """Whether a listener answers where the invite will send the machine.
+
+    Asked of the address itself, not of the service manager: a listener started by hand
+    with `--listen` is not a service, and a service can report running while its port is
+    closed -- either way the question the person needs answered is whether a join would
+    get through.
+    """
+    import urllib.request
+
+    from .ops.join import join_url
+
+    health = join_url(sync_url)[: -len("/join")] + "/health"
+    try:
+        with urllib.request.urlopen(health, timeout=3) as resp:
+            return resp.status == 200
+    except Exception:
+        return False
+
+
+@app.command("invite")
+def cmd_invite(name: str = typer.Argument(None, help="what the machine will be called; "
+                                                     "omit to let it say"),
+               ttl: str = typer.Option("15m", "--ttl", metavar="TIME",
+                                       help="how long it may be used for: 15m, 2h, 1d"),
+               list_: bool = typer.Option(False, "--list", help="show recent invites"),
+               withdraw: str = typer.Option(None, "--revoke", metavar="ID",
+                                            help="withdraw an invite before it is used"),
+               url_opt: str = typer.Option("", "--url", metavar="URL",
+                                           help="the address the machine should dial; "
+                                                "defaults to where the center listens"),
+               json_out: bool = typer.Option(False, "--json")):
+    """Let one machine join by itself: print a code to run there with `fleet join`.
+
+    The other way in. `fleet add` has the center dial the machine; an invite has the
+    machine dial the center, so no password is typed and a machine the center cannot
+    reach can still join. Single use, and valid for minutes.
+
+    [dim]Example:[/dim]  fleet invite gpu-box --ttl 30m
+    """
+    from .state import invites as invites_mod
+    from .ops.join import encode_code
+
+    try:
+        acc = acl.load()
+    except acl.AccessError:
+        from .ops import member
+
+        if _fleet_membership() != "member":
+            _not_in_a_fleet(False)
+            return
+        err.print(f"[red]Only the center can invite a machine.[/red] Run this on "
+                  f"[bold]{member.center_name()}[/bold].")
+        raise typer.Exit(2)
+    if not (list_ or withdraw):
+        _refuse_while_handing_over(acc)
+    if not acl.is_center(acc) or _stepped_down(acc):
+        err.print(f"[red]Only the center can invite a machine.[/red] Run this on "
+                  f"[bold]{acc.name_of(acc.center)}[/bold].")
+        raise typer.Exit(2)
+
+    if list_:
+        rows = invites_mod.load()
+        now = int(time.time())
+        if _emit([{"id": i.id, "name": i.name, "state": i.state(now),
+                   "expires_at": i.expires_at, "used_as": i.used_as,
+                   "used_by": i.used_by} for i in rows], json_out):
+            return
+        if not rows:
+            console.print("[dim]no invites in the last day[/dim]")
+            return
+        for i in rows:
+            state = i.state(now)
+            what = {"open": f"open, {max(0, i.expires_at - now) // 60}m left",
+                    "used": f"used by {i.used_as or i.used_by[:20]}",
+                    "expired": "expired", "revoked": "withdrawn"}[state]
+            console.print(f"{i.id}  {i.name or '[dim](any name)[/dim]'}  {what}")
+        return
+
+    if withdraw:
+        try:
+            got = invites_mod.revoke(withdraw)
+        except invites_mod.InviteError as exc:
+            err.print(f"[red]{exc}[/red]")
+            raise typer.Exit(1)
+        state = got.state()
+        if state == "revoked":
+            console.print(f"[green]✓[/green] invite {got.id} withdrawn")
+        else:
+            console.print(f"[dim]· invite {got.id} is already {state}; nothing to "
+                          "withdraw[/dim]")
+        return
+
+    seconds = _duration_s(ttl)
+    if seconds <= 0:
+        err.print(f"[red]Not a duration: {ttl!r}[/red] -- try 15m, 2h or 1d")
+        raise typer.Exit(2)
+    if name:
+        if name in inv.handles(inv.load()):
+            err.print(f"[red]{name} is already the name of a machine here.[/red]")
+            raise typer.Exit(2)
+    invite, secret = invites_mod.create(name=name or "", ttl_s=seconds)
+    # Where the listener said it answers, when it has run here; the computed default
+    # only for a center that has never listened.
+    url = url_opt or acl.center_url() or center_advertise_url(acc)
+    code = encode_code(url, acc.center, invite.id, secret)
+    serving = _listening(url)
+    if _emit({"id": invite.id, "name": invite.name, "expires_at": invite.expires_at,
+              "code": code, "command": f"fleet join {code}", "center_url": url,
+              "listening": serving}, json_out):
+        return
+    minutes = max(1, seconds // 60)
+    console.print(f"[green]✓[/green] invite {invite.id}"
+                  + (f" for [bold]{invite.name}[/bold]" if invite.name else "")
+                  + f" -- single use, valid {minutes} minute{'s' if minutes != 1 else ''}")
+    console.print("  run this on the new machine:\n")
+    # print, not console.print: rich would wrap a long code across lines, and a code
+    # that does not survive copy-paste is no code at all.
+    print(f"    fleet join {code}\n")
+    console.print(f"  [dim]it will dial {url}; the center reaches it back over ssh, "
+                  "so sshd must be running there[/dim]")
+    if not serving:
+        console.print("[yellow]![/yellow] the center is not listening, so nothing can "
+                      "join yet -- start it with [bold]fleet service install[/bold] or "
+                      "[bold]fleet center --listen[/bold]")
+
+
+@app.command("join")
+def cmd_join(code: str = typer.Argument(..., help="the code `fleet invite` printed"),
+             name: str = typer.Option(None, "--name",
+                                      help="what to call this machine, if the invite "
+                                           "did not say"),
+             ssh_command: str = typer.Option(None, "--ssh", metavar="CMD",
+                                             help='how the center reaches this machine, '
+                                                  'e.g. "ssh -p 2222 me@10.0.0.5"; '
+                                                  "defaults to the address it sees"),
+             json_out: bool = typer.Option(False, "--json")):
+    """Join a fleet with an invite from its center. No password, nothing to approve.
+
+    [dim]Example:[/dim]  fleet join fleet1:eyJ1Ijoi...
+    """
+    from .ops.join import join as _join
+
+    try:
+        summary = _join(code, name=name or "",
+                        ssh_command=ssh_command or "")
+    except FleetError as exc:
+        err.print(f"[red]{exc}[/red]")
+        raise typer.Exit(exc.code)
+    if _emit(summary, json_out):
+        if not summary["center_key_installed"]:
+            raise typer.Exit(1)
+        return
+    console.print(f"[green]✓[/green] joined fleet {summary['fleet_id']} as "
+                  f"[bold]{summary['name']}[/bold] -- {summary['machines']} machine(s) known")
+    if summary["reached_as"]:
+        console.print(f"  [dim]the center will reach this machine as "
+                      f"{summary['reached_as']}[/dim]")
+    if summary["center_key_installed"]:
+        console.print("  [dim]the center's key is in this machine's authorized_keys; "
+                      "it keeps itself current from now on[/dim]")
+    else:
+        err.print("[yellow]Joined, but the center's key could not be installed here,[/yellow] "
+                  "so the center cannot manage this machine yet:")
+        err.print(f"  [dim]{escape(summary['install_output'])}[/dim]")
+        err.print("  [dim]run [bold]fleet join[/bold] again with the same code to retry[/dim]")
         raise typer.Exit(1)
 
 
@@ -393,6 +633,9 @@ def cmd_edit(name: str = typer.Argument(None, help="defaults to this machine"),
              untag: list[str] = typer.Option(None, "--untag", metavar="NAME",
                                              help="remove a label; repeatable"),
              role: str = typer.Option(None, "--role", help="none | center | backup"),
+             cost: float = typer.Option(None, "--cost", metavar="USD",
+                                        help="what it costs per hour, for the $/HR column "
+                                             "and idle-rental alerts; 0 clears it"),
              json_out: bool = typer.Option(False, "--json")):
     """Change a device's address or settings after it was added.
 
@@ -409,11 +652,19 @@ def cmd_edit(name: str = typer.Argument(None, help="defaults to this machine"),
 
     endpoint = resolve_command(ssh_command) if ssh_command else None
     paths = [] if clear_disk_paths else (list(disk_path) if disk_path else None)
-    result = apply_edits(dev, name=new_name, alias=new_alias,
-                         add_tags=_tags(tag), drop_tags=_tags(untag),
-                         taken=inv.handles(devices, excluding=dev.id),
-                         endpoint=endpoint, disk_paths=paths,
-                         role=None if role == "center" else role)
+    old_name = dev.name
+    try:
+        result = apply_edits(dev, name=new_name, alias=new_alias,
+                             add_tags=_tags(tag), drop_tags=_tags(untag),
+                             taken=inv.handles(devices, excluding=dev.id),
+                             endpoint=endpoint, disk_paths=paths,
+                             role=None if role == "center" else role,
+                             usd_per_hour=cost)
+    except ValueError as exc:
+        # apply_edits refuses in words -- a clashing alias, a name already taken -- and
+        # those words are the whole answer. A traceback around them was not.
+        err.print(f"[red]{exc}[/red]")
+        raise typer.Exit(2)
     if role == "center":
         # Flipping the role alone strands the fleet: spokes verify the list against the
         # key they have pinned, so a center nobody installed keys for and nobody signed
@@ -430,6 +681,10 @@ def cmd_edit(name: str = typer.Argument(None, help="defaults to this machine"),
         return
 
     inv.save(devices)
+    if dev.name != old_name:
+        _rename_in_access_list(dev, old_name)
+    if endpoint is not None:
+        _route_known(dev)
     if result.previous_id:
         # the cache is keyed by id; without this the device looks brand new
         conn = store.connect()
@@ -442,7 +697,48 @@ def cmd_edit(name: str = typer.Argument(None, help="defaults to this machine"),
     for line in result.changes:
         console.print(f"  {line}")
     if endpoint is not None:
-        console.print(f"  [dim]run `fleet refresh {dev.name}` to confirm it answers.[/dim]")
+        console.print(f"  [dim]run `fleet ls {dev.name} -r` to confirm it answers.[/dim]")
+
+
+def _route_known(dev) -> None:
+    """A machine marked as having no route has one now: let the center manage it again."""
+    try:
+        acc = acl.load()
+    except acl.AccessError:
+        return
+    if not acl.is_center(acc):
+        return
+    changed = False
+    for meta in acc.keys.values():
+        if meta.get("device_id") == dev.id and meta.pop("no_route", None):
+            changed = True
+    if changed:
+        acl.save(acc)
+        console.print("  [dim]the center will manage it again from its next sweep[/dim]")
+
+
+def _rename_in_access_list(dev, old_name: str) -> None:
+    """Carry a rename into the access list, when this machine holds it.
+
+    The list names each key, and `fleet access NAME` resolves by that name. Renaming only
+    the inventory left the two disagreeing: the sweep reported the new name, `fleet
+    access` the old one, and a grant to the new name failed with "no machine called".
+    Off the center there is no list to update -- `_access_fp` finds the machine by id
+    there and here alike, so the old name in the list no longer matters to anyone.
+    """
+    try:
+        acc = acl.load()
+    except acl.AccessError:
+        return
+    if not acl.is_center(acc):
+        return
+    changed = False
+    for meta in acc.keys.values():
+        if (dev.id and meta.get("device_id") == dev.id) or meta.get("name") == old_name:
+            meta["name"] = dev.name
+            changed = True
+    if changed:
+        acl.save(acc)
 
 
 def configured_repo() -> str:
@@ -461,8 +757,11 @@ def configured_repo() -> str:
     configured = load_config().get("repo")
     if configured:
         return str(configured)
-    for root in (Path(__file__).resolve().parent.parent.parent,
-                 Path.home() / ".local" / "share" / "fleet"):
+    roots = [Path(__file__).resolve().parent.parent.parent]
+    if source := install_source():
+        roots.append(source)
+    roots.append(Path.home() / ".local" / "share" / "fleet")
+    for root in roots:
         try:
             out = subprocess.run(["git", "-C", str(root), "remote", "get-url", "origin"],
                                  capture_output=True, text=True, timeout=5)
@@ -563,8 +862,36 @@ def cmd_install(name: str = typer.Argument(None,
         dev.role = role
         inv.touch(dev)
     inv.save(devices)
-    console.print(f"[green]✓[/green] {dev.name} is now [bold]{role}[/bold] — "
-                  f"{output.strip().splitlines()[-1] if output.strip() else 'installed'}")
+    # The role only when it is one: "gpu is now none" read as a sentence about the
+    # machine rather than about a field nobody had asked to change.
+    what = output.strip().splitlines()[-1] if output.strip() else "installed"
+    console.print(f"[green]✓[/green] {dev.name}: {what}"
+                  + (f" — role [bold]{role}[/bold]" if role and role != "none" else ""))
+    _hand_the_fleet_to(dev)
+
+
+def _hand_the_fleet_to(dev) -> None:
+    """Make a machine that just got fleet a member now, not at the next sweep.
+
+    Found on a real fleet: `fleet install gpu` succeeded, and on gpu every command then
+    said "not in a fleet" -- membership arrives in the signed copy a sweep hands over,
+    and the install was the moment fleet was first there to receive one. The center is
+    connected already; one more envelope is cheaper than a confused hour.
+    """
+    try:
+        acc = acl.load()
+    except acl.AccessError:
+        return
+    if not acl.is_center(acc):
+        return
+    eps = sorted(inv.endpoints_of(dev), key=lambda e: e.preference)
+    if not eps:
+        return
+    with contextlib.suppress(Exception):
+        code, _ = _sync.run_sync(eps[0], inv.dumps(inv.load()))
+        if code == 0:
+            console.print(f"  [dim]{dev.name} has the fleet now and keeps itself "
+                          "current[/dim]")
 
 
 
@@ -731,7 +1058,9 @@ def cmd_sync(serve: bool = typer.Option(False, "--serve",
         url = ""
         try:
             if pinned:
-                note = acl.unseal(raw, pinned)
+                note, signer = acl.unseal_trusting(raw, pinned)
+                if signer != pinned:
+                    acl.pin_center_pubkey(signer)     # walked a signed handover to it
                 body, relayed, url = note["inventory"], note["telemetry"], note["center_url"]
             else:
                 body = acl.unseal_first_contact(raw)
@@ -742,6 +1071,8 @@ def cmd_sync(serve: bool = typer.Option(False, "--serve",
         # Learned here, over a payload already signed by the key this machine pinned at
         # enrolment. After this it can refresh itself and stop waiting to be swept.
         acl.note_center_url(url)
+        if pinned:
+            acl.note_fleet_id(note.get("fleet_id", ""))
         if relayed:
             _record_relayed(relayed)
         try:
@@ -764,12 +1095,27 @@ def cmd_sync(serve: bool = typer.Option(False, "--serve",
     # to be wrong: it shells out to `ioreg` on macOS, which is not on cron's PATH, and
     # returns nothing at all on Windows. Ask the one authority.
     try:
-        if acl.is_center(acl.load()):
+        acc_here = acl.load()
+        if acl.is_center(acc_here) and not _stepped_down(acc_here):
             with _as_exit():
                 _sweep(devices)
             return
     except acl.AccessError:
         pass                               # no access list here: a spoke, or no fleet yet
+
+    if acl.center_url() and acl.trusted_center_pubkey():
+        # A member that knows where the center listens asks it, as every read already
+        # does. Dialling the center over ssh, below, needs an endpoint the center's own
+        # record never has -- so on a joined machine `fleet sync` could only fail.
+        before = acl.center_last_seen()
+        _sync.ensure_fresh(force=True)
+        if acl.center_last_seen() > before:
+            console.print(f"[green]✓[/green] up to date with the center "
+                          f"({len(inv.live(inv.load()))} machines)")
+            return
+        err.print(f"[yellow]The center did not answer at {acl.center_url()}.[/yellow] "
+                  "Everything here keeps working from the last copy.")
+        raise typer.Exit(1)
 
     center = next((d for d in inv.live(devices) if d.role == "center"), None)
     if center is None:
@@ -854,8 +1200,14 @@ def cmd_top(name: str = typer.Argument(None, help="one device, instead of the wh
 
     # A live loop in a pipe would spin forever, and an agent is exactly what would run
     # it that way. One frame is also the more useful thing for a script.
-    if not sys.stdout.isatty():
+    if not sys.stdout.isatty() or os.environ.get("TERM") == "dumb":
         console.print(frame())
+        if sys.stdout.isatty():
+            # A terminal that cannot move the cursor: the live view drew nothing at all
+            # and said nothing about why, so one frame and the reason instead.
+            console.print("[dim]this terminal (TERM=dumb) cannot redraw in place, so "
+                          "this is one frame -- set TERM, e.g. xterm-256color, for the "
+                          "live view[/dim]")
         conn.close()
         return
 
@@ -926,29 +1278,36 @@ def cmd_rm(name: str, yes: bool = typer.Option(False, "--yes", "-y")):
     itself = bool(dev.id) and dev.id == identity.local_device_id()
     if not itself:
         try:
-            if not acl.is_center(acl.load()):
-                err.print(f"[red]Only the center can remove {dev.name}.[/red]")
-                err.print("  [dim]a machine can remove itself -- that is leaving -- but "
-                          "removing another revokes its keys, which only the center "
-                          "can do[/dim]")
-                raise typer.Exit(2)
+            centre = acl.is_center(acl.load())
         except acl.AccessError:
-            pass          # no fleet yet: the inventory is just a list, remove freely
+            # No access list. On a member that is the normal state, not "no fleet yet":
+            # treating it as a free-for-all let a member tombstone any machine, and the
+            # tombstone then rode the merge to the center and deleted it fleet-wide.
+            centre = _fleet_membership() == ""
+        if not centre:
+            err.print(f"[red]Only the center can remove {dev.name}.[/red]")
+            err.print("  [dim]a machine can remove itself -- that is leaving -- but "
+                      "removing another revokes its keys, which only the center "
+                      "can do[/dim]")
+            raise typer.Exit(2)
 
+    with contextlib.suppress(acl.AccessError):
+        if not itself:
+            _refuse_while_handing_over(acl.load())
     if not yes and not typer.confirm(f"Remove {dev.name} ({dev.kind.value})?"):
         raise typer.Exit(1)
 
-    # Drop its edges before the record, so the sweep still knows where to go: the ledger
-    # kept the device on each edge precisely so a revoke survives losing the pin.
-    revoked = 0
+    # Revoke before forgetting, while the record still says where it is: its key on
+    # every other machine, and every fleet key on it. Then drop the pins.
+    unreached: list[str] = []
     try:
         acc = acl.load()
-        if acl.is_center(acc):
+        if acl.is_center(acc) and not itself:
+            _, unreached = _remove_now(acc, dev)
             fps = [fp for fp, m in acc.keys.items() if m.get("device_id") == dev.id]
             for fp in fps:
                 acc.allow = [e for e in acc.allow if fp not in (e.src, e.dst)]
                 acc.keys.pop(fp, None)
-                revoked += 1
             if fps:
                 acl.save(acc)
     except acl.AccessError:
@@ -957,9 +1316,15 @@ def cmd_rm(name: str, yes: bool = typer.Option(False, "--yes", "-y")):
     inv.remove(devices, dev)
     inv.save(devices)
     console.print(f"[green]✓[/green] removed {dev.name}")
-    if revoked:
-        console.print("  [yellow]its keys are still installed[/yellow] until the next "
-                      "[bold]fleet sync[/bold] reaches each machine.")
+    if unreached:
+        console.print("  [yellow]not everything could be reached:[/yellow]")
+        for line in unreached:
+            console.print(f"    {line}")
+        if any(line.startswith(f"{dev.name}:") for line in unreached):
+            console.print(f"  [dim]{dev.name} keeps this fleet's keys until removed by "
+                          "hand -- on it, delete the `# fleet:` blocks from "
+                          "~/.ssh/authorized_keys, or run [bold]fleet center --leave"
+                          "[/bold] there if it has fleet[/dim]")
 
 
 @app.command("probe", hidden=True)
@@ -1037,11 +1402,21 @@ def cmd_ssh(ctx: typer.Context, name: str):
         err.print(f"  [bold]fleet add \"ssh ...\"[/bold] on the center, or "
                   "[bold]fleet sync[/bold] if it is already recorded")
         raise typer.Exit(2)
-    argv = ["ssh"]
+    # accept-new, as the probe has always used: an unknown host key is recorded, a
+    # changed one is still refused. Without it the first `fleet ssh` from a member to a
+    # machine it had just been granted failed "Host key verification failed" -- ssh asks
+    # a question there is no terminal to answer when an agent is the one asking, so a
+    # grant that had landed was unusable by exactly the caller it was made for.
+    # Keys only. fleet never handles a password, and falling back to one meant a
+    # machine you hold no grant on answered "Permission denied, please try again" --
+    # a password prompt, twice, which reads as though one would work. Without a grant
+    # the answer is simply no, and ssh says so at once.
+    argv = ["ssh", "-o", "StrictHostKeyChecking=accept-new",
+            "-o", "PasswordAuthentication=no", "-o", "KbdInteractiveAuthentication=no"]
     # The fleet key, or `fleet ssh` connects with a personal key that fleet no longer
     # installs anywhere -- and this is the most-used command in the tool.
-    if FLEET_KEY.exists():
-        argv += ["-i", str(FLEET_KEY)]
+    if _cfg.FLEET_KEY.exists():
+        argv += ["-i", str(_cfg.FLEET_KEY)]
     if ep.port and ep.port != 22:
         argv += ["-p", str(ep.port)]
     if ep.identity:
@@ -1054,6 +1429,25 @@ def cmd_ssh(ctx: typer.Context, name: str):
         argv.append(remote_command(extra, windows=platform == "windows"))
 
     os.execvp("ssh", argv)      # replace this process; ssh owns the tty from here
+
+
+def _access_fp(acc, token: str) -> str:
+    """The fingerprint for a machine, from any handle you would type for it.
+
+    The list's own names first, exactly as before. Then the inventory -- current name or
+    alias -- matched on device id, because the list keeps the name a machine had when it
+    was pinned and a machine can be renamed since. Exact only, as `acl.resolve` is: this
+    picks who can reach what, and a prefix is not good enough for that.
+    """
+    try:
+        return acl.resolve(acc, _canonical(token))
+    except acl.AccessError as first:
+        dev = inv.find_exact(inv.load(), token)
+        if dev is not None:
+            hits = [fp for fp, m in acc.keys.items() if m.get("device_id") == dev.id]
+            if len(hits) == 1:
+                return hits[0]
+        raise first
 
 
 @app.command("access")
@@ -1082,27 +1476,46 @@ def cmd_access(target: str = typer.Argument(None, help="one machine, instead of 
 
     try:
         current = acl.load()
-    except acl.AccessError as exc:
-        err.print(f"[red]{exc}[/red]")
-        err.print("  [dim]start one with [bold]fleet center --init[/bold][/dim]")
-        raise typer.Exit(2)
+    except acl.AccessError:
+        from .ops import member
 
-    centre = acl.is_center(current)
-    if (allow or deny) and not centre:
-        if deny:
-            # Never queue a revoke. Deferring one silently looks identical to having
-            # done it, which is the failure this whole design exists to remove.
-            err.print("[red]Only the center can revoke access.[/red]")
+        if _fleet_membership() != "member":
+            _not_in_a_fleet(json_out)
+            return
+        center = member.center_name()
+        if allow or deny:
+            # Refused and named, never queued. A request filed here used to land in an
+            # outbox that nothing ever read -- reported as "filed", applied never.
+            err.print(f"[red]Only the center can change who may reach what.[/red] On "
+                      f"[bold]{center}[/bold]:")
+            err.print(f"  fleet access {target or 'NAME'} "
+                      f"{'--allow' if allow else '--deny'} {allow or deny}"
+                      + (f" --user {user}" if user != "root" else ""))
             raise typer.Exit(2)
-        _file_request(current, target, allow, user)
-        console.print(f"[yellow]Not the center[/yellow] -- filed a request for "
-                      f"{allow} -> {target}. It applies when the center next sweeps.")
+        if _emit({"is_center": False, "center": center, "edges": None}, json_out):
+            return
+        console.print(f"Who may reach what is decided on [bold]{center}[/bold]; run "
+                      "[bold]fleet access[/bold] there to see it.")
+        console.print("  [dim]from here, [bold]fleet ssh NAME[/bold] working is the "
+                      "answer for any one machine[/dim]")
         return
 
     if allow or deny:
+        _refuse_while_handing_over(current)
+    if (allow or deny) and _stepped_down(current):
+        err.print("[red]Only the center can change who may reach what.[/red] Run it on "
+                  "the new center.")
+        raise typer.Exit(2)
+    centre = acl.is_center(current)
+    if (allow or deny) and not centre:
+        err.print(f"[red]Only the center can change who may reach what.[/red] Run it on "
+                  f"[bold]{current.name_of(current.center)}[/bold].")
+        raise typer.Exit(2)
+
+    if allow or deny:
         try:
-            dst = acl.resolve(current, _canonical(target))
-            src = acl.resolve(current, _canonical(allow or deny))
+            dst = _access_fp(current, target)
+            src = _access_fp(current, allow or deny)
             changed = (acl.grant(current, src, dst, user=user) if allow
                        else acl.revoke(current, src, dst, user=user))
         except acl.AccessError as exc:
@@ -1126,7 +1539,7 @@ def cmd_access(target: str = typer.Argument(None, help="one machine, instead of 
     rows = []
     for edge in sorted(current.edges()):
         src, dst, who = edge
-        if target and dst != acl.resolve(current, _canonical(target)):
+        if target and dst != _access_fp(current, target):
             continue
         st = ledger.get(">".join(edge), rec.EdgeState())
         rows.append({"from": current.name_of(src), "to": current.name_of(dst),
@@ -1184,6 +1597,12 @@ def cmd_center(name: str = typer.Argument(None, help="hand the role to this mach
                                                   "key from every machine"),
                leave: bool = typer.Option(False, "--leave",
                                           help="remove this fleet's keys from this machine"),
+               cancel: bool = typer.Option(False, "--cancel",
+                                           help="keep the role after handing it over, "
+                                                "if the successor never accepted"),
+               receive: bool = typer.Option(False, "--receive", hidden=True,
+                                            help="store a handover the center delivers "
+                                                 "on stdin; run by the center over ssh"),
                json_out: bool = typer.Option(False, "--json"),
                force: bool = typer.Option(False, "--force")):
     """Who decides, and handing that over.
@@ -1194,6 +1613,16 @@ def cmd_center(name: str = typer.Argument(None, help="hand the role to this mach
 
     [dim]Example:[/dim]  fleet center machine_B
     """
+
+    if receive:
+        from .ops.handover import receive as _receive
+        try:
+            fid = _receive(sys.stdin.read())
+        except FleetError as exc:
+            err.print(f"[red]{exc}[/red]")
+            raise typer.Exit(exc.code)
+        console.print(f"handover of fleet {fid} stored; run fleet center --accept here")
+        return
 
     if pubkey:
         # Deliberately works with nothing reachable and no inventory: the moment you
@@ -1214,10 +1643,14 @@ def cmd_center(name: str = typer.Argument(None, help="hand the role to this mach
             raise typer.Exit(2)
         where = port or DEFAULT_PORT
         url = advertise or center_advertise_url(acc, where)
+        # Remembered, so `fleet invite` -- another process, run later -- hands out the
+        # address this listener actually answers on rather than recomputing a default
+        # that is wrong the moment --port or --advertise was given.
+        acl.note_center_url(url)
         console.print(f"[green]✓[/green] serving fleet {acc.fleet_id} on port {where}")
         console.print(f"  [dim]machines are told to dial {url}[/dim]")
-        console.print("  [dim]only keys this fleet has pinned are answered; "
-                      "first contact still happens by enrolment[/dim]")
+        console.print("  [dim]only keys this fleet has pinned are answered; a new "
+                      "machine gets in by enrolment or with [bold]fleet invite[/bold][/dim]")
         try:
             serve_center(port=where, advertise=url)
         except KeyboardInterrupt:
@@ -1272,11 +1705,28 @@ def cmd_center(name: str = typer.Argument(None, help="hand the role to this mach
 
     try:
         acc = acl.load()
-    except acl.AccessError as exc:
-        err.print(f"[red]{exc}[/red]")
-        err.print("  [dim]start one with [bold]fleet center --init[/bold][/dim]")
-        raise typer.Exit(2)
+    except acl.AccessError:
+        _center_off_the_center(leave=leave, dissolve=dissolve, accept=accept,
+                               export=export, name=name, json_out=json_out)
+        return
+    if _stepped_down(acc):
+        _center_off_the_center(leave=leave, dissolve=dissolve, accept=accept,
+                               export=export, name=name, json_out=json_out)
+        return
 
+    if cancel:
+        if not acl.HANDING_PATH.exists():
+            console.print("[dim]· no handover is outstanding[/dim]")
+            return
+        acl.HANDING_PATH.unlink()
+        console.print("[green]✓[/green] this machine keeps the role; the handover is "
+                      "cancelled here")
+        console.print("  [dim]the successor still holds the record you signed and could "
+                      "accept with it; to make sure it cannot manage the fleet, take its "
+                      "grants away with [bold]fleet access[/bold][/dim]")
+        return
+    if dissolve or name:
+        _refuse_while_handing_over(acc)
     if dissolve:
         with _as_exit():
             _dissolve(acc, force=force)
@@ -1313,12 +1763,15 @@ def cmd_center(name: str = typer.Argument(None, help="hand the role to this mach
         # service that is not up means the whole fleet quietly goes stale, and nothing
         # else on this page would say so.
 
-        state = service.status()
+        state = service.status(DEFAULT_PORT)
         if state == "running":
             console.print(f"serving  {center_advertise_url(acc)}")
         elif state == "installed":
             console.print("[yellow]![/yellow] the service is installed but not running "
                           "-- machines cannot refresh themselves")
+        elif state == service.UNAVAILABLE:
+            console.print("[yellow]![/yellow] not serving, and there is no service "
+                          f"manager here: {service.MANUAL}")
         else:
             console.print("[yellow]![/yellow] not serving; machines wait to be swept "
                           "-- [bold]fleet service install[/bold]")
@@ -1340,6 +1793,120 @@ def cmd_center(name: str = typer.Argument(None, help="hand the role to this mach
 
 
 
+def _stepped_down(acc) -> bool:
+    """Whether this machine handed the role over and the successor has now taken it.
+
+    Asked before acting as center, so the outgoing center cannot go on signing lists
+    the fleet no longer follows. Costs nothing unless a handover is outstanding.
+    """
+    from .ops.handover import settle
+
+    return settle(acc)
+
+
+def _skills_note() -> str:
+    """Say so when this machine's agents read an older description of fleet.
+
+    In the human view of `fleet ls` only, the command people actually look at. An update
+    refreshes the skills itself now, so this mostly catches a fleet upgraded by hand.
+    Never fatal: it is advice, and a read must not fail over it.
+    """
+    try:
+        root = Path.home()
+        stale = stale_targets(root, fleet_command()) + stale_mcp_clients(
+            root, fleet_executable())
+    except Exception:
+        return ""
+    if not stale:
+        return ""
+    return (f"{', '.join(stale)} read{'s' if len(stale) == 1 else ''} an older "
+            "description of fleet -- [bold]fleet setup --refresh[/bold]")
+
+
+def _refuse_while_handing_over(acc) -> None:
+    """Refuse a change on a center that has handed the role over but not heard back.
+
+    Found on a real fleet: the outgoing center, with no word yet from its successor,
+    went on issuing invites. The successor took a copy of the list at handover, so
+    anything changed here in between is simply lost when it accepts -- silently.
+    """
+    if not acl.HANDING_PATH.exists() or _stepped_down(acc):
+        return
+    try:
+        to = (yaml.safe_load(acl.HANDING_PATH.read_text()) or {}).get("to_name", "the successor")
+    except (OSError, yaml.YAMLError):
+        to = "the successor"
+    err.print(f"[red]The role is being handed to {to},[/red] so this machine makes no "
+              "changes meanwhile -- they would not carry over.")
+    err.print(f"  [dim]on {to}: [bold]fleet center --accept[/bold] (it needs to be "
+              f"listening for this machine to notice). To keep the role instead: "
+              f"[bold]fleet center --cancel[/bold] here.[/dim]")
+    raise typer.Exit(2)
+
+
+def _not_in_a_fleet(json_out: bool) -> None:
+    if _emit({"is_center": False, "member": False}, json_out):
+        return
+    err.print("[red]This machine is not in a fleet.[/red]")
+    err.print("  [dim]start one here with [bold]fleet center --init[/bold], or join one "
+              "with the code [bold]fleet invite[/bold] prints on its center[/dim]")
+    raise typer.Exit(2)
+
+
+def _center_off_the_center(*, leave: bool, dissolve: bool, accept: bool, export: bool,
+                           name: str | None, json_out: bool) -> None:
+    """`fleet center` on a machine that holds no access list: a member, or nothing yet.
+
+    Answered from what a member does hold, rather than by refusing: `--json` has to be
+    able to say `is_center: false`, since that is how an agent asks, and leaving is a
+    member's own right.
+    """
+    from .ops import member
+
+    if _fleet_membership() != "member":
+        _not_in_a_fleet(json_out)
+        return
+    center = member.center_name()
+    if leave:
+        fid, removed = member.leave()
+        console.print(f"[green]✓[/green] left fleet {fid or '(unknown)'}: removed "
+                      f"{removed} key block(s) from this machine's authorized_keys, and "
+                      "forgot the center")
+        console.print(f"  [dim]{center} will see this machine as unreachable until you "
+                      f"remove it there with [bold]fleet rm[/bold][/dim]")
+        return
+    if accept:
+        with _as_exit():
+            _accept_handover(None)
+        return
+    if dissolve or export or name:
+        what = ("dissolve the fleet" if dissolve else "export the access list" if export
+                else "hand the role over")
+        err.print(f"[red]Only the center can {what}.[/red] This machine is a member; "
+                  f"run it on [bold]{center}[/bold].")
+        raise typer.Exit(2)
+    info = member.status()
+    if _emit(info, json_out):
+        return
+    console.print(f"center   [bold]{center}[/bold]")
+    unknown = "[dim]unknown until the center next reaches this machine[/dim]"
+    console.print(f"fleet    {info['fleet_id'] or unknown}")
+    console.print(f"this     a member — changes to who may reach what are made on "
+                  f"{center}")
+    if info["last_seen_s"] is not None:
+        console.print(f"seen     {_ago(info['last_seen_s'])} ago"
+                      + (f" via {info['center_url']}" if info["center_url"] else ""))
+    if note := staleness_note():
+        console.print(f"[yellow]![/yellow] {note}")
+
+
+def _ago(seconds: int) -> str:
+    for unit, size in (("d", 86400), ("h", 3600), ("m", 60)):
+        if seconds >= size:
+            return f"{seconds // size}{unit}"
+    return f"{seconds}s"
+
+
 @app.command("setup")
 def cmd_setup(
     target: str = typer.Option("auto", "--target",
@@ -1348,6 +1915,9 @@ def cmd_setup(
                                  help="write into the current directory, not your home"),
     dry_run: bool = typer.Option(False, "--dry-run", help="show what would change; write nothing"),
     remove: bool = typer.Option(False, "--uninstall", help="remove what setup installed"),
+    refresh: bool = typer.Option(False, "--refresh",
+                                 help="rewrite only what fleet already installed, so it "
+                                      "matches this fleet; adds nothing new"),
 ):
     """Teach your coding agents to use fleet.
 
@@ -1362,6 +1932,24 @@ def cmd_setup(
     # `--project` never touches them -- their config is per-user, not per-repo.
 
     mcp_names = tuple(c.name for c in MCP_CLIENTS)
+    if refresh:
+        # Run by every install and update, on the machine being updated. So it may only
+        # rewrite what is already there -- never teach an agent fleet that someone chose
+        # to leave alone -- and finding nothing to refresh is not a failure.
+        targets = installed_targets(root, project=project)
+        clients = [] if project else installed_mcp_clients(root)
+        if not targets and not clients:
+            console.print("[dim]· no agent here has fleet installed; nothing to refresh"
+                          "[/dim]")
+            return
+        changes = (install(root, targets, fleet_command(), dry_run=dry_run, project=project)
+                   + install_mcp(root, clients, fleet_executable(), dry_run=dry_run))
+        changed = [c for c in changes if c.action != "unchanged"]
+        for c in changed:
+            console.print(f"  [green]{c.action:<9}[/green] {c.path}")
+        if not changed:
+            console.print("[dim]· agent skills already match this fleet[/dim]")
+        return
     if target == "auto":
         # cwd tells us nothing about which agents you use, so a project install
         # assumes the one whose layout is identical in both scopes.
@@ -1418,7 +2006,7 @@ def cmd_service(action: str = typer.Argument("status",
     """
 
     if action == "status":
-        console.print(service.status())
+        console.print(service.status(DEFAULT_PORT))
         return
     if action == "install":
 
@@ -1479,7 +2067,9 @@ def cmd_paths():
     console.print(f"ledger     {acl.LEDGER_PATH}   [dim](center only — what has landed)[/dim]")
     console.print(f"seen       {acl.CACHE_PATH}   [dim](the center's key, and when it "
                   "last swept)[/dim]")
-    console.print(f"outbox     {acl.OUTBOX_PATH}   [dim](requests we have filed)[/dim]")
+    from .state import invites as _invites
+    console.print(f"invites    {_invites.INVITES_PATH}   [dim](center only — open "
+                  "invites, as hashes)[/dim]")
     console.print(f"cache      {store.DB_PATH}   [dim](disposable — delete and re-probe)[/dim]")
     if _cfg.CONFIG_DIR == _cfg.STATE_DIR:
         # Worth saying out loud: it is why every filename above is distinct, and why

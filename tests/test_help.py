@@ -21,14 +21,20 @@ runner = CliRunner()
 COMMANDS = [
     ("ls",), ("show",), ("add",), ("edit",), ("rm",), ("probe",),
     ("ssh",), ("setup",), ("paths",), ("top",), ("install",), ("update",), ("sync",),
-    ("access",), ("center",),
+    ("access",), ("center",), ("invite",), ("join",),
 ]
+
+
+_ANSI = re.compile(r"\x1b\[[0-9;]*m")
 
 
 def _help(*args) -> str:
     result = runner.invoke(app, [*args, "--help"], env={"COLUMNS": "110"})
     assert result.exit_code == 0, result.output
-    return result.output
+    # Read as a person reads it, without colour codes. Rich colours its output when it
+    # sees a CI runner (GITHUB_ACTIONS is set there), which split "Example:  fleet ..."
+    # with escape sequences and failed every example check on the first CI run.
+    return _ANSI.sub("", result.output)
 
 
 @pytest.mark.parametrize("command", COMMANDS, ids=lambda c: " ".join(c))

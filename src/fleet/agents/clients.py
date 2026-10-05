@@ -78,6 +78,38 @@ def detect_mcp_clients(root: Path, platform: str = "") -> list[str]:
 
 
 
+def installed_mcp_clients(root: Path, platform: str = "") -> list[str]:
+    """Clients that already have fleet registered -- the only ones a refresh touches."""
+    platform = platform or sys.platform
+    out = []
+    for c in MCP_CLIENTS:
+        path = c.path(root, platform)
+        if not path or not path.exists():
+            continue
+        try:
+            doc = json.loads(path.read_text() or "{}")
+        except (OSError, ValueError):
+            continue
+        if isinstance(doc, dict) and isinstance(doc.get(c.key), dict) \
+                and "fleet" in doc[c.key]:
+            out.append(c.name)
+    return out
+
+
+def stale_mcp_clients(root: Path, cmd: str, platform: str = "") -> list[str]:
+    """Registered clients whose entry points somewhere other than this fleet."""
+    platform = platform or sys.platform
+    out = []
+    for c in MCP_CLIENTS:
+        if c.name not in installed_mcp_clients(root, platform):
+            continue
+        path = c.path(root, platform)
+        current = path.read_text()
+        if apply_mcp(current, c.key, cmd) != current:
+            out.append(c.name)
+    return out
+
+
 def install_mcp(root: Path, clients: list[str], cmd: str, *,
                 dry_run: bool = False, platform: str = "") -> list[Change]:
     """Register `fleet mcp` with each client, without disturbing its other servers."""

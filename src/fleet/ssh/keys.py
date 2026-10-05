@@ -22,7 +22,7 @@ import time
 from contextlib import suppress
 from pathlib import Path
 
-from ..config import FLEET_KEY
+from .. import config
 from .cmd import Endpoint, build_enroll_argv, run as sshrun
 
 # sshd's prompt varies ("Password:", "root@host's password:", a PAM phrasing), so match
@@ -45,7 +45,7 @@ def ensure_keypair(path: Path | None = None) -> tuple[Path, str]:
     import socket
     import subprocess
 
-    path = path or FLEET_KEY
+    path = path or config.FLEET_KEY     # at call time: a redirected key must be the one made
     pub = path.with_suffix(".pub")
     if path.exists() and pub.exists():
         return path, pub.read_text().strip()
@@ -278,7 +278,7 @@ _NO_POSIX_SHELL = ("is not recognized as an internal or external command",
                    "operable program or batch file")
 
 
-def _append_pubkey(run, pubkey: str) -> tuple[bool, str]:
+def _append_pubkey(run, pubkey: str, posix_command: str = "") -> tuple[bool, str]:
     """POSIX first, PowerShell on the characteristic failure. `run` is the transport.
 
     The platform cannot be known in advance here: this is first contact, so there is no
@@ -289,7 +289,7 @@ def _append_pubkey(run, pubkey: str) -> tuple[bool, str]:
     Split out from `install_key` so the same two commands can go over a password pty or
     over access we already hold, without either transport knowing about the other.
     """
-    code, output = run(authorized_keys_command(pubkey))
+    code, output = run(posix_command or authorized_keys_command(pubkey))
     if code == 0:
         return True, output
     if any(sig in output.lower() for sig in _NO_POSIX_SHELL):
@@ -298,7 +298,7 @@ def _append_pubkey(run, pubkey: str) -> tuple[bool, str]:
 
 
 def install_key(ep: Endpoint, password: str, pubkey: str, *,
-                timeout: float = 20.0) -> tuple[bool, str]:
+                timeout: float = 20.0, posix_command: str = "") -> tuple[bool, str]:
     """Append pubkey to the host's authorized_keys, paying with a password typed once.
 
     Returns (ok, output-safe-to-print) -- the password is scrubbed from the output.
@@ -306,11 +306,12 @@ def install_key(ep: Endpoint, password: str, pubkey: str, *,
     def run(command: str) -> tuple[int, str]:
         return run_with_password(build_password_argv(ep) + [command], password,
                                  timeout=timeout)
-    return _append_pubkey(run, pubkey)
+    return _append_pubkey(run, pubkey, posix_command)
 
 
 def install_key_over_existing_access(ep: Endpoint, pubkey: str, *,
-                                     timeout: float = 20.0) -> tuple[bool, str]:
+                                     timeout: float = 20.0,
+                                     posix_command: str = "") -> tuple[bool, str]:
     """The same append, over access we already have. No password, and never a prompt.
 
     This is the common case and the one that used to be missing: a cloud VM with
@@ -323,6 +324,6 @@ def install_key_over_existing_access(ep: Endpoint, pubkey: str, *,
         proc = sshrun(build_enroll_argv(ep) + [command], text=True, timeout=timeout)
         return proc.returncode, proc.stdout + proc.stderr
     try:
-        return _append_pubkey(run, pubkey)
+        return _append_pubkey(run, pubkey, posix_command)
     except subprocess.TimeoutExpired:
         return False, f"no response within {timeout:.0f}s"

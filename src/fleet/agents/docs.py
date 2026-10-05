@@ -50,13 +50,14 @@ def remove_block(existing: str) -> str:
 
 
 
-def plan(root: Path, *, project: bool = False) -> dict[str, Path]:
+def plan(root: Path, *, project: bool = False, platform: str = "") -> dict[str, Path]:
     """Which file each agent reads. Straight off the table.
 
     Several agents share AGENTS.md inside a repo -- that is the cross-vendor convention,
     and it is why install() dedupes by path rather than by agent.
     """
-    return {a.name: root.joinpath(*(a.project if project else a.home).split("/"))
+    return {a.name: (root.joinpath(*a.project.split("/")) if project
+                     else a.home_path(root, platform))
             for a in AGENTS}
 
 
@@ -75,8 +76,41 @@ def legacy_paths(root: Path) -> dict[str, list[Path]]:
 def detect_targets(root: Path) -> list[str]:
     """Only agents that are actually installed. Creating ~/.codex for someone who does
     not use Codex would be litter, not setup."""
-    return [a.name for a in AGENTS if (root / a.marker).is_dir()]
+    return [a.name for a in AGENTS
+            if (root / a.marker).is_dir() or a.home_dir(root).is_dir()]
 
+
+
+def installed_targets(root: Path, *, project: bool = False) -> list[str]:
+    """Agents fleet has already taught here: a skill file it owns, or a marked region.
+
+    What `fleet setup --refresh` rewrites. Deliberately not `detect_targets`: an agent
+    being installed is not the user asking for fleet to be in it, and a refresh that ran
+    on every update must never add fleet to an agent somebody chose to leave alone.
+    """
+    out = []
+    for target, path in plan(root, project=project).items():
+        try:
+            text = path.read_text()
+        except OSError:
+            continue
+        if path.name == "SKILL.md" or BEGIN in text:
+            out.append(target)
+    return out
+
+
+def stale_targets(root: Path, cmd: str, *, project: bool = False) -> list[str]:
+    """Installed agents whose copy differs from what this fleet would write now."""
+    paths = plan(root, project=project)
+    out = []
+    for target in installed_targets(root, project=project):
+        path = paths[target]
+        try:
+            if path.read_text() != _desired(target, path, cmd):
+                out.append(target)
+        except OSError:
+            continue
+    return out
 
 
 def _desired(target: str, path: Path, cmd: str) -> str:
@@ -127,6 +161,26 @@ def _drop_legacy(root: Path, target: str, seen: set[Path], *, dry_run: bool) -> 
     so this is silent in the ordinary case.
     """
     out: list[Change] = []
+    agent = BY_NAME.get(target)
+    for path in agent.stray_paths(root) if agent else []:
+        # A copy of our own skill where this agent no longer looks. Ours outright -- it
+        # is a SKILL.md naming fleet -- so it goes, file and our directory; left, it is
+        # the one the agent cannot see, and a second fleet if it ever looks there too.
+        if path in seen or not path.is_file():
+            continue
+        try:
+            text = path.read_text()
+        except OSError:
+            continue
+        front = text.split("---", 2)[1] if text.startswith("---") else ""
+        if "name: fleet" not in front:
+            continue                       # not a skill fleet wrote; not ours to remove
+        seen.add(path)
+        if not dry_run:
+            path.unlink()
+            with suppress(OSError):
+                path.parent.rmdir()
+        out.append(Change(target, path, "removed"))
     for path in legacy_paths(root).get(target, []):
         if path in seen or not path.exists():
             continue
@@ -173,6 +227,9 @@ def uninstall(root: Path, targets: list[str], *,
                 with suppress(OSError):
                     path.parent.rmdir()
             changes.append(Change(target, path, "removed"))
+            # and any copy left where this agent used to be looked for
+            changes += [c for c in _drop_legacy(root, target, seen, dry_run=dry_run)
+                        if c.path.name == "SKILL.md"]
             continue
         current = path.read_text()
         stripped = remove_block(current)

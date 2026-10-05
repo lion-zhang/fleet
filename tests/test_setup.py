@@ -649,3 +649,55 @@ def test_a_legacy_file_with_the_users_own_text_survives(tmp_path):
     old.write_text(apply_block("# Mine\n", agents_block("fleet")))
     install(tmp_path, ["codex"], "fleet")
     assert old.exists() and "# Mine" in old.read_text()
+
+
+# ------------------------------------------------------- hermes on Windows
+
+def _windows(monkeypatch):
+    import sys
+    monkeypatch.setattr(sys, "platform", "win32")
+
+
+def test_hermes_on_windows_gets_the_skill_where_it_looks(tmp_path, monkeypatch):
+    """Found by a Hermes agent on a real Windows machine: its home is
+    %LOCALAPPDATA%\\hermes, fleet wrote to ~\\.hermes, and the scanner never saw it."""
+    _windows(monkeypatch)
+    (tmp_path / "AppData" / "Local" / "hermes").mkdir(parents=True)
+    assert detect_targets(tmp_path) == ["hermes"]
+    assert plan(tmp_path)["hermes"] == (tmp_path / "AppData" / "Local" / "hermes" / "skills"
+                                       / "devops" / "fleet" / "SKILL.md")
+
+
+def test_the_copy_hermes_could_not_see_is_taken_away(tmp_path, monkeypatch):
+    _windows(monkeypatch)
+    (tmp_path / "AppData" / "Local" / "hermes").mkdir(parents=True)
+    stray = tmp_path / ".hermes" / "skills" / "devops" / "fleet" / "SKILL.md"
+    stray.parent.mkdir(parents=True)
+    stray.write_text(hermes_skill_text("fleet"))
+    mine = tmp_path / ".hermes" / "skills" / "devops" / "theirs" / "SKILL.md"
+    mine.parent.mkdir(parents=True)
+    mine.write_text("---\nname: theirs\n---\n")
+    changes = install(tmp_path, ["hermes"], "fleet")
+    assert not stray.exists() and mine.exists()
+    assert {c.action for c in changes} == {"created", "removed"}
+    assert plan(tmp_path)["hermes"].read_text() == hermes_skill_text("fleet")
+
+
+def test_an_older_windows_hermes_with_only_the_dot_dir_keeps_it(tmp_path, monkeypatch):
+    _windows(monkeypatch)
+    (tmp_path / ".hermes").mkdir()
+    assert plan(tmp_path)["hermes"] == tmp_path / ".hermes" / "skills" / "devops" / "fleet" / "SKILL.md"
+
+
+def test_hermes_home_set_in_the_environment_wins(tmp_path, monkeypatch):
+    from pathlib import Path
+
+    monkeypatch.setattr(Path, "home", classmethod(lambda cls: tmp_path))
+    monkeypatch.setenv("HERMES_HOME", str(tmp_path / "elsewhere"))
+    assert plan(tmp_path)["hermes"] == (tmp_path / "elsewhere" / "skills" / "devops"
+                                       / "fleet" / "SKILL.md")
+
+
+def test_hermes_elsewhere_is_unchanged(tmp_path):
+    (tmp_path / ".hermes").mkdir()
+    assert plan(tmp_path)["hermes"] == tmp_path / ".hermes" / "skills" / "devops" / "fleet" / "SKILL.md"

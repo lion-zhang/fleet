@@ -186,17 +186,43 @@ def test_a_machine_can_always_remove_itself(fleet_at, monkeypatch):
     assert inv.find(inv.load(inv.INVENTORY_PATH), "oracle") is None
 
 
-def test_the_center_removing_a_machine_drops_its_edges(fleet_at, monkeypatch):
-    """`fleet rm` used to leave every key installed forever, with merge never syncing
-    the deletion either."""
+def _with_a_grant_from_oracle():
+    acc = acl.load(acl.ACCESS_PATH)
+    acl.grant(acc, B, C, user="lin")
+    acl.save(acc, acl.ACCESS_PATH)
+
+
+def test_the_center_removing_a_machine_revokes_both_ways_at_once(fleet_at, monkeypatch):
+    """Found on a real fleet: after `fleet rm rental` and a sweep, the rental still held
+    the center's key -- the record was gone, so no sweep could ever reach it, and the
+    center could still log into a machine that had been given back. Its own grants
+    elsewhere waited for a sweep too, where `--deny` pushes."""
     runner, _ = fleet_at
+    _with_a_grant_from_oracle()
     monkeypatch.setattr(acl, "is_center", lambda *a, **k: True)
+    calls = []
+    monkeypatch.setattr(rec, "apply_edge", lambda acc, edge, ep, **kw:
+                        calls.append((edge, ep.target, kw["install"])) or (True, ""))
     r = runner.invoke(cli.app, ["rm", "oracle", "-y"])
     assert r.exit_code == 0, r.output
+    assert ((A, B, "root"), "1.2.3.4", False) in calls, "the center's key off oracle"
+    assert ((B, C, "lin"), "5.6.7.8", False) in calls, "oracle's key off lin-xps"
     acc = acl.load(acl.ACCESS_PATH)
     assert B not in acc.keys
     assert not any(B in (e.src, e.dst) for e in acc.allow)
-    assert "still installed" in r.output, "and it says the keys have not gone yet"
+    assert "not everything" not in r.output
+
+
+def test_a_removed_machine_that_cannot_be_reached_is_named(fleet_at, monkeypatch):
+    """Nothing will ever retry it -- it has no record -- so say so, with what to do."""
+    runner, _ = fleet_at
+    monkeypatch.setattr(acl, "is_center", lambda *a, **k: True)
+    monkeypatch.setattr(rec, "apply_edge", lambda *a, **k: (False, "Connection timed out"))
+    r = runner.invoke(cli.app, ["rm", "oracle", "-y"])
+    assert r.exit_code == 0, r.output
+    assert "oracle keeps this fleet's keys" in r.output
+    assert not any(k.split(">")[1] == B for k in rec.load_ledger()), \
+        "no row left pending forever for a machine with no record"
 
 
 # ------------------------------------------------------------- the trimmed surface
@@ -235,7 +261,7 @@ def test_paths_names_every_file_and_the_shared_directory(fleet_at):
     mostly installed."""
     runner, _ = fleet_at
     out = runner.invoke(cli.app, ["paths"]).output
-    for expected in ("inventory", "fleet key", "access", "ledger", "outbox", "cache"):
+    for expected in ("inventory", "fleet key", "access", "ledger", "invites", "cache"):
         assert expected in out
     assert "same directory" in out
 

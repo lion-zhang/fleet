@@ -314,7 +314,11 @@ def render_fleet(rows: list[dict[str, Any]], summary: dict[str, Any],
             "?" if pct is None else f"{pct}%",
             f"{row['ram_free_gb']:.0f}G" if row.get("ram_free_gb") else "-",
             disk_cell(row),
-            f"[dim]{stale}[/dim]" if stale else "[green]live[/green]",
+            # "live" only for a machine that answered: one that just failed to was
+            # probed a second ago too, and calling it live beside "no answer" was a
+            # contradiction in the one view meant to be watched.
+            (f"[dim]{stale}[/dim]" if stale else "[green]live[/green]")
+            if row["status"] == "ok" else "[dim]-[/dim]",
             " · ".join(x for x in (provenance(row), note) if x),
         )
     return t
@@ -362,4 +366,42 @@ def render_device(row: dict[str, Any], live_within: int = 10) -> Table:
         t.add_row("[bold]facts[/bold]", f"[dim]{' '.join(fs)}[/dim]")
     for alert in row.get("alerts") or []:
         t.add_row("[yellow]![/yellow]", f"[yellow]{alert}[/yellow]")
+    return t
+
+
+def render_ls(rows: list[dict[str, Any]]) -> Table:
+    """The `fleet ls` table. Here rather than in the command so the README's
+    screenshots are drawn by the same code a user sees, not a copy of it."""
+    from ..ui import DOT
+
+    t = Table(box=None, pad_edge=False, header_style="bold")
+    # Right-justifying a multi-line cell pads its short lines from the left and comes
+    # out ragged, so these two flip left only when some device really has more than one
+    # card. A fleet of single-GPU boxes renders exactly as it always did.
+    tall = any(device_lines(r) > 1 for r in rows)
+    for col, kw in (("", {}), ("NAME", {"no_wrap": True}), ("KIND", {"no_wrap": True}),
+                    ("GPU", {"no_wrap": True, "overflow": "ellipsis",
+                             "max_width": 24}),
+                    ("VRAM FREE", {"justify": "left" if tall else "right",
+                                   "no_wrap": True}),
+                    ("CPU", {"justify": "right", "no_wrap": True}),
+                    ("RAM FREE", {"justify": "right", "no_wrap": True}),
+                    ("DISK FREE", {"justify": "left" if tall else "right",
+                                   "no_wrap": True}),
+                    ("$/HR", {"justify": "right", "no_wrap": True}),
+                    ("AGE", {"justify": "right", "no_wrap": True}),
+                    ("NOTE", {"no_wrap": True, "overflow": "ellipsis", "max_width": 42})):
+        t.add_column(col, **kw)
+    for r in rows:
+        gpu, vram = gpu_cells_compact(r)
+        note = r.get("error", {}).get("detail", "") if r["status"] != "ok" else (
+            r["alerts"][0] if r["alerts"] else "")
+        age = f"{r['telemetry_age_s']}s" if r["telemetry_age_s"] is not None else "-"
+        t.add_row(DOT.get(r["status"], "?"), name_cell(r),
+                  r["kind"], gpu, vram,
+                  str(r["cpu_cores"] or "-"),
+                  f"{r['ram_free_gb']:.0f}G" if r["ram_free_gb"] else "-",
+                  disk_cell(r),
+                  f"${r['usd_per_hour']:.2f}" if r["usd_per_hour"] else "-",
+                  age, note)
     return t

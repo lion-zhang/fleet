@@ -8,6 +8,7 @@ filter running on the far end of an SSH pipe.
 
 from __future__ import annotations
 
+import os
 import subprocess
 import sys
 
@@ -192,10 +193,17 @@ def test_the_cpuproc_wire_format_is_unchanged():
 # --------------------------------------------------------------- read-only volumes
 
 @pytest.mark.skipif(sys.platform == "win32", reason="payload is POSIX sh")
+@pytest.mark.skipif(getattr(os, "geteuid", lambda: 1)() == 0,
+                    reason="root writes through chmod; only a read-only mount would do")
 def test_the_probe_reports_whether_a_disk_can_be_written_to(tmp_path):
     """A mounted DMG is 100% full by definition and read-only, so it alerted forever.
     Knowing it is read-only is what lets the alert skip it while `fleet show` still
-    lists it honestly."""
+    lists it honestly.
+
+    The fixture stands in for a read-only volume with a mode-500 directory, which is the
+    same answer from `test -w` for everyone except root. Root is what a container runs
+    tests as, so there the probe truthfully reports the directory writable and the test
+    is skipped rather than asserting something false of the machine it is on."""
     ro = tmp_path / "readonly"
     ro.mkdir()
     ro.chmod(0o500)

@@ -1,9 +1,34 @@
 [project]
 name = "fleet-broker"
 version = "0.4.0"
-description = "Personal compute inventory, service registry, and resource broker"
+description = "Give Claude Code, Codex and Gemini every machine you have: a live GPU, VRAM, RAM and disk inventory across your servers, SSH access between them, and an MCP server."
 readme = "README.md"
 requires-python = ">=3.12"
+license = "MIT"
+license-files = ["LICENSE"]
+authors = [{ name = "Lin Zhang" }]
+keywords = [
+    "claude-code", "codex", "gemini-cli", "ai-agents", "coding-agent", "mcp", "mcp-server",
+    "gpu", "gpu-monitoring", "nvidia", "vram", "ssh", "ssh-keys", "homelab", "mlops",
+    "devops", "inventory", "remote-execution", "vast-ai", "runpod",
+]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Environment :: Console",
+    "Intended Audience :: Developers",
+    "Intended Audience :: Science/Research",
+    "Intended Audience :: System Administrators",
+    "Operating System :: MacOS",
+    "Operating System :: Microsoft :: Windows",
+    "Operating System :: POSIX :: Linux",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Topic :: Scientific/Engineering :: Artificial Intelligence",
+    "Topic :: System :: Clustering",
+    "Topic :: System :: Monitoring",
+    "Topic :: System :: Systems Administration",
+]
 dependencies = [
     "typer>=0.12",
     "rich>=13.7",
@@ -12,6 +37,11 @@ dependencies = [
     "filelock>=3.13",
     "psutil>=5.9",
 ]
+
+[project.urls]
+Homepage = "https://github.com/lion-zhang/fleet"
+Documentation = "https://github.com/lion-zhang/fleet/blob/main/docs/getting-started.md"
+Issues = "https://github.com/lion-zhang/fleet/issues"
 
 [project.optional-dependencies]
 # Only for `fleet access --migrate`, which reads passwords an older fleet stored.

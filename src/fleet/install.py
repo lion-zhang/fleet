@@ -13,8 +13,9 @@ connected, so it can be declined for a host you do not trust with that.
 from __future__ import annotations
 
 import shlex
+from pathlib import Path
 
-from .config import FLEET_KEY
+from . import config
 from .ssh.cmd import WINDOWS, Endpoint, local_platform
 
 INSTALL_DIR = "$HOME/.local/share/fleet"
@@ -80,6 +81,11 @@ uv tool install --force --reinstall-package fleet-broker --quiet "$DIR"
 # so uv is asked to do it; it is idempotent, and it is the step the user should not have
 # to find out about afterwards.
 uv tool update-shell >/dev/null 2>&1 || true
+
+# What the agents on this machine are told about fleet, rewritten to match the fleet
+# just installed. Only what is already there: never adds fleet to an agent. Without it
+# every update left agents describing commands as they used to be.
+PATH="$HOME/.local/bin:$PATH" fleet setup --refresh >/dev/null 2>&1 || true
 
 PATH="$HOME/.local/bin:$PATH" fleet --version
 
@@ -159,8 +165,8 @@ def build_install_argv(ep: Endpoint, *, forward_agent: bool = True,
     # so it worked from the laptop whose own key was everywhere and failed with
     # "Permission denied (publickey)" from any machine fleet had enrolled -- which is
     # every machine that would ever run `fleet update` on its own behalf.
-    if FLEET_KEY.exists() and str(FLEET_KEY) != ep.identity:
-        argv += ["-i", str(FLEET_KEY)]
+    if config.FLEET_KEY.exists() and str(config.FLEET_KEY) != ep.identity:
+        argv += ["-i", str(config.FLEET_KEY)]
     if ep.jump:
         argv += ["-J", ep.jump]
     argv.append(f"{ep.user}@{ep.target}" if ep.user else ep.target)
@@ -312,6 +318,11 @@ uv tool install --force --reinstall-package fleet-broker --quiet $dir
 # correctly and then is not there when they type its name.
 try {{ uv tool update-shell 2>&1 | Out-Null }} catch {{ }}
 
+# The agents' copy of what fleet does, rewritten to match. Only what is already there.
+if (Test-Path $fleet) {{
+  try {{ & $fleet setup --refresh 2>&1 | Out-Null }} catch {{ }}
+}}
+
 & $fleet --version
 if (Test-Path $fleet) {{
   try {{ & $fleet service start 2>&1 | Out-Null }} catch {{ }}
@@ -347,3 +358,29 @@ def install_script(repo: str, *, ref: str = "main", platform: str = "",
     if platform == WINDOWS:
         return _windows_script(repo, ref, update_only=update_only)
     return _posix_script(repo, ref=ref, update_only=update_only)
+
+
+def install_source() -> Path | None:
+    """The directory `uv tool install` built this fleet from, if uv recorded one.
+
+    The third way to be running fleet, and the one the getting-started guide teaches:
+    clone anywhere, `uv tool install ./fleet`. Neither place `configured_repo` looked
+    held that clone, so a machine set up by the guide answered "No repo to update from"
+    to the `fleet update` the same guide promised would work. uv writes where the tool
+    came from into a receipt beside the environment, so read that rather than guess.
+    """
+    import tomllib
+
+    for parent in Path(__file__).resolve().parents:
+        receipt = parent / "uv-receipt.toml"
+        if not receipt.is_file():
+            continue
+        try:
+            reqs = tomllib.loads(receipt.read_text()).get("tool", {}).get("requirements", [])
+        except (OSError, tomllib.TOMLDecodeError):
+            return None
+        for req in reqs:
+            if isinstance(req, dict) and req.get("directory"):
+                return Path(req["directory"])
+        return None
+    return None

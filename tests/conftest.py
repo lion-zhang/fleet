@@ -28,9 +28,12 @@ def _sandbox_fleet_state(tmp_path_factory, monkeypatch):
     from fleet import config
     from fleet.state import inventory as inv, store
 
-    for name in ("ACCESS_PATH", "LEDGER_PATH", "CACHE_PATH", "OUTBOX_PATH"):
+    for name in ("ACCESS_PATH", "LEDGER_PATH", "CACHE_PATH", "OUTBOX_PATH",
+                 "CHAIN_PATH", "INBOX_PATH", "HANDING_PATH"):
         monkeypatch.setattr(acl, name, root / getattr(acl, name).name, raising=False)
     monkeypatch.setattr(inv, "INVENTORY_PATH", root / "inventory.yaml", raising=False)
+    from fleet.state import invites
+    monkeypatch.setattr(invites, "INVITES_PATH", root / "access-invites.yaml", raising=False)
     monkeypatch.setattr(store, "DB_PATH", root / "cache.db", raising=False)
     monkeypatch.setattr(config, "FLEET_KEY", root / "id_ed25519", raising=False)
     monkeypatch.setattr(config, "CONFIG_PATH", root / "config.yaml", raising=False)

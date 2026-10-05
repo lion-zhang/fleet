@@ -15,19 +15,21 @@ Supporting a new agent should be a row in `registry`, not a branch anywhere else
 
 from __future__ import annotations
 
-from .clients import (apply_mcp, detect_mcp_clients, install_mcp, mcp_entry,
-                      remove_mcp, uninstall_mcp)
+from .clients import (apply_mcp, detect_mcp_clients, install_mcp, installed_mcp_clients,
+                      mcp_entry, remove_mcp, stale_mcp_clients, uninstall_mcp)
 from .docs import (BEGIN, END, Change, apply_block, detect_targets, install,
-                   legacy_paths, plan, remove_block, uninstall)
+                   installed_targets, legacy_paths, plan, remove_block, stale_targets,
+                   uninstall)
 from .registry import (AGENTS, BY_NAME, HERMES_CATEGORY, MCP_CLIENTS, TARGETS, Agent,
                        McpClient, fleet_command, fleet_executable, package_version)
-from .usage import agents_block, hermes_skill_text, skill_text
+from .usage import agents_block, hermes_skill_text, skill_text, stamp
 
 __all__ = [
     "AGENTS", "BEGIN", "BY_NAME", "END", "HERMES_CATEGORY", "MCP_CLIENTS", "TARGETS",
     "Agent", "Change", "McpClient", "agents_block", "apply_block", "apply_mcp",
     "detect_mcp_clients",
     "detect_targets", "fleet_command", "fleet_executable", "hermes_skill_text",
-    "install", "install_mcp", "legacy_paths", "mcp_entry", "package_version", "plan",
-    "remove_block", "remove_mcp", "skill_text", "uninstall", "uninstall_mcp",
+    "install", "install_mcp", "installed_mcp_clients", "installed_targets",
+    "legacy_paths", "stale_mcp_clients", "stale_targets", "mcp_entry", "package_version", "plan",
+    "remove_block", "remove_mcp", "skill_text", "stamp", "uninstall", "uninstall_mcp",
 ]

@@ -92,7 +92,7 @@ def apply_edits(dev: Device, *, endpoint: Endpoint | None = None,
                 disk_paths: list[str] | None = None, role: str | None = None,
                 name: str | None = None, alias: str | None = None,
                 add_tags: list[str] | None = None, drop_tags: list[str] | None = None,
-                taken: set[str] | None = None) -> Edits:
+                taken: set[str] | None = None, usd_per_hour: float | None = None) -> Edits:
     out = Edits()
     if name is not None and name != dev.name:
         # The name is a label, not an identity -- the id is what merge and the access
@@ -133,6 +133,21 @@ def apply_edits(dev: Device, *, endpoint: Endpoint | None = None,
         before = list(dev.disk_paths) or ["auto"]
         dev.disk_paths = list(disk_paths)
         out.changes.append(f"disk paths {before} -> {dev.disk_paths or ['auto']}")
+    if usd_per_hour is not None:
+        # What a machine costs to keep, per hour; 0 clears it. It drives the $/HR
+        # column, the fleet's burn rate, and how loudly an idle rental is reported --
+        # and until this flag it could only be set by editing inventory.yaml by hand.
+        if usd_per_hour < 0:
+            raise ValueError("a cost cannot be negative")
+        before = (dev.cost or {}).get("usd_per_hour")
+        if usd_per_hour == 0:
+            if before is not None:
+                dev.cost = {k: v for k, v in (dev.cost or {}).items() if k != "usd_per_hour"}
+                out.changes.append(f"cost ${before}/hr -> none")
+        elif before != usd_per_hour:
+            dev.cost = {**(dev.cost or {}), "usd_per_hour": round(float(usd_per_hour), 4)}
+            out.changes.append(f"cost {f'${before}/hr' if before else 'none'} -> "
+                               f"${dev.cost['usd_per_hour']}/hr")
     if out.changes:
         # only a real change stamps: a no-op edit must not make this machine's copy
         # spuriously win the next merge.

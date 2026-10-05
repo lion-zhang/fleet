@@ -103,10 +103,53 @@ class Agent:
     skill: str = "std"                     # frontmatter dialect when the file is a SKILL.md
     detect: str = ""                       # directory meaning "installed"; default .<name>
     legacy: tuple[str, ...] = ()           # paths we used to write and must now clean up
+    # Where the agent keeps its home on Windows, when that is not the POSIX dot-dir:
+    # (its home directory, the file within it). Hermes is the case: it reads
+    # %LOCALAPPDATA%\hermes there, and a skill in ~/.hermes was invisible to it.
+    windows: tuple[str, str] | None = None
+    env: str = ""                          # variable naming the agent's home, if it has one
 
     @property
     def marker(self) -> str:
         return self.detect or f".{self.name}"
+
+    def _within(self) -> str:
+        """The file's path inside the agent's own home directory."""
+        return self.home.split("/", 1)[1]
+
+    def home_dir(self, root: Path, platform: str = "") -> Path:
+        """The directory this agent treats as its home, on this machine.
+
+        In order: the agent's own variable, when it names one and we are writing to the
+        real home; on Windows, the directory it uses there -- unless only the dot-dir
+        exists, which is an older install of it; otherwise the dot-dir.
+        """
+        platform = platform or sys.platform
+        if self.env and root == Path.home() and os.environ.get(self.env):
+            return Path(os.environ[self.env])
+        dot = root / self.marker
+        if platform == "win32" and self.windows:
+            native = root.joinpath(*self.windows[0].split("/"))
+            if native.is_dir() or not dot.is_dir():
+                return native
+        return dot
+
+    def home_path(self, root: Path, platform: str = "") -> Path:
+        if not self.windows and not self.env:
+            return root.joinpath(*self.home.split("/"))
+        return self.home_dir(root, platform).joinpath(*self._within().split("/"))
+
+    def stray_paths(self, root: Path, platform: str = "") -> list[Path]:
+        """Where fleet may have written this agent's file before, other than where it
+        belongs now -- the copy the agent cannot see, and must not see twice."""
+        if not self.windows and not self.env:
+            return []
+        here = self.home_path(root, platform)
+        candidates = [root.joinpath(*self.home.split("/"))]
+        if self.windows:
+            candidates.append(root.joinpath(*self.windows[0].split("/"),
+                                            *self._within().split("/")))
+        return [c for c in candidates if c != here]
 
 
 
@@ -122,8 +165,14 @@ AGENTS = (
           legacy=(".codex/AGENTS.md",)),
     # Not SOUL.md: that is Hermes's system prompt, so a block there would cost tokens in
     # every conversation. Skills load only when a task needs them.
+    # Its home is %LOCALAPPDATA%\hermes on Windows, and HERMES_HOME when that is set.
+    # Found by a Hermes agent on a real Windows machine: the skill sat in
+    # ~\.hermes\skills\devops, the scanner indexed only the active home, and fleet was
+    # simply not there as far as it could tell.
     Agent("hermes", home=f".hermes/skills/{HERMES_CATEGORY}/fleet/SKILL.md",
-          project="AGENTS.md", skill="hermes"),
+          project="AGENTS.md", skill="hermes",
+          windows=("AppData/Local/hermes", f"skills/{HERMES_CATEGORY}/fleet/SKILL.md"),
+          env="HERMES_HOME"),
     # GEMINI.md belongs to the user, so it gets a marked region like AGENTS.md rather
     # than being written wholesale.
     Agent("gemini", home=".gemini/GEMINI.md", project="GEMINI.md"),

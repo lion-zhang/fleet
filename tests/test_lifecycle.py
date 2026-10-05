@@ -142,3 +142,45 @@ def test_creating_a_fleet_puts_the_center_in_its_own_inventory(a_fleet, monkeypa
     assert "macbook" in {d.name for d in inv.load(inv.INVENTORY_PATH)}
     acc = acl.load(acl.ACCESS_PATH)
     assert acc.name_of(acc.center) == "macbook", "one name, not two"
+
+
+def test_fleet_directories_are_owner_only_whatever_the_umask(tmp_path, monkeypatch):
+    """Found on a real center run under `docker exec`, whose umask is 0000: the access
+    list came out world-writable, which is every machine to any local user."""
+    import os
+    import sys
+
+    import pytest
+
+    if sys.platform == "win32":
+        pytest.skip("POSIX modes")
+    from fleet import config
+
+    cfg, state = tmp_path / "cfg" / "fleet", tmp_path / "state" / "fleet"
+    monkeypatch.setattr(config, "CONFIG_DIR", cfg)
+    monkeypatch.setattr(config, "STATE_DIR", state)
+    old = os.umask(0)
+    try:
+        config.ensure_dirs()
+    finally:
+        os.umask(old)
+    for d in (cfg, state):
+        assert d.stat().st_mode & 0o777 == 0o700, oct(d.stat().st_mode)
+
+
+def test_an_existing_open_directory_is_tightened(tmp_path, monkeypatch):
+    import sys
+
+    import pytest
+
+    if sys.platform == "win32":
+        pytest.skip("POSIX modes")
+    from fleet import config
+
+    d = tmp_path / "fleet"
+    d.mkdir(mode=0o777)
+    d.chmod(0o777)
+    monkeypatch.setattr(config, "CONFIG_DIR", d)
+    monkeypatch.setattr(config, "STATE_DIR", d)
+    config.ensure_dirs()
+    assert d.stat().st_mode & 0o777 == 0o700

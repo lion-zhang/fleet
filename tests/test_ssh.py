@@ -63,9 +63,11 @@ def test_the_process_is_replaced_rather_than_wrapped(box):
 def test_the_fleet_key_is_offered(box, tmp_path, monkeypatch):
     """Otherwise the most-used command connects with a personal key that fleet no longer
     installs anywhere."""
+    import fleet.config
+
     key = tmp_path / "id_ed25519"
     key.write_text("x")
-    monkeypatch.setattr(cli, "FLEET_KEY", key)
+    monkeypatch.setattr(fleet.config, "FLEET_KEY", key)
     CliRunner().invoke(cli.app, ["ssh", "lin-xps"])
     argv = box[-1][1]
     assert "-i" in argv and str(key) in argv
@@ -110,3 +112,12 @@ def test_a_stale_rejection_does_not_block_a_grant_that_has_since_landed(box, mon
     assert r.exit_code == 0, r.output
     assert box, "it must try the connection rather than refuse on an old reading"
     assert box[-1][1][-1] == "lin@lin-xps.example.ts.net"
+
+
+
+def test_fleet_ssh_never_falls_back_to_a_password(box, monkeypatch):
+    """Without a grant it asked for a password twice, which reads as though one would
+    work. fleet never handles a password."""
+    CliRunner().invoke(cli.app, ["ssh", "lin-xps"])
+    argv = box[-1][1]
+    assert "PasswordAuthentication=no" in argv and "KbdInteractiveAuthentication=no" in argv

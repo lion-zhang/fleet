@@ -48,6 +48,11 @@ and `_install_key` tries these in the order that asks least of the user:
 3. **Neither** — the key must be pre-placed. `fleet center --pubkey` prints it and needs
    nothing reachable, because the moment you want it is before the machine exists.
 
+4. **The machine joins** — `fleet invite` on the center prints a code, and `fleet join
+   CODE` on the machine dials the listener with it. The machine writes the center's key
+   into its own `authorized_keys`, so nothing is installed from outside and no password
+   exists anywhere. See *Invites* below.
+
 Enrolment is not a command. `fleet add` does it on the center, and the sweep does it for
 anything still unpinned — a machine added from a spoke, or one whose enrolment was
 interrupted. Neither ever prompts outside case 2, and the sweep never prompts at all.
@@ -59,7 +64,10 @@ interrupted. Neither ever prompts outside case 2, and the sweep never prompts at
 | `access.yaml` | center only | Authority. Never travels upward |
 | `access-ledger.yaml` | center only | Desired vs observed, retries, last error |
 | `access-cache.yaml` | each machine | The center's pinned key, when it last swept |
-| `access-outbox.yaml` | each machine | Requests we have filed |
+| `access-invites.yaml` | center only | Open invites, as hashes of their secrets |
+| `access-chain.yaml` | a center that took the role | Every signed handover from the first center to this one |
+| `access-handover-in.yaml` | the successor, until `--accept` | The handover the outgoing center delivered |
+| `access-handover-out.yaml` | the outgoing center, until settled | Who it named, and where to ask whether they took it |
 
 Every name is globally distinct and **nothing is ever deleted by globbing a directory**:
 `CONFIG_DIR` and `STATE_DIR` are the same directory on macOS, so tidying up "the state
@@ -119,6 +127,35 @@ First contact pins the center's key — the same bargain ssh makes with host key
 same reason. An unsigned payload is refused outright rather than accepted as a legacy
 format, because "old peer" and "hostile peer" are indistinguishable from the receiving end.
 
+## Invites
+
+The listener refuses any key it has not pinned, because answering a stranger would let
+the earliest caller pin itself. An invite is how a stranger is admitted without
+weakening that: it is the center speaking first, just earlier, and out of band.
+
+- **Single use, minutes long.** The first key to redeem it owns it. The same key asking
+  again is accepted — that is a lost reply, not a second machine — and any other key is
+  refused. Everything that can fail is checked before the invite is spent, so a refused
+  join costs nothing.
+- **The secret never travels.** The request carries a MAC over the joiner's own sealed
+  envelope, keyed by the invite. The listener speaks plain HTTP, and watching it yields a
+  MAC bound to one key's request, which is useless for any other key.
+- **No trust on first use on the joiner's side.** The code carries the fingerprint of the
+  center's key, and the joiner accepts a reply signed by exactly that key or nothing.
+  Ordinary sync has to pin whoever answered first; a join does not.
+- **The joiner describes itself, not the fleet.** The center records one machine from a
+  join — no role, no other records, no identity paths that only mean something on the
+  joiner — under a name the invite chose or that is made unique. A machine-id that is
+  already pinned to another key is refused, as `enroll` refuses everywhere.
+- **Stored as a hash.** `access-invites.yaml` holds sha256 of each secret, which is also
+  the MAC key. Reading it grants what the invite grants, for minutes, on the one machine
+  whose compromise is total anyway.
+
+What an invite does not change: the center still manages the machine over ssh, so a
+machine it cannot reach can join and report, but grants on it wait until it can be
+reached. Grants a machine applies to itself from pulled, signed data would lift that;
+they are not built.
+
 ## The center is expected to be offline
 
 Nothing that already works stops working when the center is closed: grants are keys in
@@ -140,6 +177,29 @@ refuse.
 
 There is no `backup` role. It meant a second machine holding a key on every device
 forever — a standing total-compromise target, to save an occasional manual recovery.
+
+A handover moves the role in two signed steps, and the fleet follows by itself:
+
+1. **On the center, `fleet center NAME`.** Grants the successor every machine, as the
+   user each is reached as, and applies those grants now. Then delivers over ssh the
+   access list, the ledger and a handover record naming the successor's key -- the
+   bundle signed by the outgoing center, which the successor has pinned and checks.
+2. **On the successor, `fleet center --accept`.** Proves it can *write* every machine
+   (probing would only prove its key is present), takes the role, and sweeps.
+3. **Everyone else follows the chain.** Every envelope the new center signs carries the
+   handover records, oldest first. A member that still trusts an older key walks from it
+   one record at a time, each signed by the key it hands *from*, and pins where the walk
+   ends. A forged record leads nowhere, so this is never trust on first use.
+4. **The outgoing center steps down on proof.** The next time it acts as center it asks
+   the successor; a reply signed by the successor that carries the record it signed is
+   the proof, and it becomes a member. Its key comes off every machine on the new
+   center's first sweep, because the new list no longer wants it.
+
+A member the new center cannot reach learns of the handover only by asking: `fleet sync
+--from` the new center's address once.
+
+This shipped as a single-machine design first and could not complete between two real
+machines: the record stayed on the outgoing center's disk, and no member could check one.
 
 So an unplanned loss of the center means re-configuring by hand. That is the accepted
 price of there being exactly one machine that can open every door. Hand over before you
