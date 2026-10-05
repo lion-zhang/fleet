@@ -64,7 +64,7 @@ from .probe.runner import PAYLOAD, probe_env, probe_many, run_probe, run_probe_l
 from .render import view as view_mod
 from .render.staleness import staleness_note
 from .render.top import (Schedule, device_lines, disk_cell, gpu_cells_compact,
-                         name_cell, render_device, render_fleet)
+                         name_cell, render_device, render_fleet, render_ls)
 from .render.view import Detail, auth_of, device_view, fleet_view, matches_tag
 from .serve import serve as serve_center
 from .ssh.cmd import (build_argv, local_platform, local_shell_argv, remote_command,
@@ -152,36 +152,7 @@ def cmd_ls(names: list[str] = typer.Argument(None, help="only these devices"),
                   "[bold]fleet add \"ssh user@host\"[/bold]")
         raise typer.Exit(0)
 
-    t = Table(box=None, pad_edge=False, header_style="bold")
-    # Right-justifying a multi-line cell pads its short lines from the left and comes
-    # out ragged, so these two flip left only when some device really has more than one
-    # card. A fleet of single-GPU boxes renders exactly as it always did.
-    tall = any(device_lines(r) > 1 for r in rows)
-    for col, kw in (("", {}), ("NAME", {"no_wrap": True}), ("KIND", {"no_wrap": True}),
-                    ("GPU", {"no_wrap": True, "overflow": "ellipsis",
-                             "max_width": 24}),
-                    ("VRAM FREE", {"justify": "left" if tall else "right",
-                                   "no_wrap": True}),
-                    ("CPU", {"justify": "right", "no_wrap": True}),
-                    ("RAM FREE", {"justify": "right", "no_wrap": True}),
-                    ("DISK FREE", {"justify": "left" if tall else "right",
-                                   "no_wrap": True}),
-                    ("$/HR", {"justify": "right", "no_wrap": True}),
-                    ("AGE", {"justify": "right", "no_wrap": True}),
-                    ("NOTE", {"no_wrap": True, "overflow": "ellipsis", "max_width": 42})):
-        t.add_column(col, **kw)
-    for r in rows:
-        gpu, vram = gpu_cells_compact(r)
-        note = r.get("error", {}).get("detail", "") if r["status"] != "ok" else (
-            r["alerts"][0] if r["alerts"] else "")
-        age = f"{r['telemetry_age_s']}s" if r["telemetry_age_s"] is not None else "-"
-        t.add_row(_DOT.get(r["status"], "?"), name_cell(r),
-                  r["kind"], gpu, vram,
-                  str(r["cpu_cores"] or "-"),
-                  f"{r['ram_free_gb']:.0f}G" if r["ram_free_gb"] else "-",
-                  disk_cell(r),
-                  f"${r['usd_per_hour']:.2f}" if r["usd_per_hour"] else "-",
-                  age, note)
+    t = render_ls(rows)
     console.print(t)
     if note := staleness_note():
         console.print(f"[yellow]![/yellow] [dim]{note}[/dim]")
@@ -201,15 +172,46 @@ def cmd_show(name: str = typer.Argument(None, help="defaults to this machine"),
     [dim]Example:[/dim]  fleet show machine_A
     """
     ensure_fresh()
+    unrecorded = False
     if name is None:
-        name = _this_machine(inv.load(), "show").name
-    rows = _rows([name], refresh=refresh, detail=Detail.FULL)
-    if not rows:
-        err.print(f"[red]No device named {name!r}.[/red]  Try [bold]fleet ls[/bold]")
-        raise typer.Exit(1)
-    r = rows[0]
+        me = identity.local_device_id()
+        if me and inv.find(inv.load(), me) is None and _fleet_membership() == "":
+            # Nothing set up yet. The first command anyone runs -- often through
+            # `uvx`, before installing anything -- used to answer "not in the
+            # inventory, so there is nothing to show". Show the machine anyway: one
+            # local probe, kept in the disposable cache, the inventory left alone.
+            r, unrecorded = _show_unrecorded_self(), True
+        else:
+            name = _this_machine(inv.load(), "show").name
+    if not unrecorded:
+        rows = _rows([name], refresh=refresh, detail=Detail.FULL)
+        if not rows:
+            err.print(f"[red]No device named {name!r}.[/red]  Try [bold]fleet ls[/bold]")
+            raise typer.Exit(1)
+        r = rows[0]
     if _emit(r, json_out):
         return
+    _print_show(r)
+    if unrecorded:
+        console.print("\n  [dim]this machine is not in a fleet yet: [bold]fleet center "
+                      "--init[/bold] starts one here, [bold]fleet add --self[/bold] just "
+                      "records it[/dim]")
+
+
+def _show_unrecorded_self() -> dict:
+    from .render.view import device_view
+
+    dev, res = onboard_self()
+    conn = store.connect()
+    try:
+        store.record(conn, dev.id, res)
+        state, snap = store.latest(conn, dev.id)
+    finally:
+        conn.close()
+    return device_view(dev, state, snap, Detail.FULL, self_id=dev.id)
+
+
+def _print_show(r: dict) -> None:
     console.print(f"\n{_DOT.get(r['status'],'?')} [bold]{r['name']}[/bold]  "
                   f"[dim]{r['kind']} · {r['status']} · {r.get('os') or '?'} · {r.get('arch') or ''}[/dim]")
     if r.get("error"):
@@ -631,6 +633,9 @@ def cmd_edit(name: str = typer.Argument(None, help="defaults to this machine"),
              untag: list[str] = typer.Option(None, "--untag", metavar="NAME",
                                              help="remove a label; repeatable"),
              role: str = typer.Option(None, "--role", help="none | center | backup"),
+             cost: float = typer.Option(None, "--cost", metavar="USD",
+                                        help="what it costs per hour, for the $/HR column "
+                                             "and idle-rental alerts; 0 clears it"),
              json_out: bool = typer.Option(False, "--json")):
     """Change a device's address or settings after it was added.
 
@@ -653,7 +658,8 @@ def cmd_edit(name: str = typer.Argument(None, help="defaults to this machine"),
                              add_tags=_tags(tag), drop_tags=_tags(untag),
                              taken=inv.handles(devices, excluding=dev.id),
                              endpoint=endpoint, disk_paths=paths,
-                             role=None if role == "center" else role)
+                             role=None if role == "center" else role,
+                             usd_per_hour=cost)
     except ValueError as exc:
         # apply_edits refuses in words -- a clashing alias, a name already taken -- and
         # those words are the whole answer. A traceback around them was not.

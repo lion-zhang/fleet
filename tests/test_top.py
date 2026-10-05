@@ -415,3 +415,18 @@ def test_the_center_is_marked_in_the_table():
     assert "◆" not in name_cell(_row(name="oracle"))
     both = name_cell(_row(name="macbook", role="center", is_self=True))
     assert "◆" in both and "←" in both
+
+
+def test_a_machine_that_did_not_answer_is_not_called_live():
+    """Probed a second ago and failed: it is not live, whatever its age says."""
+    from rich.console import Console
+
+    from fleet.render.top import render_fleet
+
+    row = {"name": "old-rig", "status": "timeout", "telemetry_age_s": 0, "gpus": [],
+           "error": {"detail": "no answer"}, "alerts": [], "tags": [], "alias": "",
+           "kind": "permanent", "is_self": False}
+    c = Console(width=200, record=True)
+    c.print(render_fleet([row], {"online": 0, "total": 1, "gpus_free": 0,
+                                 "hourly_burn": 0}, 10))
+    assert "live" not in c.export_text()

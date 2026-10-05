@@ -298,3 +298,21 @@ def test_renaming_to_the_same_name_is_a_no_op():
     out = apply_edits(dev, name=dev.name)
     assert not out.changes
     assert dev.updated_at == stamp
+
+
+def test_a_cost_can_be_set_and_cleared():
+    """It drives the $/HR column and the idle-rental alert, and could only be set by
+    editing inventory.yaml by hand."""
+    import pytest
+
+    from fleet.edit import apply_edits
+    from fleet.models import Device, Kind
+
+    dev = Device(id="d", name="a100", kind=Kind.RENTAL)
+    assert apply_edits(dev, usd_per_hour=1.89).changes == ["cost none -> $1.89/hr"]
+    assert dev.cost == {"usd_per_hour": 1.89}
+    assert apply_edits(dev, usd_per_hour=1.89).changes == []
+    assert apply_edits(dev, usd_per_hour=0).changes == ["cost $1.89/hr -> none"]
+    assert "usd_per_hour" not in dev.cost
+    with pytest.raises(ValueError):
+        apply_edits(dev, usd_per_hour=-1)

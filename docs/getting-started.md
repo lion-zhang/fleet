@@ -408,6 +408,7 @@ fleet edit machine_A --alias a                           # a short handle to typ
 fleet edit machine_A --tag nas --untag scratch           # labels you choose
 fleet ls --tag cuda --tag vram-24g                       # find a machine by capability
 fleet edit machine_A --disk-path /workspace              # watch this volume
+fleet edit machine_A --cost 1.89                         # $/hr, for the burn rate and idle alerts
 fleet access machine_A --allow machine_B                 # grant
 fleet access machine_A --deny machine_B                  # revoke
 fleet sync                             # apply everything, and enrol anything pending

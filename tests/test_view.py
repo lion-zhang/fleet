@@ -236,3 +236,25 @@ def test_a_nearly_full_disk_raises_an_alert():
 def test_a_roomy_disk_raises_no_alert():
     v = device_view(make(), STATE_OK, _full_disk_snapshot(40), Detail.COMPACT)
     assert not any("disk" in a.lower() for a in v["alerts"])
+
+
+def test_show_works_before_anything_is_set_up(monkeypatch):
+    """The first command someone runs, often through `uvx`, used to answer "not in the
+    inventory, so there is nothing to show". It shows this machine instead, and leaves
+    the inventory alone."""
+    from typer.testing import CliRunner
+
+    from fleet import cli
+    from fleet.models import Device, Kind, ProbeResult, Snapshot, Status
+    from fleet.ops import identity
+    from fleet.state import inventory as inv
+
+    monkeypatch.setattr(identity, "local_device_id", lambda: "linux:machine-id:me")
+    monkeypatch.setattr(cli, "onboard_self", lambda **k: (
+        Device(id="linux:machine-id:me", name="laptop", kind=Kind.PERMANENT),
+        ProbeResult(status=Status.OK, snapshot=Snapshot(hostname="laptop", cpu_cores=8,
+                                                        os="Ubuntu 24.04"))))
+    r = CliRunner().invoke(cli.app, ["show"])
+    assert r.exit_code == 0, r.output
+    assert "laptop" in r.output and "fleet center --init" in " ".join(r.output.split())
+    assert inv.load() == []

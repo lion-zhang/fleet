@@ -69,7 +69,7 @@ Anywhere. A name may be omitted where the obvious subject is the machine you are
 - `{cmd} edit [NAME] --ssh "ssh ..."` -- a rental moved; point the record at the new
   address. `--disk-path /workspace` to watch the volume that matters, `--name` to
   rename, `--alias` to set or clear the short handle, `--tag`/`--untag` to add and
-  remove labels (both repeatable)
+  remove labels (both repeatable), `--cost 1.89` for what it costs per hour (0 clears)
 - `{cmd} install NAME` -- put fleet on a machine that has none
 - `{cmd} paths` -- where the inventory, keys and access list live on this machine
 
@@ -187,11 +187,10 @@ def hermes_skill_text(cmd: str) -> str:
 
     Hermes requires name, description, version, author and license -- where Claude Code
     needs only the first two -- and a skill missing any of them is not rejected loudly,
-    it simply never loads. license says UNLICENSED because this repo carries no licence
-    file, and claiming MIT here would be a claim about someone else's code.
+    it simply never loads. The license is the repository's own, MIT.
     """
     return (f"---\nname: fleet\ndescription: \"{_DESCRIPTION}\"\n"
-            f"version: {package_version()}\nauthor: fleet\nlicense: UNLICENSED\n"
+            f"version: {package_version()}\nauthor: fleet\nlicense: MIT\n"
             "platforms: [linux, macos, windows]\n"
             "metadata:\n  hermes:\n"
             "    tags: [fleet, inventory, gpu, ssh, remote, compute]\n"
