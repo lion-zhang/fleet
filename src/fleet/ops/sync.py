@@ -59,7 +59,7 @@ def sealed_envelope(payload: str) -> str:
     hostile to being run from several threads at once: it reads the access list, reads
     telemetry out of sqlite, and shells out to `ssh-keygen -Y sign`. Handing the same
     envelope to every machine is also simply less work -- the old shape signed the same
-    bytes once per spoke.
+    bytes once per member.
     """
     try:
         acc = acl.load()

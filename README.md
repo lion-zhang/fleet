@@ -42,23 +42,28 @@ one SSH connection, POSIX `sh` or PowerShell, whichever answers.
 
 ## Quick start
 
+A fleet has two kinds of machine. The **center** is the one that decides who may reach
+what; install it on the machine you work from. Every other machine is a **member**.
+
+| Install as | Where | Command |
+|---|---|---|
+| **center** | the machine you work from — once per fleet | `curl -LsSf https://raw.githubusercontent.com/lion-zhang/fleet/main/install.sh \| sh` |
+| **member** | each other machine you want to run fleet on | the line `fleet invite` prints on the center: the same installer, ending `sh -s -- --join fleet1:…` |
+
+On Windows, the center line is `powershell -ExecutionPolicy ByPass -c "irm https://raw.githubusercontent.com/lion-zhang/fleet/main/install.ps1 | iex"`,
+and `fleet invite` prints the member line for PowerShell too.
+
+The center install also teaches every coding agent it finds there to use fleet. Then add
+machines from the center:
+
 ```bash
-curl -LsSf https://raw.githubusercontent.com/lion-zhang/fleet/main/install.sh | sh
+fleet invite gpu-box                # prints the member line to paste on gpu-box
+fleet add "ssh root@gpu-box"        # or have the center reach it: probe, key, record
 ```
 
-On Windows: `powershell -ExecutionPolicy ByPass -c "irm https://raw.githubusercontent.com/lion-zhang/fleet/main/install.ps1 | iex"`
-
-That one line installs fleet, makes this machine the **center** of your fleet, and teaches
-every coding agent it finds here to use it. Then add machines:
-
-```bash
-fleet invite gpu-box                # prints one line to paste on the new machine
-fleet add "ssh root@gpu-box"        # or have this machine reach it: probe, key, record
-```
-
-The line `fleet invite` prints is the same installer with `--join fleet1:…` on the end:
-it installs fleet on the new machine as a **member** of this fleet, with no password and
-even from behind NAT. Where fleet is installed already, `fleet join fleet1:…` does the same.
+A member joins with no password, even from behind NAT. Where fleet is installed already,
+`fleet join fleet1:…` does the same. Machines you only connect *to* — added with `fleet
+add` — are members too, and need nothing installed.
 
 Then just ask your agent.
 

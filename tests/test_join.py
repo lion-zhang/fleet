@@ -530,6 +530,21 @@ def test_invite_shows_the_install_line_whole(fleet_of_two, monkeypatch):
     assert any(ln.startswith("$env:FLEET_JOIN=") and ln.endswith("| iex") for ln in lines)
 
 
+def test_center_json_names_the_install_mode(fleet_of_two):
+    """One field for what the installers and agents ask: center or member."""
+    import json
+
+    from typer.testing import CliRunner
+
+    from fleet import cli
+
+    with being(fleet_of_two["c"]):
+        out = CliRunner().invoke(cli.app, ["center", "--json"])
+    assert out.exit_code == 0, out.output
+    data = json.loads(out.output)
+    assert data["role"] == "center" and data["is_center"] is True
+
+
 def test_invite_refuses_off_the_center(fleet_of_two):
     from typer.testing import CliRunner
 

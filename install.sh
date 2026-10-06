@@ -1,13 +1,16 @@
 #!/bin/sh
 # Install fleet: https://github.com/lion-zhang/fleet
 #
+# Two modes. The center is the one machine that decides who may reach what -- install
+# it on the machine you work from. Every other machine is a member.
+#
 #   curl -LsSf https://raw.githubusercontent.com/lion-zhang/fleet/main/install.sh | sh
-#       installs fleet, makes this machine the center of a new fleet, and teaches
+#       center (the default): installs fleet, starts a new fleet here, and teaches
 #       every coding agent installed here (Claude Code, Codex, Gemini CLI, ...) to use it.
 #
 #   curl -LsSf https://raw.githubusercontent.com/lion-zhang/fleet/main/install.sh | sh -s -- --join CODE
-#       installs fleet and joins the fleet whose center printed CODE (`fleet invite`),
-#       instead of starting one here.
+#       member: installs fleet and joins the fleet whose center printed CODE
+#       (`fleet invite` prints this whole line), instead of starting one here.
 #
 # Options:  --join CODE   join that fleet as a member (or set FLEET_JOIN=CODE)
 #           --no-setup    install the command only; start or join nothing
@@ -25,14 +28,32 @@ usage() {
     cat <<'USAGE'
 usage: install.sh [--join CODE] [--no-setup]
 
-  (nothing)     install fleet, make this machine the center of a new fleet, and teach
+Two modes: the center decides who may reach what; every other machine is a member.
+
+  (nothing)     center: install fleet, start a new fleet on this machine, and teach
                 every coding agent installed here to use it
-  --join CODE   install fleet and join the fleet whose center printed CODE
-                (`fleet invite`) instead; FLEET_JOIN=CODE does the same
-  --no-setup    install the command only
+  --join CODE   member: install fleet and join the fleet whose center printed CODE
+                (`fleet invite`); FLEET_JOIN=CODE does the same
+  --no-setup    install the command only; start or join nothing
 
 Safe to run again: it upgrades fleet and leaves the fleet this machine is in alone.
 USAGE
+}
+
+# What an installed fleet says this machine is: center, member, or nothing yet. Never
+# starts a fleet to answer. Reads `role`, and the keys fleets before it had.
+role_of() {
+    out=$(FLEET_NO_AUTO_CENTER=1 "$1" center --json </dev/null 2>/dev/null || true)
+    case "$out" in
+        *'"role": "center"'*|*'"is_center": true'*) echo center ;;
+        *'"role": "member"'*|*'"member": true'*) echo member ;;
+    esac
+}
+
+# One string field from `fleet center --json`.
+field_of() {
+    FLEET_NO_AUTO_CENTER=1 "$1" center --json </dev/null 2>/dev/null \
+        | sed -n "s/.*\"$2\": *\"\([^\"]*\)\".*/\1/p" | head -n 1
 }
 
 find_uv() {
@@ -62,6 +83,24 @@ main() {
         ""|fleet1:*) ;;
         *) die "that is not a fleet invite code -- it starts with fleet1: (run \`fleet invite\` on the center)" ;;
     esac
+
+    # Say which mode this run installs, before doing anything. A re-run reads it from the
+    # fleet already here, which may have been installed in the other mode.
+    was=""
+    for f in "$(command -v fleet 2>/dev/null || true)" "$HOME/.local/bin/fleet"; do
+        if [ -n "$f" ] && [ -x "$f" ]; then was=$(role_of "$f"); break; fi
+    done
+    if [ "$setup" = 0 ]; then
+        say "mode: none -- installing the command only"
+    elif [ -n "$join" ]; then
+        say "mode: member -- joining the fleet whose center printed this code"
+    elif [ "$was" = center ]; then
+        say "mode: center (already; upgrading)"
+    elif [ "$was" = member ]; then
+        say "mode: member (already; upgrading)"
+    else
+        say "mode: center -- starting a new fleet on this machine"
+    fi
 
     # 1. uv, which installs and runs fleet. Its own installer, unless it is here already.
     if ! uv=$(find_uv); then
@@ -113,10 +152,16 @@ main() {
 
     say ""
     [ "$on_path" = 1 ] || say "open a new terminal (or run: export PATH=\"$bin:\$PATH\") so \`fleet\` is found"
+    role=""
     if [ "$setup" = 1 ]; then
         # Center or member: by what this machine is now, not by how this run began.
-        "$fleet" center --json </dev/null 2>/dev/null | grep -q '"is_center": true' \
-            && role=center || role=member
+        role=$(role_of "$fleet")
+        id=$(field_of "$fleet" fleet_id)
+        if [ "$role" = center ]; then
+            say "✓ this machine is the center of fleet $id"
+        elif [ "$role" = member ]; then
+            say "✓ this machine is a member of fleet $id; its center is $(field_of "$fleet" center)"
+        fi
     fi
     if [ "$setup" = 1 ] && [ "$role" = center ]; then
         say "next:  fleet show          this machine, as your agents will see it"

@@ -189,7 +189,7 @@ def apply_now(acc, src: str, dst: str, user: str, *, install: bool) -> None:
 def enrol_unpinned(acc, devices) -> bool:
     """Register every machine the access list has no key for. Returns whether any were.
 
-    This is what replaces a separate enrol command. A machine added from a spoke, or one
+    This is what replaces a separate enrol command. A machine added from a member, or one
     whose enrolment was interrupted, is reachable and ungrantable: the list is keyed on
     the fingerprint of *its* key, so an edge from it cannot even be expressed. Only the
     center can fix that, and a sweep is the moment it is already dialling everything.
@@ -241,7 +241,7 @@ def run(devices) -> None:
     pending = [(k, st) for k, st in ledger.items() if not st.converged]
     if not pending:
         # Still hand the inventory round. Keys converging is the common case, and it is
-        # exactly when a spoke has nothing else to learn from -- returning here meant a
+        # exactly when a member has nothing else to learn from -- returning here meant a
         # settled fleet never told anyone anything.
         console.print("[dim]· access is up to date[/dim]")
         broadcast(devices)
@@ -352,7 +352,7 @@ def broadcast(devices) -> None:
 
     A machine without fleet installed simply fails this; that is the ordinary case for a
     managed target and is not worth a line of output. The inventory is not the authority
-    on anything security-relevant -- the access list is, and it is signed -- so a spoke
+    on anything security-relevant -- the access list is, and it is signed -- so a member
     declining to answer costs nothing.
     """
 

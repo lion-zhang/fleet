@@ -41,7 +41,7 @@ from ..config import CONFIG_DIR, STATE_DIR
 # dir" would otherwise take the center's own authority file with it.
 ACCESS_PATH = CONFIG_DIR / "access.yaml"           # authority. center only
 LEDGER_PATH = STATE_DIR / "access-ledger.yaml"     # desired vs observed. center only
-CACHE_PATH = STATE_DIR / "access-cache.yaml"       # signed copy of our row. spokes
+CACHE_PATH = STATE_DIR / "access-cache.yaml"       # signed copy of our row. members
 OUTBOX_PATH = STATE_DIR / "access-outbox.yaml"     # requests we have filed
 # The handover, in three places. CHAIN: on a center that took the role, every signed
 # record from the first center to this one -- carried on every envelope, so a member
@@ -270,12 +270,12 @@ def _keygen(argv: list[str], payload: str, *, timeout: int = 60):
     command with stdin redirected from a file returned in under a tenth of a second.
 
     It applied to `sign` and `verify` alike, so a Windows center could neither seal a
-    reply nor check an envelope a spoke had sent it -- and with no timeout anywhere, both
+    reply nor check an envelope a member had sent it -- and with no timeout anywhere, both
     presented as a sweep that simply stopped. The timeout here is the second half of
     that: whatever else goes wrong, it must end.
 
     Bytes, and a file written in binary. Text mode would hand ssh-keygen CRLF on a
-    Windows center, so the signature would cover bytes no spoke ever sees -- every verify
+    Windows center, so the signature would cover bytes no member ever sees -- every verify
     on the LF original would fail, and the fleet would reject its own center.
     """
     import tempfile
@@ -291,8 +291,8 @@ def _keygen(argv: list[str], payload: str, *, timeout: int = 60):
 def sign(payload: str, key_path: Path | None = None) -> str:
     """Sign with the fleet key. SSHSIG, so it needs no dependency we do not already have.
 
-    The center dials the spoke and runs the sync filter *there*, but a grant is a key on
-    that spoke -- so any granted peer could connect and claim to be the center. ssh
+    The center dials the member and runs the sync filter *there*, but a grant is a key on
+    that member -- so any granted peer could connect and claim to be the center. ssh
     authenticates *a* peer, not *the* center. The signature is what makes the claim
     checkable, and it keeps being checkable if the transport ever changes.
     """
@@ -308,7 +308,7 @@ def sign(payload: str, key_path: Path | None = None) -> str:
         # as a sweep that printed one line and stopped. The file form has no such limit.
         data = Path(scratch) / "payload"
         data.write_bytes(payload.encode())     # bytes: CRLF here would be signed, and no
-        sig = Path(scratch) / "payload.sig"    # spoke ever sees CRLF to check against
+        sig = Path(scratch) / "payload.sig"    # member ever sees CRLF to check against
         try:
             subprocess.run(["ssh-keygen", "-Y", "sign", "-f", str(key_path),
                             "-n", SIGN_NAMESPACE, str(data)],
@@ -648,7 +648,7 @@ def enroll(acc: Access, name: str, pubkey: str, device_id: str = "",
 def handover_record(acc: Access, successor_fp: str) -> str:
     """The signed statement that names the next center.
 
-    Spokes verify a list against the key they have pinned, so a new center's list is
+    Members verify a list against the key they have pinned, so a new center's list is
     rejected outright unless something they already trust vouches for it. This is that
     something: signed by the outgoing center, naming the incoming one, so a machine can
     walk from whichever key it last trusted to the current one -- exactly like a

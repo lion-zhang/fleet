@@ -25,6 +25,17 @@ over one SSH connection. Only machines that run fleet commands themselves need f
 
 ## 1. Install
 
+fleet installs in one of two modes:
+
+- **center** — the one machine that decides who may reach what, and the only one that
+  installs or removes a key. Install it on the machine you work from, once per fleet.
+  This is the default.
+- **member** — every other machine in the fleet. A member you run fleet on is installed
+  with the line `fleet invite` prints (§3); a member you only connect *to* needs nothing
+  installed at all.
+
+On the machine that will be the center:
+
 ```bash
 curl -LsSf https://raw.githubusercontent.com/lion-zhang/fleet/main/install.sh | sh
 ```
@@ -41,7 +52,7 @@ The installer fetches [uv](https://docs.astral.sh/uv) if it is missing, installs
 becomes the center of a new fleet (§2), and every coding agent installed here learns to
 use it (§4). Run it again any time to upgrade; it leaves the fleet alone.
 
-Two options: `--join CODE` joins an existing fleet instead of starting one (§3), and
+Two options: `--join CODE` installs a member of an existing fleet instead (§3), and
 `--no-setup` installs the command only. Pass them after `sh -s --`, e.g.
 `curl -LsSf …/install.sh | sh -s -- --no-setup`. On Windows, set `$env:FLEET_JOIN` or
 `$env:FLEET_NO_SETUP=1` first.

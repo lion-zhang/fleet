@@ -430,7 +430,7 @@ def test_the_instructions_separate_what_needs_the_center():
 
     text = skill_text("fleet")
     assert "Only on the center" in text
-    assert "is_center" in text, "and says how to find out, rather than guessing"
+    assert "`role` (center or member)" in text, "and says how to find out, rather than guessing"
     for center_only in ("--allow", "--deny", "fleet sync"):
         assert center_only in text
 
