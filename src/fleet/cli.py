@@ -361,6 +361,13 @@ def cmd_add(ssh_command: str = typer.Argument(None, help='e.g. "ssh -p 58418 roo
         return current, action
 
     devices, action = inv.update(_record)
+    # A machine already known keeps its own name: the record that survived is the one to
+    # report. Reporting the requested name sent agents after a machine that did not exist
+    # ("No device named 'loop'") on the very next command.
+    asked = dev.name
+    if action in ("endpoint_added", "unchanged") and (
+            survivor := inv.find_exact(devices, dev.id)):
+        dev.name = survivor.name
     for t in tags:
         if view_mod.is_fact_name(t):
             console.print(f"  [dim]note: {t!r} is also derived from telemetry — "
@@ -378,6 +385,9 @@ def cmd_add(ssh_command: str = typer.Argument(None, help='e.g. "ssh -p 58418 roo
                           "(same machine-id, so this is one device, not two).")
         elif action == "unchanged":
             console.print(f"[dim]· {dev.name} already recorded with this endpoint.[/dim]")
+        if action in ("endpoint_added", "unchanged") and name and name != dev.name:
+            console.print(f"  [dim]it keeps its name; to rename it: [bold]fleet edit "
+                          f"{dev.name} --name {asked}[/bold][/dim]")
         else:
             # A key refused on first contact is the normal start of enrolling, not a
             # fault: printed as "auth_failed: credentials rejected" it read as the add
@@ -2027,8 +2037,12 @@ def cmd_setup(
                   f"({' | '.join((*TARGETS, *mcp_names))} | all | auto)")
         raise typer.Exit(2)
     if not targets and not clients:
+        from .agents import registry as agent_registry
+
+        # Each agent's own folder: "~/.opencode" was named for one that lives in ~/.config.
+        looked = sorted({"~/" + a.marker for a in agent_registry.AGENTS})
         err.print("[yellow]No coding agent found.[/yellow]  Looked for "
-                  f"{', '.join('~/.' + t for t in TARGETS)} and the desktop clients.  "
+                  f"{', '.join(looked)} and the desktop clients.  "
                   "Force one with [bold]--target claude[/bold].")
         raise typer.Exit(1)
 

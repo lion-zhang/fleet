@@ -1,0 +1,73 @@
+name: e2e
+
+# fleet installed and used for real on each OS: the installer makes the runner a center,
+# then tests/e2e/host.py runs every command against it -- over ssh to the runner itself
+# as well, so the probe, enrolment and authorized_keys edits go through that OS's sshd
+# and shell. Slower than the unit tests, so only for changes that can break it.
+on:
+  workflow_dispatch:
+  pull_request:
+    paths: ["src/**", "install.sh", "install.ps1", "tests/e2e/**", ".github/workflows/e2e.yml"]
+  push:
+    branches: [main, claude/continue-fleet-development-y01p2j]   # TEMP: while it is built
+    paths: ["src/**", "install.sh", "install.ps1", "tests/e2e/**", ".github/workflows/e2e.yml"]
+
+jobs:
+  e2e:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+        with:
+          python-version: "3.12"
+
+      - name: sshd (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get install -y -qq openssh-server >/dev/null
+          sudo systemctl start ssh
+      - name: sshd (macOS)
+        if: runner.os == 'macOS'
+        run: |
+          sudo launchctl load -w /System/Library/LaunchDaemons/ssh.plist 2>/dev/null \
+            || sudo systemsetup -f -setremotelogin on
+          for i in $(seq 1 20); do nc -z localhost 22 && break; sleep 1; done
+      - name: sshd (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          if (-not (Get-Service sshd -ErrorAction SilentlyContinue)) {
+            Add-WindowsCapability -Online -Name OpenSSH.Server~~~~0.0.1.0 | Out-Null
+          }
+          Start-Service sshd
+          Get-Service sshd
+
+      - name: install.sh (center)
+        if: runner.os != 'Windows'
+        run: |
+          FLEET_SOURCE="$PWD" sh install.sh
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+      - name: install.ps1 (center)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $env:FLEET_SOURCE = "$PWD"
+          ./install.ps1
+          uv tool dir --bin | Out-File -Append -Encoding utf8 $env:GITHUB_PATH
+
+      - name: every command
+        if: runner.os != 'Windows'
+        run: |
+          FLEET_BIN="$HOME/.local/bin/fleet" uv run --no-project --with mcp --with . \
+            python tests/e2e/host.py --ssh-user "$USER" --report "$GITHUB_STEP_SUMMARY"
+      - name: every command
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $env:FLEET_BIN = Join-Path (uv tool dir --bin) 'fleet.exe'
+          uv run --no-project --with mcp --with . python tests/e2e/host.py --ssh-user $env:USERNAME --report $env:GITHUB_STEP_SUMMARY

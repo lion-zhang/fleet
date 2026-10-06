@@ -224,3 +224,36 @@ def test_one_box_reached_two_ways_is_still_one_record(tmp_path, monkeypatch):
     r = CliRunner().invoke(cli.app, ["add", "ssh root@box.example.ts.net"])
     assert r.exit_code == 0, r.output
     assert [d.name for d in inv.live(inv.load())] == ["box"]
+
+
+def test_a_known_box_added_again_reports_the_name_it_keeps(tmp_path, monkeypatch):
+    """An agent reads the name from `fleet add --json` and uses it next. Reporting the
+    requested name for a machine already known as another sent it after a machine that
+    did not exist ("No device named 'loop'"), found running fleet on a real runner."""
+    import json
+
+    from typer.testing import CliRunner
+
+    from fleet import cli
+    from fleet.models import Device, Kind, ProbeResult, Snapshot, Status
+    from fleet.state import inventory as inv
+    from fleet.state import store
+
+    inv.save([Device(id="linux:machine-id:box", name="box", kind=Kind.PERMANENT,
+                     endpoints=[{"target": "10.0.0.5", "user": "root", "port": 22}])])
+    conn = store.connect()
+    store.record(conn, "linux:machine-id:box",
+                 ProbeResult(status=Status.OK, snapshot=Snapshot(ts=1, hostname="box")))
+    conn.close()
+    monkeypatch.setattr(cli, "onboard", lambda cmd, **k: (
+        Device(id="linux:machine-id:box", name=k.get("name") or "box-2", kind=Kind.PERMANENT,
+               endpoints=[{"target": "localhost", "user": "me", "port": 22}]),
+        ProbeResult(status=Status.OK, snapshot=Snapshot(ts=2, hostname="box"))))
+    monkeypatch.setattr(cli, "_fleet_membership", lambda: "member")
+    r = CliRunner().invoke(cli.app, ["add", "ssh me@localhost", "--name", "loop", "--json"])
+    assert r.exit_code == 0, r.output
+    out = json.loads(r.stdout)
+    assert out["action"] == "endpoint_added" and out["name"] == "box", out
+
+    r = CliRunner().invoke(cli.app, ["add", "ssh me@localhost", "--name", "loop"])
+    assert "fleet edit box --name loop" in r.output, r.output
