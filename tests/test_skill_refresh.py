@@ -70,7 +70,7 @@ def test_refresh_touches_only_our_region_in_a_shared_file(tmp_path, monkeypatch)
 
 def test_refresh_updates_an_mcp_entry_only_where_fleet_is_registered(tmp_path, monkeypatch):
     home = _home(tmp_path, monkeypatch)
-    monkeypatch.setattr(cli, "fleet_executable", lambda: "/new/fleet")
+    monkeypatch.setattr(cli, "config_command", lambda: "/new/fleet")
     client = MCP_CLIENTS[0]
     import sys
     path = client.path(home, sys.platform)

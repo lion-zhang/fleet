@@ -39,6 +39,9 @@ def _posix_script(repo: str, *, ref: str = "main", update_only: bool = False) ->
     entry can only fail, silently, forever. Installing removes it.
     """
     return f"""set -e
+# Everything this script runs is part of making the machine a member, or updating one:
+# none of it may start a fleet here.
+export FLEET_NO_AUTO_CENTER=1
 REPO={shlex.quote(repo)}
 REF={shlex.quote(ref)}
 DIR="{INSTALL_DIR}"
@@ -73,7 +76,10 @@ PATH="$HOME/.local/bin:$PATH" fleet service stop >/dev/null 2>&1 || true
 # --reinstall-package, not --reinstall: the problem is uv reusing a cached build of
 # fleet when the version has not changed, and rebuilding every dependency to fix that
 # turns a deploy into a download of the world.
-uv tool install --force --reinstall-package fleet-broker --quiet "$DIR"
+# The package was `fleet-broker` until 0.5. Left installed, it and `agent-fleet` would
+# both claim the `fleet` command, and whichever installed last would win at random.
+uv tool uninstall fleet-broker >/dev/null 2>&1 || true
+uv tool install --force --reinstall-package agent-fleet --quiet "$DIR"
 
 # Put fleet on the PATH of a terminal the user opens later, not just this script's.
 # Without it fleet installs correctly and then is not there when they type its name --
@@ -260,6 +266,8 @@ def _windows_script(repo: str, ref: str = "main", *, update_only: bool = False) 
     repo_lit = repo.replace("'", "''")
     ref_lit = ref.replace("'", "''")
     return f"""$ErrorActionPreference = 'Stop'
+# Making this machine a member, or updating one: none of it may start a fleet here.
+$env:FLEET_NO_AUTO_CENTER = '1'
 $repo = '{repo_lit}'
 $ref  = '{ref_lit}'
 $dir  = "{WINDOWS_INSTALL_DIR}"
@@ -311,7 +319,9 @@ while ((Get-Date) -lt $deadline) {{
 
 $fleet = Join-Path $env:USERPROFILE '.local\\bin\\fleet.exe'
 
-uv tool install --force --reinstall-package fleet-broker --quiet $dir
+# The package was `fleet-broker` until 0.5; both would claim the `fleet` command.
+try {{ uv tool uninstall fleet-broker 2>&1 | Out-Null }} catch {{ }}
+uv tool install --force --reinstall-package agent-fleet --quiet $dir
 
 # So `fleet` works in a terminal the user opens later, not just in this script. Without
 # it the shim lands in a directory nothing has ever added to PATH, and fleet installs

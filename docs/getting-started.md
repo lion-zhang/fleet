@@ -25,37 +25,63 @@ over one SSH connection. Only machines that run fleet commands themselves need f
 
 ## 1. Install
 
-fleet is not on PyPI; it installs from the repo.
+```bash
+curl -LsSf https://raw.githubusercontent.com/lion-zhang/fleet/main/install.sh | sh
+```
+
+On Windows, in PowerShell:
+
+```powershell
+powershell -ExecutionPolicy ByPass -c "irm https://raw.githubusercontent.com/lion-zhang/fleet/main/install.ps1 | iex"
+```
+
+The installer fetches [uv](https://docs.astral.sh/uv) if it is missing, installs fleet
+(the [agent-fleet](https://pypi.org/project/agent-fleet/) package; the command is
+`fleet`), puts it on the PATH of every new shell, and runs `fleet setup`: this machine
+becomes the center of a new fleet (§2), and every coding agent installed here learns to
+use it (§4). Run it again any time to upgrade; it leaves the fleet alone.
+
+Two options: `--join CODE` joins an existing fleet instead of starting one (§3), and
+`--no-setup` installs the command only. Pass them after `sh -s --`, e.g.
+`curl -LsSf …/install.sh | sh -s -- --no-setup`. On Windows, set `$env:FLEET_JOIN` or
+`$env:FLEET_NO_SETUP=1` first.
+
+Prefer to do it yourself? Any of these install the same thing:
 
 ```bash
-git clone git@github.com:lion-zhang/fleet.git
-uv tool install ./fleet
-uv tool update-shell            # puts uv's bin directory on PATH; then open a new shell
-fleet --version
+uv tool install agent-fleet && uv tool update-shell
+pipx install agent-fleet
 ```
 
 `uv tool update-shell` is not optional everywhere: on Ubuntu, root's shell never has
 `~/.local/bin` on its PATH, so without it `fleet` is installed and "command not found".
 
-Later, `fleet update` re-runs this on every machine that has fleet, from the clone you
-installed from. To re-install by hand after a `git pull`, use `uv tool install
---reinstall ./fleet` — `--force` alone keeps the old build, because the version number
-has not changed.
+To work on fleet itself, install from a clone: `git clone
+https://github.com/lion-zhang/fleet && uv tool install --editable ./fleet`. After a
+`git pull` a non-editable install needs `uv tool install --reinstall ./fleet` — `--force`
+alone keeps the old build, because the version number has not changed.
 
 ## 2. Create the fleet
 
-Do this **first**. A machine is added *to* a fleet, so the fleet has to exist — `fleet
-add` refuses on a machine that is in none, and says so.
+A machine is added *to* a fleet, so the fleet has to exist first. You rarely have to do
+this by hand: the installer does it, and so does the first `fleet ls`, `show`, `top`,
+`add`, `invite`, `access`, `center` or `setup` on a machine that is in no fleet, or the
+first time an agent starts `fleet mcp` there. It happens once, and says so in a line.
+It never happens on a machine being made a member (`fleet join`, `fleet install`, `fleet
+sync`), and `FLEET_NO_AUTO_CENTER=1` turns it off. By hand it is:
 
 ```bash
 fleet center --init
 ```
 
+A fleet started that way that is still empty — only this machine, no grants — steps aside
+when you `fleet join` another one, so starting one by accident costs nothing.
+
 The machine you run this on is now **the center**: the one that decides who may reach
 what, and the only one that can install or remove a key. Pick the machine you actually
 work from. A laptop is fine, and being closed half the day is expected.
 
-`--init` also installs a background service, so the center listens for machines that
+Starting a fleet also installs a background service, so the center listens for machines that
 refresh themselves (launchd on macOS, a systemd user unit on Linux, a scheduled task on
 Windows). A machine with no service manager — a container, most GPU rentals — says so,
 and there you keep `fleet center --listen` running yourself: tmux, `nohup fleet center
@@ -125,10 +151,12 @@ When the center cannot get in -- no key it holds works, and you would rather not
 password -- turn it round. On the center:
 
 ```bash
-fleet invite gpu-box            # prints: fleet join fleet1:...
+fleet invite gpu-box            # prints: fleet join fleet1:... (and an install line)
 ```
 
-and run what it prints on the new machine, which needs fleet installed. The machine
+and run what it prints on the new machine: `fleet join fleet1:…` where fleet is
+installed, or — where it is not — the one-line installer with `--join fleet1:…`, which
+it prints too. That installs fleet there as a member, never as a second center. The machine
 dials the center, is admitted, and puts the center's key in its own `authorized_keys`.
 No password, and nothing to approve afterwards: the invite *was* the approval.
 
@@ -171,12 +199,13 @@ Each skill goes where that agent actually looks, which is not always the same pl
 **Clients without a shell** get `fleet mcp` registered as an MCP server instead, merged
 into their own config beside whatever servers are already there — Claude Desktop, VS Code,
 Cursor and Windsurf. Only the ones actually installed are touched, and a config fleet
-cannot parse is left alone and reported rather than rewritten. That half needs the
-optional extra:
+cannot parse is left alone and reported rather than rewritten. The MCP server is part of
+every install.
 
-```bash
-uv tool install --reinstall './fleet[mcp]'   # from where you cloned fleet
-```
+**Installing from inside an agent instead** — a Claude Code plugin, a Gemini CLI
+extension, `codex mcp add`, a one-click button — is covered by the table in the
+[README](../README.md#or-install-from-inside-your-agent). Those launch `uvx agent-fleet
+mcp`, or ship a skill that tells the agent how to install the CLI when it is missing.
 
 Supporting another agent is one entry in `AGENTS` (or `MCP_CLIENTS`) in `setup.py`. The
 paths are a table, not code.

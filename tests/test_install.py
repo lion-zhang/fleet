@@ -369,7 +369,7 @@ def test_a_windows_device_gets_powershell_not_sh():
 
     script = install_script("https://github.com/x/y.git", platform=WINDOWS)
     assert "$ErrorActionPreference" in script
-    assert "uv tool install --force --reinstall-package fleet-broker" in script
+    assert "uv tool install --force --reinstall-package agent-fleet" in script
     assert "crontab" not in script, "Windows never had the timer this cleans up"
 
 
@@ -536,6 +536,18 @@ def test_the_repo_is_found_from_the_clone_an_install_left(tmp_path, monkeypatch)
     # as if the package were installed somewhere with no repo around it
     monkeypatch.setattr(cli, "__file__", str(tmp_path / "site-packages" / "fleet" / "cli.py"))
     assert cli.configured_repo() == "https://example.invalid/fleet.git"
+
+
+def test_installed_from_pypi_the_repo_is_the_one_it_was_published_from(tmp_path, monkeypatch):
+    """No clone anywhere: installed with `uv tool install agent-fleet` or install.sh."""
+    from fleet import cli
+    from fleet.config import Config
+
+    monkeypatch.setattr(cli, "load_config", lambda: Config({}))
+    monkeypatch.setattr(cli, "install_source", lambda: None)
+    monkeypatch.setattr(cli.Path, "home", staticmethod(lambda: tmp_path))
+    monkeypatch.setattr(cli, "__file__", str(tmp_path / "site-packages" / "fleet" / "cli.py"))
+    assert cli.configured_repo() == "https://github.com/lion-zhang/fleet.git"
 
 
 def test_the_installer_offers_the_fleet_key(tmp_path, monkeypatch):

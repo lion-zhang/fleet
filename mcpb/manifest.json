@@ -1,0 +1,53 @@
+{
+  "manifest_version": "0.4",
+  "name": "fleet",
+  "display_name": "fleet",
+  "version": "0.5.0",
+  "description": "Every machine you have, for your coding agent: live GPU, VRAM, RAM and disk, and SSH.",
+  "long_description": "Lets Claude see every machine you have -- which GPUs are free, how much VRAM, RAM and disk -- and run commands on them over SSH. Runs the fleet CLI, which keeps its state on this machine; the first use makes this machine the center of a new fleet.",
+  "author": {
+    "name": "Lin Zhang",
+    "url": "https://github.com/lion-zhang"
+  },
+  "homepage": "https://github.com/lion-zhang/fleet",
+  "documentation": "https://github.com/lion-zhang/fleet",
+  "support": "https://github.com/lion-zhang/fleet/issues",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/lion-zhang/fleet"
+  },
+  "server": {
+    "type": "uv",
+    "entry_point": "server.py",
+    "mcp_config": {
+      "command": "uv",
+      "args": [
+        "run",
+        "--directory",
+        "${__dirname}",
+        "server.py"
+      ]
+    }
+  },
+  "compatibility": {
+    "platforms": [
+      "darwin",
+      "linux",
+      "win32"
+    ],
+    "runtimes": {
+      "python": ">=3.12"
+    }
+  },
+  "keywords": [
+    "gpu",
+    "inventory",
+    "ssh",
+    "remote",
+    "compute",
+    "mcp",
+    "homelab",
+    "mlops"
+  ],
+  "license": "MIT"
+}

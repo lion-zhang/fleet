@@ -52,6 +52,9 @@ def _sandbox_fleet_state(tmp_path_factory, monkeypatch):
     from fleet.ops import sync
 
     monkeypatch.setattr(sync, "post", lambda *a, **k: None, raising=False)
+    # The first run starts a fleet and writes agent skills into the home directory -- the
+    # real one, under test. Off unless a test turns it on (test_firstrun).
+    monkeypatch.setenv("FLEET_NO_AUTO_CENTER", "1")
     return root
 
 

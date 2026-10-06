@@ -1,3 +1,4 @@
+<!-- mcp-name: io.github.lion-zhang/fleet -->
 <div align="center">
 
 # fleet — GPU & machine inventory for coding agents
@@ -42,27 +43,53 @@ one SSH connection, POSIX `sh` or PowerShell, whichever answers.
 ## Quick start
 
 ```bash
-uv tool install git+https://github.com/lion-zhang/fleet
-uv tool update-shell                # put fleet on your PATH, then open a new shell
-
-fleet center --init                 # this machine starts the fleet
-fleet add "ssh root@gpu-box"        # probe, install a key, record -- one step
-fleet setup                         # teach Claude Code / Codex / Gemini / Hermes to use it
+curl -LsSf https://raw.githubusercontent.com/lion-zhang/fleet/main/install.sh | sh
 ```
 
-Then just ask your agent. Add machines with any SSH command you already use, or let a
-machine join by itself, with no password and even from behind NAT:
+On Windows: `powershell -ExecutionPolicy ByPass -c "irm https://raw.githubusercontent.com/lion-zhang/fleet/main/install.ps1 | iex"`
+
+That one line installs fleet, makes this machine the **center** of your fleet, and teaches
+every coding agent it finds here to use it. Then add machines:
 
 ```bash
-fleet invite gpu-box                # on the center: prints a one-time code
-fleet join fleet1:…                 # on the new machine
+fleet invite gpu-box                # prints one line to paste on the new machine
+fleet add "ssh root@gpu-box"        # or have this machine reach it: probe, key, record
 ```
 
-Want to look before installing? `uvx --from git+https://github.com/lion-zhang/fleet fleet show`
-describes the machine you are on — CPU, RAM, GPUs, disks, services — with nothing set up.
+The line `fleet invite` prints is the same installer with `--join fleet1:…` on the end:
+it installs fleet on the new machine as a **member** of this fleet, with no password and
+even from behind NAT. Where fleet is installed already, `fleet join fleet1:…` does the same.
 
-fleet is not on PyPI yet, so it installs from GitHub. ⭐ **Star or watch the repo** to hear
-when it is. The full walkthrough is in [docs/getting-started.md](docs/getting-started.md).
+Then just ask your agent.
+
+### Or install from inside your agent
+
+| Agent | Install | What it gets |
+|---|---|---|
+| **Claude Code** | `/plugin marketplace add lion-zhang/fleet` then `/plugin install fleet@fleet` | the fleet skill, and a start-up note on how to install the CLI if it is missing |
+| Claude Code, as MCP | `claude mcp add --scope user fleet -- uvx agent-fleet mcp` | fleet's tools over MCP |
+| **Codex CLI** | `codex mcp add fleet -- uvx agent-fleet mcp` | fleet's tools over MCP |
+| **Gemini CLI** | `gemini extensions install https://github.com/lion-zhang/fleet` | MCP tools and the skill |
+| **Claude Desktop** | download `fleet.mcpb` from the [latest release](https://github.com/lion-zhang/fleet/releases/latest) and open it | MCP tools |
+| **Cursor** | [![Add to Cursor](https://cursor.com/deeplink/mcp-install-dark.svg)](https://cursor.com/en/install-mcp?name=fleet&config=eyJjb21tYW5kIjoidXZ4IiwiYXJncyI6WyJhZ2VudC1mbGVldCIsIm1jcCJdfQ==) | MCP tools |
+| **VS Code** (Copilot agent mode) | [![Install in VS Code](https://img.shields.io/badge/VS_Code-Install_fleet-0098FF?logo=visualstudiocode&logoColor=white)](https://insiders.vscode.dev/redirect/mcp/install?name=fleet&config=%7B%22command%22%3A%22uvx%22%2C%22args%22%3A%5B%22agent-fleet%22%2C%22mcp%22%5D%7D) or `code --add-mcp '{"name":"fleet","command":"uvx","args":["agent-fleet","mcp"]}'` | MCP tools |
+| **Hermes**, **Windsurf** | install the CLI (above), then `fleet setup` | the skill / MCP tools |
+| OpenCode, Cline, Amp, Goose, … | `npx skills add lion-zhang/fleet` | the skill |
+| Any other MCP client | `{"command": "uvx", "args": ["agent-fleet", "mcp"]}` | MCP tools |
+
+Every row runs the same `fleet` from PyPI ([agent-fleet](https://pypi.org/project/agent-fleet/)),
+so the agents share one fleet. The skills need the CLI itself; if it is missing they say
+so and give the line above. MCP rows need only [uv](https://docs.astral.sh/uv/).
+
+As a plain Python tool: `uv tool install agent-fleet` or `pipx install agent-fleet`, then
+`fleet setup` to teach your agents. Want to look before installing anything?
+`uvx agent-fleet show` describes the machine you are on — CPU, RAM, GPUs, disks,
+services.
+
+However fleet arrives, the first command on a machine that is in no fleet makes it the
+center, once, and says so; an empty fleet started that way steps aside for `fleet join`.
+Set `FLEET_NO_AUTO_CENTER=1` to stop it. The full walkthrough is in
+[docs/getting-started.md](docs/getting-started.md).
 
 ## Let your coding agent run experiments on your servers
 
@@ -138,12 +165,9 @@ only its own marked region.
 <details>
 <summary><b>Use it as an MCP server</b> (Claude Desktop, Cursor, VS Code, Windsurf)</summary>
 
-Install with the MCP extra, then let `fleet setup` register it:
-
-```bash
-uv tool install --with 'mcp>=2' git+https://github.com/lion-zhang/fleet
-fleet setup
-```
+Every install includes the MCP server. With the CLI installed, `fleet setup` registers
+it with every desktop client it finds. Without it, use the rows in the install table
+above: they launch `uvx agent-fleet mcp`.
 
 Or add it to a client's config by hand — `mcpServers` for most clients, `servers` for
 VS Code. Use the full path that `which fleet` prints: a desktop app on macOS does not
@@ -170,7 +194,7 @@ by default, or with `--target codex` (or `hermes`, `gemini`) a marked region in 
 
 ## How it works
 
-- **One center decides.** The machine that ran `fleet center --init` is the only one that
+- **One center decides.** The machine you installed fleet on first is the only one that
   installs or removes keys. You can hand the role to another machine with `fleet center
   NAME`; every machine follows by itself.
 - **Enforced by sshd, not by fleet.** Grants are keys in `authorized_keys`, inside

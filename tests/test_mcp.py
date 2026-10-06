@@ -29,6 +29,8 @@ def test_a_launched_server_never_gets_the_bare_name(monkeypatch, tmp_path):
     exe.chmod(0o755)
     monkeypatch.setenv("PATH", str(exe.parent))
     monkeypatch.setattr(sys, "prefix", str(tmp_path / "other"))
+    import fleet.agents.registry as reg
+    monkeypatch.setattr(reg, "_found_by_a_fresh_shell", lambda: True)
 
     assert st.fleet_command() == "fleet", "a skill still gets the bare name"
     assert st.fleet_executable() == str(exe), "a config gets an absolute path"

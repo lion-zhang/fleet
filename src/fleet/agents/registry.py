@@ -13,6 +13,7 @@ installed on a machine where it plainly is.
 
 from __future__ import annotations
 
+import functools
 import os
 import shutil
 import sys
@@ -38,7 +39,39 @@ def fleet_command() -> str:
     not inherit that activation -- cannot see. Skip venv directories and keep walking:
     a real install further down PATH still means the bare name works everywhere.
     """
-    return "fleet" if _fleet_on_path() else str(_fallback_exe())
+    found = _fleet_on_path()
+    if found and _found_by_a_fresh_shell():
+        return "fleet"
+    if not found and _ephemeral():
+        return UVX
+    # The one on PATH by preference: uv's shim in ~/.local/bin outlives a reinstall's
+    # rebuilt environment, and reads as what it is.
+    return str(found or _fallback_exe())
+
+
+@functools.lru_cache(maxsize=1)
+def _found_by_a_fresh_shell() -> bool:
+    """Whether a shell that starts from nothing finds `fleet` by name.
+
+    Finding it on *our* PATH is not enough. The installer puts ~/.local/bin on its own
+    PATH before running setup, and agents often run commands through a plain `sh -c`
+    that inherits no such thing -- on Ubuntu, root's profile never adds ~/.local/bin at
+    all. A skill that says `fleet ls` there fails on its first command. So ask a login
+    shell with a bare environment; when it cannot find fleet, the skill carries the full
+    path, which is never wrong on the machine it was written for.
+    """
+    if sys.platform == "win32":
+        return True                         # PATH is per-user in the registry there
+    import subprocess
+
+    env = {"HOME": str(Path.home()), "PATH": "/usr/local/bin:/usr/bin:/bin",
+           "USER": os.environ.get("USER", ""), "LOGNAME": os.environ.get("LOGNAME", "")}
+    try:
+        p = subprocess.run(["sh", "-lc", "command -v fleet"], env=env, capture_output=True,
+                           text=True, timeout=5)
+    except (OSError, subprocess.SubprocessError):
+        return False
+    return p.returncode == 0 and bool(p.stdout.strip())
 
 
 
@@ -226,6 +259,29 @@ MCP_CLIENTS = (
 
 
 
+# What a skill or a client config says when fleet runs from a throwaway `uvx` environment
+# and is installed nowhere: the launcher itself, which builds that environment again.
+UVX = "uvx agent-fleet"
+
+
+def _ephemeral() -> bool:
+    """Whether we run from an environment `uvx` built in its cache, not an install.
+
+    `uvx agent-fleet mcp` is how the Gemini extension, the MCP registry and the one-click
+    buttons launch fleet. Writing that environment's path into a skill or a config would
+    point it at a directory uv may delete whenever its cache is cleaned.
+    """
+    return any(part.startswith("archive-v") for part in Path(sys.prefix).parts)
+
+
+def config_command() -> str:
+    """What to write into an MCP client's config: `fleet_executable`, unless fleet is
+    installed nowhere and runs from `uvx`, in which case the launcher (see `UVX`)."""
+    if not _fleet_on_path() and _ephemeral():
+        return UVX
+    return fleet_executable()
+
+
 def fleet_executable() -> str:
     """An absolute path to fleet, for anything launched outside a shell.
 
@@ -250,8 +306,12 @@ BY_NAME = {a.name: a for a in AGENTS}
 def package_version() -> str:
     """The installed version, never a hardcoded one, which would drift immediately."""
     from importlib.metadata import PackageNotFoundError, version
-    try:
-        return version("fleet-broker")
-    except PackageNotFoundError:            # running from a source tree, not installed
-        return "0.0.0"
+    # The distribution was `fleet-broker` until 0.5; a machine mid-update can still have
+    # only that installed.
+    for dist in ("agent-fleet", "fleet-broker"):
+        try:
+            return version(dist)
+        except PackageNotFoundError:
+            continue
+    return "0.0.0"                          # running from a source tree, not installed
 

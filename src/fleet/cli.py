@@ -27,9 +27,9 @@ from rich.text import Text
 from . import config as _cfg
 from . import reconcile as rec
 from . import service
-from .agents import (MCP_CLIENTS, TARGETS, detect_mcp_clients, detect_targets,
-                     fleet_command, fleet_executable, install, install_mcp,
-                     installed_mcp_clients, installed_targets, package_version,
+from .agents import (MCP_CLIENTS, TARGETS, config_command, detect_mcp_clients,
+                     detect_targets, fleet_command, fleet_executable, install,
+                     install_mcp, installed_mcp_clients, installed_targets, package_version,
                      stale_mcp_clients, stale_targets, uninstall, uninstall_mcp)
 from .config import DEFAULT_PORT, INVENTORY_PATH, load_config
 from .edit import apply_edits
@@ -116,6 +116,13 @@ def _this_machine(devices, what: str):
     return me
 
 
+def _first_run(command: str) -> None:
+    """On a machine in no fleet, start one here and teach the agents. See ops.firstrun."""
+    from .ops import firstrun
+
+    firstrun.maybe(command, lambda line: err.print(f"[green]✓[/green] {line}"))
+
+
 @app.command("ls")
 def cmd_ls(names: list[str] = typer.Argument(None, help="only these devices"),
            json_out: bool = typer.Option(False, "--json"),
@@ -128,6 +135,7 @@ def cmd_ls(names: list[str] = typer.Argument(None, help="only these devices"),
 
     [dim]Example:[/dim]  fleet ls --json
     """
+    _first_run("ls")
     ensure_fresh()
     rows = _rows(list(names) if names else None, refresh=refresh)
     if online:
@@ -171,6 +179,7 @@ def cmd_show(name: str = typer.Argument(None, help="defaults to this machine"),
 
     [dim]Example:[/dim]  fleet show machine_A
     """
+    _first_run("show")
     ensure_fresh()
     unrecorded = False
     if name is None:
@@ -298,6 +307,7 @@ def cmd_add(ssh_command: str = typer.Argument(None, help='e.g. "ssh -p 58418 roo
 
     [dim]Example:[/dim]  fleet add "ssh -p 58418 root@1.2.3.4"
     """
+    _first_run("add")
     if this_machine == bool(ssh_command):
         err.print("[red]Give an ssh command, or --self -- not both, not neither.[/red]")
         raise typer.Exit(2)
@@ -479,6 +489,8 @@ def cmd_invite(name: str = typer.Argument(None, help="what the machine will be c
 
     [dim]Example:[/dim]  fleet invite gpu-box --ttl 30m
     """
+    _first_run("invite")
+    from . import links
     from .state import invites as invites_mod
     from .ops.join import encode_code
 
@@ -547,8 +559,10 @@ def cmd_invite(name: str = typer.Argument(None, help="what the machine will be c
     code = encode_code(url, acc.center, invite.id, secret)
     serving = _listening(url)
     if _emit({"id": invite.id, "name": invite.name, "expires_at": invite.expires_at,
-              "code": code, "command": f"fleet join {code}", "center_url": url,
-              "listening": serving}, json_out):
+              "code": code, "command": f"fleet join {code}",
+              "install": links.install_line(code),
+              "install_windows": links.install_line_windows(code),
+              "center_url": url, "listening": serving}, json_out):
         return
     minutes = max(1, seconds // 60)
     console.print(f"[green]✓[/green] invite {invite.id}"
@@ -558,6 +572,12 @@ def cmd_invite(name: str = typer.Argument(None, help="what the machine will be c
     # print, not console.print: rich would wrap a long code across lines, and a code
     # that does not survive copy-paste is no code at all.
     print(f"    fleet join {code}\n")
+    # The machine may not have fleet yet. One line installs it *as a member*, so it
+    # never starts a fleet of its own first.
+    console.print("  [dim]no fleet there yet? this installs it and joins in one go:[/dim]\n")
+    print(f"    {links.install_line(code)}\n")
+    console.print("  [dim]Windows (PowerShell):[/dim]\n")
+    print(f"    {links.install_line_windows(code)}\n")
     console.print(f"  [dim]it will dial {url}; the center reaches it back over ssh, "
                   "so sshd must be running there[/dim]")
     if not serving:
@@ -769,7 +789,11 @@ def configured_repo() -> str:
             continue
         if out.returncode == 0 and out.stdout.strip():
             return out.stdout.strip()
-    return ""
+    # Installed from PyPI or by the one-line installer: no clone anywhere, and the
+    # repository it was published from is the one to deploy.
+    from . import links
+
+    return f"{links.REPO}.git"
 
 
 def _remote_platform_of(dev) -> str:
@@ -915,6 +939,7 @@ def _before_any_command(
     removes keys: `fleet ls` would have quietly mutated credentials across the fleet
     every few minutes, unsupervised, with every exception swallowed by design. Sync is
     explicit now.
+
     """
 
 
@@ -1171,6 +1196,7 @@ def cmd_top(name: str = typer.Argument(None, help="one device, instead of the wh
 
     [dim]Example:[/dim]  fleet top machine_A -i 1
     """
+    _first_run("top")
     cfg = load_config()
     devices = inv.live(inv.load())
     if name:
@@ -1468,6 +1494,7 @@ def cmd_access(target: str = typer.Argument(None, help="one machine, instead of 
 
     [dim]Example:[/dim]  fleet access machine_A --allow machine_B
     """
+    _first_run("access")
 
     if migrate:
         with _as_exit():
@@ -1658,39 +1685,12 @@ def cmd_center(name: str = typer.Argument(None, help="hand the role to this mach
         return
 
     if init:
-        key_path, pub = ensure_keypair()
-        devices = inv.load()
-        dev, res = onboard_self()
-        # Re-running --init must not rename this machine. Passing every existing name as
-        # taken counted its *own* record among them, so a second --init came back as
-        # "<name>-2" and pinned that into the access list while the inventory kept the
-        # first -- the exact name split seeding both from one object exists to prevent.
-        if existing := inv.find_exact(devices, dev.id):
-            dev.name = existing.name
-        else:
-            taken, base, n = inv.handles(devices), dev.name, 2
-            while dev.name in taken:
-                dev.name, n = f"{base}-{n}", n + 1
+        from .ops.firstrun import init_center
         try:
-            acc = acl.bootstrap(dev.name, pub, dev.id)
+            acc, dev = init_center()
         except acl.AccessError as exc:
             err.print(f"[red]{exc}[/red]")
             raise typer.Exit(2)
-        # Reflect the role in the inventory too. `is_center()` remains the authority --
-        # this field rides the merge and cannot be trusted for a decision -- but it is
-        # what `ls` and `top` draw the diamond from, and a center nobody can see in the
-        # table is the problem the glyph was added to solve.
-        dev.role = "center"
-        # Seed the inventory from the same object the access list was pinned from. Done
-        # separately the two derive a name each, and nothing reconciles them: the access
-        # list would keep answering to one name while `fleet show` knew the other. It
-        # also spares the user a `fleet add --self` they have no way to know they need.
-        devices, _ = inv.upsert(devices, dev)
-        inv.save(devices)
-        if res.snapshot is not None:
-            conn = store.connect()
-            store.record(conn, dev.id, res)
-            conn.close()
         console.print(f"[green]✓[/green] fleet {acc.fleet_id} started; "
                       f"{dev.name} is the center.")
         if not no_service:
@@ -1703,6 +1703,8 @@ def cmd_center(name: str = typer.Argument(None, help="hand the role to this mach
                       f"[bold]fleet center --pubkey[/bold][/dim]")
         return
 
+    if not (leave or dissolve or accept or export or name or cancel):
+        _first_run("center")               # a bare status check, on a machine in no fleet
     try:
         acc = acl.load()
     except acl.AccessError:
@@ -1814,7 +1816,7 @@ def _skills_note() -> str:
     try:
         root = Path.home()
         stale = stale_targets(root, fleet_command()) + stale_mcp_clients(
-            root, fleet_executable())
+            root, config_command())
     except Exception:
         return ""
     if not stale:
@@ -1927,6 +1929,8 @@ def cmd_setup(
 
     [dim]Example:[/dim]  fleet setup --dry-run
     """
+    if not (refresh or remove or dry_run):
+        _first_run("setup")
     root = Path.cwd() if project else Path.home()
     # MCP clients are a second namespace: a desktop app is registered, not written to.
     # `--project` never touches them -- their config is per-user, not per-repo.
@@ -1943,7 +1947,7 @@ def cmd_setup(
                           "[/dim]")
             return
         changes = (install(root, targets, fleet_command(), dry_run=dry_run, project=project)
-                   + install_mcp(root, clients, fleet_executable(), dry_run=dry_run))
+                   + install_mcp(root, clients, config_command(), dry_run=dry_run))
         changed = [c for c in changes if c.action != "unchanged"]
         for c in changed:
             console.print(f"  [green]{c.action:<9}[/green] {c.path}")
@@ -1979,7 +1983,7 @@ def cmd_setup(
     else:
 
         changes = (install(root, targets, cmd, dry_run=dry_run, project=project)
-                   + install_mcp(root, clients, fleet_executable(), dry_run=dry_run))
+                   + install_mcp(root, clients, config_command(), dry_run=dry_run))
 
     for c in changes:
         colour = {"created": "green", "updated": "green",
@@ -1988,9 +1992,10 @@ def cmd_setup(
     if dry_run:
         console.print("\n[dim]--dry-run: nothing was written.[/dim]")
     elif not remove and cmd != "fleet":
-        err.print(f"\n[yellow]fleet is not on your PATH[/yellow], so the skill points at "
-                  f"{cmd}.\n  Install it properly and re-run setup: "
-                  "[bold]uv tool install --editable .[/bold]")
+        err.print(f"\n[dim]A new shell here does not find `fleet` by name, so the "
+                  f"skill calls it by its full path, {cmd}. To use the short name: "
+                  "[bold]uv tool update-shell[/bold], then [bold]fleet setup[/bold] in a "
+                  "new terminal.[/dim]")
 
 
 @app.command("service", hidden=True)
@@ -2038,6 +2043,11 @@ def cmd_mcp():
     [dim]Example:[/dim]  fleet mcp
     """
 
+    from .ops import firstrun
+
+    # A desktop client launching this is someone using fleet here. The line goes to
+    # stderr, which clients log, because stdout is the protocol.
+    firstrun.maybe("mcp", lambda line: print(f"fleet: {line}", file=sys.stderr))
     try:
         serve_mcp()
     except McpUnavailable as exc:

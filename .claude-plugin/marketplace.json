@@ -1,0 +1,35 @@
+{
+  "name": "fleet",
+  "owner": {
+    "name": "Lin Zhang",
+    "url": "https://github.com/lion-zhang"
+  },
+  "metadata": {
+    "description": "fleet, as a Claude Code plugin."
+  },
+  "plugins": [
+    {
+      "name": "fleet",
+      "source": "./",
+      "description": "Every machine you have, for your coding agent: live GPU, VRAM, RAM and disk, and SSH.",
+      "version": "0.5.0",
+      "author": {
+        "name": "Lin Zhang",
+        "url": "https://github.com/lion-zhang"
+      },
+      "homepage": "https://github.com/lion-zhang/fleet",
+      "license": "MIT",
+      "keywords": [
+        "gpu",
+        "inventory",
+        "ssh",
+        "remote",
+        "compute",
+        "mcp",
+        "homelab",
+        "mlops"
+      ],
+      "category": "devops"
+    }
+  ]
+}

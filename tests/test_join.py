@@ -448,11 +448,27 @@ def test_a_machine_in_another_fleet_must_leave_first(joining, tmp_path):
         join_mod.join(_code(joining))
 
 
-def test_a_center_cannot_join(joining):
+def test_a_center_with_machines_cannot_join(joining):
     f = joining
     with being(f["c"]):
-        with pytest.raises(FleetError, match="center already"):
+        with pytest.raises(FleetError, match="other machines in it"):
             join_mod.join(_code(f))
+
+
+def test_the_empty_fleet_an_install_started_steps_aside_for_a_join(joining, monkeypatch, tmp_path):
+    """Every install makes its machine a center, so a machine meant to join someone
+    else's fleet is, by then, the center of an empty one."""
+    from fleet import service
+
+    f = joining
+    monkeypatch.setattr(service, "remove", lambda: "removed")
+    _, mine = _keypair(f["j"], "own")
+    acl.bootstrap("newbox", f["jpub"], "linux:machine-id:new")   # j's own empty fleet
+    assert acl.is_center()
+    out = join_mod.join(_code(f))
+    assert out["fleet_id"] == f["fleet_id"]
+    assert not acl.ACCESS_PATH.exists() and not acl.is_center()
+    assert acl.fingerprint(acl.trusted_center_pubkey()) == f["cfp"]
 
 
 # ------------------------------------------------------------------ the listener
@@ -493,6 +509,25 @@ def test_invite_prints_a_code_for_this_center(fleet_of_two, monkeypatch):
     parts = join_mod.decode_code(data["code"])
     assert parts["center"] == f["cfp"] and data["name"] == "gpu-1"
     assert data["command"] == f"fleet join {data['code']}"
+    # And the line for a machine that has no fleet yet: installs it as a member.
+    assert data["install"].endswith(f"install.sh | sh -s -- --join {data['code']}")
+    assert f"$env:FLEET_JOIN='{data['code']}'" in data["install_windows"]
+
+
+def test_invite_shows_the_install_line_whole(fleet_of_two, monkeypatch):
+    """Long lines, printed unwrapped: a code split across two lines does not paste."""
+    from typer.testing import CliRunner
+
+    from fleet import cli
+
+    monkeypatch.setattr(cli, "_listening", lambda url: True)
+    with being(fleet_of_two["c"]):
+        out = CliRunner().invoke(cli.app, ["invite"])
+    assert out.exit_code == 0, out.output
+    lines = [ln.strip() for ln in out.output.splitlines()]
+    code = next(ln for ln in lines if ln.startswith("fleet join "))[len("fleet join "):]
+    assert any(ln.startswith("curl -LsSf ") and ln.endswith(f"--join {code}") for ln in lines)
+    assert any(ln.startswith("$env:FLEET_JOIN=") and ln.endswith("| iex") for ln in lines)
 
 
 def test_invite_refuses_off_the_center(fleet_of_two):
