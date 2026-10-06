@@ -625,3 +625,22 @@ def test_the_same_machine_rebuilt_is_still_refused(fleet_of_two):
     request = join_mod.build_request(_me("box", "id:box"), invite_id=invite.id,
                                      secret=secret, key_path=f["jkey"], hostname="box")
     assert _ask(f, request)[0] == 409
+
+
+def test_a_name_that_will_not_resolve_does_not_stall_the_invite(monkeypatch):
+    """urlopen's timeout covers the connection, not the name lookup: on a real macOS
+    runner the center's `.local` name took 35s to resolve and every invite sat silent."""
+    import threading
+    import time
+    import urllib.request
+
+    from fleet import cli
+
+    release = threading.Event()
+    monkeypatch.setattr(urllib.request, "urlopen", lambda *a, **k: release.wait(30))
+    started = time.monotonic()
+    try:
+        assert cli._listening("http://slow.local:7373/sync", limit_s=0.3) is None
+        assert time.monotonic() - started < 2
+    finally:
+        release.set()

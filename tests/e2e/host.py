@@ -185,7 +185,15 @@ def main() -> int:
         except Exception as exc:                  # an HTTP error still means it answered
             return hasattr(exc, "code")
     up = any(answering() or time.sleep(2) for _ in range(10))
-    check("the service is listening on 7373", up, "nothing on 127.0.0.1:7373", required=False)
+    why = "nothing on 127.0.0.1:7373"
+    if not up:
+        from fleet import service
+        log = service.LOG_PATH()
+        why += f"; {log}: " + (log.read_text(errors="replace")[-1500:] if log.exists()
+                              else "no log")
+        if platform.system() == "Darwin":
+            why += "\n" + run(["launchctl", "print", f"gui/{os.getuid()}/io.fleet.center"])[1][-1500:]
+    check("the service is listening on 7373", up, why, required=False)
     if not up:
         listener = subprocess.Popen([FLEET, "center", "--listen"], stdout=subprocess.DEVNULL,
                                     stderr=subprocess.DEVNULL, stdin=subprocess.DEVNULL)

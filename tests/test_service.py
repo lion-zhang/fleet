@@ -385,3 +385,26 @@ def test_a_listener_started_by_hand_counts_as_serving(monkeypatch):
     monkeypatch.setattr(service, "_impl", lambda: (None, None, lambda: service.UNAVAILABLE))
     monkeypatch.setattr(service, "_answers", lambda port, **k: True)
     assert service.status(7373) == service.RUNNING
+
+
+def test_install_says_running_only_once_the_port_answers(monkeypatch):
+    """On a real macOS runner launchd took the agent, the install said "running", and
+    nothing listened on the port for as long as anyone looked."""
+    monkeypatch.setattr(service, "_impl", lambda: (lambda cmd, port: "running, and again "
+                                                   "at login (x.plist)",))
+    monkeypatch.setattr(service.time, "sleep", lambda s: None)
+    clock = iter(range(0, 1000))
+    monkeypatch.setattr(service.time, "monotonic", lambda: next(clock))
+    monkeypatch.setattr(service, "_answers", lambda port, **k: False)
+    said = service.install("fleet", 7373)
+    assert said.startswith("installed, but nothing answers on port 7373")
+    assert "fleet center --listen" in said
+
+    monkeypatch.setattr(service, "_answers", lambda port, **k: True)
+    assert service.install("fleet", 7373).startswith("running")
+
+
+def test_the_launchd_job_keeps_its_output_somewhere_a_person_can_read(tmp_path, monkeypatch):
+    monkeypatch.setattr(service, "LOG_PATH", lambda: tmp_path / "center-service.log")
+    plist = service._plist("/usr/local/bin/fleet", 7373)
+    assert f"<key>StandardErrorPath</key><string>{tmp_path / 'center-service.log'}" in plist

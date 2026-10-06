@@ -466,24 +466,37 @@ def _duration_s(text: str) -> int:
     return int(m.group(1)) * {"s": 1, "m": 60, "h": 3600, "d": 86400, "": 60}[m.group(2)]
 
 
-def _listening(sync_url: str) -> bool:
+def _listening(sync_url: str, limit_s: float = 5.0) -> bool | None:
     """Whether a listener answers where the invite will send the machine.
 
     Asked of the address itself, not of the service manager: a listener started by hand
     with `--listen` is not a service, and a service can report running while its port is
     closed -- either way the question the person needs answered is whether a join would
     get through.
+
+    None when the answer did not come within `limit_s`. urlopen's timeout covers the
+    connection, not the name lookup, and on a real macOS runner the center's own
+    `.local` name took 35 seconds to resolve -- every `fleet invite` sat silent that long.
     """
+    import threading
     import urllib.request
 
     from .ops.join import join_url
 
     health = join_url(sync_url)[: -len("/join")] + "/health"
-    try:
-        with urllib.request.urlopen(health, timeout=3) as resp:
-            return resp.status == 200
-    except Exception:
-        return False
+    answer: list[bool] = []
+
+    def ask() -> None:
+        try:
+            with urllib.request.urlopen(health, timeout=3) as resp:
+                answer.append(resp.status == 200)
+        except Exception:
+            answer.append(False)
+
+    t = threading.Thread(target=ask, daemon=True)
+    t.start()
+    t.join(limit_s)
+    return answer[0] if answer else None
 
 
 @app.command("invite")
@@ -597,7 +610,15 @@ def cmd_invite(name: str = typer.Argument(None, help="what the machine will be c
     print(f"    {links.install_line_windows(code)}\n")
     console.print(f"  [dim]it will dial {url}; the center reaches it back over ssh, "
                   "so sshd must be running there[/dim]")
-    if not serving:
+    if serving is None:
+        from urllib.parse import urlsplit
+
+        host = urlsplit(url).hostname or url
+        console.print(f"[yellow]![/yellow] {host} did not even resolve here within 5s, so "
+                      "the machine may not reach it either -- if it cannot, give it an "
+                      "address it can: [bold]fleet invite --url http://ADDRESS:7373/sync"
+                      "[/bold]")
+    elif not serving:
         console.print("[yellow]![/yellow] the center is not listening, so nothing can "
                       "join yet -- start it with [bold]fleet service install[/bold] or "
                       "[bold]fleet center --listen[/bold]")

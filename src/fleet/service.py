@@ -52,9 +52,19 @@ def _plist_path() -> Path:
     return Path.home() / "Library" / "LaunchAgents" / f"{LABEL}.plist"
 
 
+def LOG_PATH() -> Path:
+    from .config import STATE_DIR
+
+    return STATE_DIR / "center-service.log"
+
+
 def _plist(cmd: str, port: int) -> str:
     args = "".join(f"    <string>{a}</string>\n"
                    for a in (cmd, "center", "--listen", "--port", str(port)))
+    # Where launchd puts the listener's output. Without it an agent that dies at start-up
+    # leaves no trace anywhere a person would look.
+    log = LOG_PATH()
+    log.parent.mkdir(parents=True, exist_ok=True)
     return f"""<?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN"
   "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
@@ -66,6 +76,8 @@ def _plist(cmd: str, port: int) -> str:
 {args}  </array>
   <key>RunAtLoad</key><true/>
   <key>KeepAlive</key><true/>
+  <key>StandardOutPath</key><string>{log}</string>
+  <key>StandardErrorPath</key><string>{log}</string>
 </dict>
 </plist>
 """
@@ -357,7 +369,23 @@ def _impl():
 
 
 def install(cmd: str, port: int) -> str:
-    return _impl()[0](cmd, port)
+    """Install and start it, and say "running" only once the port answers.
+
+    The service manager's word is not enough: on a real macOS runner launchd accepted the
+    agent, the install said "running", and nothing listened on the port for as long as
+    anyone looked. Checked here the same way `status` checks.
+    """
+    said = _impl()[0](cmd, port)
+    if not said.startswith("running") or not port:
+        return said
+    deadline = time.monotonic() + 10
+    while time.monotonic() < deadline:
+        if _answers(port):
+            return said
+        time.sleep(0.5)
+    where = f"; its output is in {LOG_PATH()}" if sys.platform == "darwin" else ""
+    return (f"installed, but nothing answers on port {port} yet{where}. Until it does, "
+            + MANUAL)
 
 
 def remove() -> str:
