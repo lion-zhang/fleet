@@ -63,15 +63,20 @@ _POSIX_TAKE_TURN = (
     'exit 75; fi; sleep 0.1 2>/dev/null || sleep 1; done; '
 )
 
-# The Windows twin: a directory again, created with -ErrorAction Stop so that "already
-# there" is an error to retry on. One line, because `powershell -Command -` reads piped
-# input statement by statement. `$lk`, because the edit below loops over `$l`.
+# The Windows twin. Not a directory: PowerShell's New-Item checks for one and then
+# creates it, and .NET's create succeeds on a directory that is already there -- so two
+# edits could both "take" it, and one erased the other (found under real pwsh, 2 rounds
+# in 25). [IO.File]::Open with CreateNew is the exclusive create every OS provides. One
+# line, because `powershell -Command -` reads piped input statement by statement.
+# `$lk`, because the edit below loops over `$l`.
 _PS_TAKE_TURN = (
-    "$lk=\"$f.fleet.lock\"; $n=0; while($true){try{New-Item -ItemType Directory -Path $lk "
-    "-ErrorAction Stop|Out-Null;break}catch{$n++; if($n -gt 100 -and (Test-Path $lk) -and "
-    "((Get-Item $lk).LastWriteTime -lt (Get-Date).AddMinutes(-1))){Remove-Item $lk -Force "
-    "-ErrorAction SilentlyContinue;$n=0;continue}; if($n -gt 300){throw \"$f is being "
-    "edited by another fleet process\"}; Start-Sleep -Milliseconds 100}}\n"
+    "$lk=\"$f.fleet.lock\"; $n=0; while($true){try{"
+    "[IO.File]::Open($lk,'CreateNew','Write','None').Close();break}catch{$n++; "
+    "$it=Get-Item -LiteralPath $lk -ErrorAction SilentlyContinue; "
+    "if($n -gt 100 -and $it -and $it.LastWriteTime -lt (Get-Date).AddMinutes(-1)){"
+    "Remove-Item -LiteralPath $lk -Force -ErrorAction SilentlyContinue;$n=0;continue}; "
+    "if($n -gt 300){throw \"$f is being edited by another fleet process\"}; "
+    "Start-Sleep -Milliseconds 100}}\n"
 )
 
 
@@ -169,7 +174,10 @@ def powershell_sync_command(fleet_id: str, from_id: str, *, user: str = "",
         "$t=\"$f.fleet.$PID\"\n"
         "Set-Content -LiteralPath $t -Value $keep -Encoding ascii\n"
         "Move-Item -LiteralPath $t -Destination $f -Force\n"
-        "Remove-Item -LiteralPath $lk -Force -ErrorAction SilentlyContinue\n"
+        # Guarded: a failed last statement sets the exit code even when its error is
+        # silenced, and a release must never turn a good edit into a failure.
+        "if(Test-Path -LiteralPath $lk){Remove-Item -LiteralPath $lk -Force "
+        "-ErrorAction SilentlyContinue}\n"
         # inheritance:r first, or inherited ACEs survive and sshd still refuses the file
         + ("" if path else
            "icacls $f /inheritance:r /grant 'SYSTEM:F' 'Administrators:F' | Out-Null\n")
