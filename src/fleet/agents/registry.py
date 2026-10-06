@@ -108,6 +108,11 @@ def _fallback_exe() -> Path:
 
 
 
+# The skills folder most agents now read besides their own: Codex, Gemini CLI, Copilot
+# CLI, OpenCode, Kilo and Amp all list a skill placed here. Relative to the home root.
+SHARED_SKILL = ".agents/skills/fleet/SKILL.md"
+
+
 # Hermes organises skills into categories; the docs' own example for infrastructure
 # tooling is skills/devops/<name>/. fleet is inventory and remote execution, so devops.
 HERMES_CATEGORY = "devops"
@@ -141,6 +146,9 @@ class Agent:
     # %LOCALAPPDATA%\hermes there, and a skill in ~/.hermes was invisible to it.
     windows: tuple[str, str] | None = None
     env: str = ""                          # variable naming the agent's home, if it has one
+    # Skill files fleet used to write for this agent somewhere else. Ours outright, so
+    # they are removed once the skill is where the agent should read it.
+    moved: tuple[str, ...] = ()
 
     @property
     def marker(self) -> str:
@@ -175,10 +183,11 @@ class Agent:
     def stray_paths(self, root: Path, platform: str = "") -> list[Path]:
         """Where fleet may have written this agent's file before, other than where it
         belongs now -- the copy the agent cannot see, and must not see twice."""
-        if not self.windows and not self.env:
-            return []
         here = self.home_path(root, platform)
-        candidates = [root.joinpath(*self.home.split("/"))]
+        moved = [root.joinpath(*m.split("/")) for m in self.moved]
+        if not self.windows and not self.env:
+            return [m for m in moved if m != here]
+        candidates = [root.joinpath(*self.home.split("/")), *moved]
         if self.windows:
             candidates.append(root.joinpath(*self.windows[0].split("/"),
                                             *self._within().split("/")))
@@ -194,8 +203,11 @@ AGENTS = (
     # whether or not it is about machines. That is the reasoning the hermes entry below
     # already applies to SOUL.md; it holds here for the same reason. The old file is
     # listed as legacy so the block we left in it is taken back out.
-    Agent("codex", home=".codex/skills/fleet/SKILL.md", project="AGENTS.md",
-          legacy=(".codex/AGENTS.md",)),
+    # Now the shared ~/.agents/skills, which Codex reads beside ~/.codex/skills -- and
+    # reads both of without de-duplicating, so a copy in each was fleet twice. Checked
+    # with `codex debug prompt-input`, which shows what the model is given.
+    Agent("codex", home=f"{SHARED_SKILL}", project="AGENTS.md",
+          legacy=(".codex/AGENTS.md",), moved=(".codex/skills/fleet/SKILL.md",)),
     # Not SOUL.md: that is Hermes's system prompt, so a block there would cost tokens in
     # every conversation. Skills load only when a task needs them.
     # Its home is %LOCALAPPDATA%\hermes on Windows, and HERMES_HOME when that is set.
@@ -206,9 +218,21 @@ AGENTS = (
           project="AGENTS.md", skill="hermes",
           windows=("AppData/Local/hermes", f"skills/{HERMES_CATEGORY}/fleet/SKILL.md"),
           env="HERMES_HOME"),
-    # GEMINI.md belongs to the user, so it gets a marked region like AGENTS.md rather
-    # than being written wholesale.
-    Agent("gemini", home=".gemini/GEMINI.md", project="GEMINI.md"),
+    # The shared skill, not a region in ~/.gemini/GEMINI.md: that file is read into every
+    # session, and Gemini CLI also reads ~/.agents/skills -- so with Codex writing the
+    # skill there, Gemini was given fleet twice. The region is taken back out. In a repo
+    # it is still a marked region in GEMINI.md.
+    Agent("gemini", home=f"{SHARED_SKILL}", project="GEMINI.md",
+          legacy=(".gemini/GEMINI.md",)),
+    # Agents that read only the shared folder. Each was checked against the real CLI
+    # (`copilot skill list`, `opencode debug skill`, `kilo debug skill`, Amp's settings
+    # reference): all list a skill placed in ~/.agents/skills. One file serves them all;
+    # `fleet setup` writes it once however many of them are installed.
+    Agent("copilot", home=f"{SHARED_SKILL}", project=".github/skills/fleet/SKILL.md"),
+    Agent("opencode", home=f"{SHARED_SKILL}", project=f"{SHARED_SKILL}",
+          detect=".config/opencode"),
+    Agent("kilo", home=f"{SHARED_SKILL}", project=f"{SHARED_SKILL}", detect=".config/kilo"),
+    Agent("amp", home=f"{SHARED_SKILL}", project=f"{SHARED_SKILL}", detect=".config/amp"),
 )
 
 

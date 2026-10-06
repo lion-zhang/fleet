@@ -65,7 +65,10 @@ def test_refresh_touches_only_our_region_in_a_shared_file(tmp_path, monkeypatch)
     CliRunner().invoke(cli.app, ["setup", "--refresh"])
     text = agents_md.read_text()
     assert text.startswith("my own notes") and text.rstrip().endswith("more of mine")
-    assert "STALE-FLEET-TEXT" not in text and stamp("fleet") in text
+    # Gemini now reads the shared skill; the region it used to get is taken back out by
+    # the refresh an update runs, and the user's own text around it stays.
+    assert "STALE-FLEET-TEXT" not in text and BEGIN not in text
+    assert (home / ".agents" / "skills" / "fleet" / "SKILL.md").exists()
 
 
 def test_refresh_updates_an_mcp_entry_only_where_fleet_is_registered(tmp_path, monkeypatch):
