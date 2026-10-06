@@ -15,11 +15,12 @@ would slowly grow a second surface that answers differently -- which is the fail
 the other side: the CLI, not MCP, is the universal interface. So every tool here is a
 thin wrapper over the command a human would type, and the two cannot drift apart.
 
-The surface is deliberately the whole read side plus command execution, not a curated
-subset: an agent picks what it can use. What is missing is missing for a reason --
-`top` needs a terminal to be worth anything, and the irreversible commands (`rm`,
-`center --dissolve`, handing the role over) are the ones fleet's own agent instructions
-already reserve for a human.
+The surface is what a person may ask an agent to do by conversation: read the fleet, run
+work, add and invite machines, grant and revoke, tag. Writes go through the CLI, so they
+take their turn in the same queue as everyone else's. What is missing is missing for a
+reason -- `top` needs a terminal to be worth anything, and the irreversible commands
+(`rm`, `center --dissolve`, handing the role over) are the ones the skill reserves for a
+person.
 """
 
 from __future__ import annotations
@@ -49,28 +50,58 @@ def _fleet() -> str:
     return fleet_executable()
 
 
+_ANSI = None
+
+
+def _clean(text: str) -> str:
+    global _ANSI
+    import re
+
+    _ANSI = _ANSI or re.compile(r"\x1b\[[0-9;?]*[a-zA-Z]")
+    return _ANSI.sub("", text or "").strip()
+
+
+def _exec(args: list[str]):
+    """Run one fleet command. Never on this server's own stdin: that is the protocol
+    pipe, and a child reading it (an ssh session, a prompt) would eat the client's
+    messages."""
+    import os
+
+    env = {**os.environ, "NO_COLOR": "1", "TERM": "dumb", "COLUMNS": "200"}
+    return subprocess.run([_fleet(), *args], capture_output=True, text=True,
+                          timeout=TIMEOUT_S, stdin=subprocess.DEVNULL, env=env)
+
+
 def _run(args: list[str]) -> Any:
-    """Run one fleet command and return what it printed, parsed if it is JSON.
+    """Run one fleet command and return its result, parsed when it is JSON.
 
     Errors come back as a value rather than an exception: an agent needs to read what
     went wrong and say so, and an MCP error frame tends to surface as "the tool is
-    broken" when the honest answer is "that machine is switched off".
+    broken" when the honest answer is "that machine is switched off". The JSON is read
+    even when the command failed -- `fleet add` reports an enrolment that did not work
+    as a document and exit 1 -- and whatever fleet said on stderr comes along as
+    `notes` (how many machines could not be judged, why a grant is pending).
     """
     try:
-        p = subprocess.run([_fleet(), *args], capture_output=True, text=True,
-                           timeout=TIMEOUT_S)
+        p = _exec(args)
     except FileNotFoundError:
-        return {"error": "fleet is not installed on this machine"}
+        return {"ok": False, "error": "fleet is not installed on this machine"}
     except subprocess.TimeoutExpired:
-        return {"error": f"`fleet {' '.join(args)}` exceeded {TIMEOUT_S}s"}
-    out = (p.stdout or "").strip()
-    if p.returncode != 0:
-        return {"error": (p.stderr or out or f"exit {p.returncode}").strip()[-2000:],
-                "exit_code": p.returncode}
+        return {"ok": False, "error": f"`fleet {' '.join(args)}` exceeded {TIMEOUT_S}s"}
+    out, notes = (p.stdout or "").strip(), _clean(p.stderr)[-2000:]
     try:
-        return json.loads(out) if out else {}
+        data = json.loads(out) if out else {}
     except json.JSONDecodeError:
-        return {"output": out}
+        data = {"output": out[-4000:]}
+    if not isinstance(data, dict):
+        data = {"result": data}
+    if p.returncode != 0:
+        data = {**data, "ok": False, "exit_code": p.returncode}
+        if not out:
+            data["error"] = notes or f"exit {p.returncode}"
+    if notes and "error" not in data:
+        data["notes"] = notes
+    return data
 
 
 def build_server():
@@ -100,7 +131,18 @@ def build_server():
             "`alerts` is blocking: a rental flagged idle is costing money now, and a "
             "device reporting unattributed VRAM is not free. `status` is not a boolean "
             "-- auth_failed means the host is up and refused our key, which only the "
-            "center can fix."
+            "center can fix.\n\n"
+            "Ask rather than guess. Adding a machine needs how the user connects to it "
+            "(an ssh command); a grant needs which machine may reach which; if the "
+            "request does not say, ask -- never infer a machine from a partial name. "
+            "Never ask for, type or accept a password: if a machine takes no key, offer "
+            "`invite_machine` (one line the user pastes there) or the key `add_machine` "
+            "returns for the user to put on it. An invite code admits a machine: give it to the "
+            "user and nowhere else. Revoking, and anything that touches every machine, "
+            "is the user's call: ask first. Removing a machine, dissolving the fleet and "
+            "moving the center are not tools here -- tell the user the command.\n\n"
+            "`run_on_machine` returns within 120 seconds; start anything longer "
+            "detached (`nohup ... > log 2>&1 &`) and read the log later."
         ),
     )
 
@@ -128,12 +170,73 @@ def build_server():
         return _run(["show", *( [name] if name else [] ), "--json",
                      "--refresh" if refresh else "--no-refresh"])
 
-    @server.tool(description="Run one command on a machine and return its output. This "
-                             "is how work actually gets started -- fleet resolves the "
-                             "address and uses the fleet key, so never build an ssh "
-                             "command by hand.")
+    @server.tool(description="Run one command on a machine and return its output and "
+                             "exit code. This is how work actually gets started -- fleet "
+                             "resolves the address and uses the fleet key, so never build "
+                             "an ssh command by hand. Returns within 120 seconds: start "
+                             "long jobs detached (nohup ... > log 2>&1 &).")
     def run_on_machine(machine: str, command: str) -> Any:
-        return _run(["ssh", machine, "--", command])
+        try:
+            p = _exec(["ssh", machine, "--", command])
+        except subprocess.TimeoutExpired:
+            return {"ok": False, "error": f"still running after {TIMEOUT_S}s -- start it "
+                                          "detached with nohup and read its log"}
+        except FileNotFoundError:
+            return {"ok": False, "error": "fleet is not installed on this machine"}
+        return {"ok": p.returncode == 0, "exit_code": p.returncode,
+                "stdout": (p.stdout or "")[-8000:], "stderr": _clean(p.stderr)[-2000:]}
+
+    @server.tool(description="Add a machine to the fleet from how the user connects to "
+                             "it: an ssh command such as `ssh -p 40001 root@1.2.3.4`. Ask "
+                             "for it if the user did not give one. Key-based only: if the "
+                             "machine accepts no key from here, this says so and returns "
+                             "the key to put on it -- or use invite_machine. Never ask "
+                             "for a password.")
+    def add_machine(ssh_command: str, name: str | None = None,
+                    tags: list[str] | None = None) -> Any:
+        args = ["add", ssh_command, "--json"]
+        if name:
+            args += ["--name", name]
+        for t in tags or []:
+            args += ["--tag", t]
+        result = _run(args)
+        refused = result.get("enrolment") == "failed" or any(
+            w in str(result.get("error", "")).lower()
+            for w in ("permission denied", "auth", "password", "publickey"))
+        if refused:
+            # It answered and would not take our key: the way in that needs no password.
+            key = _run(["center", "--pubkey"])
+            result["next"] = ("the machine takes no key from here yet. Either put this "
+                              "key in its ~/.ssh/authorized_keys and add it again, or "
+                              "call invite_machine and give the user the line to paste "
+                              "there.")
+            result["center_pubkey"] = key.get("output", "")
+        return result
+
+    @server.tool(description="Let a machine join by itself: returns one line for the user "
+                             "to paste on it (`install` for macOS/Linux, `install_windows` "
+                             "for PowerShell; `command` where fleet is installed already). "
+                             "No password anywhere. Single use and short-lived; the code "
+                             "admits a machine, so give it to the user and nowhere else.")
+    def invite_machine(name: str | None = None, valid_for: str = "15m") -> Any:
+        return _run(["invite", *([name] if name else []), "--ttl", valid_for, "--json"])
+
+    @server.tool(description="Label a machine, or change what it costs per hour (for the "
+                             "idle-rental alert) or how it is reached. Tags are yours; "
+                             "measured facts such as cuda or vram-24g come from probes.")
+    def edit_machine(name: str, add_tags: list[str] | None = None,
+                     remove_tags: list[str] | None = None, cost_per_hour: float | None = None,
+                     ssh_command: str | None = None) -> Any:
+        args = ["edit", name, "--json"]
+        for t in add_tags or []:
+            args += ["--tag", t]
+        for t in remove_tags or []:
+            args += ["--untag", t]
+        if cost_per_hour is not None:
+            args += ["--cost", str(cost_per_hour)]
+        if ssh_command:
+            args += ["--ssh", ssh_command]
+        return _run(args)
 
     @server.tool(description="Who may reach what, and what has not landed yet. A row "
                              "that is not `present` is a grant still in flight, not one "
@@ -148,15 +251,22 @@ def build_server():
     def center_status() -> Any:
         return _run(["center", "--json"])
 
-    @server.tool(description="Let one machine reach another. Only the center can do "
-                             "this, and it takes effect on the next sync. Ask before "
-                             "calling it: access changes are the user's decision.")
+    @server.tool(description="Let one machine reach another over ssh. Applied on the "
+                             "spot; a machine that is off stays pending and is retried. "
+                             "Only the center can do this. Ask before calling it: access "
+                             "is the user's decision.")
     def grant_access(machine: str, may_be_reached_by: str, user: str = "root") -> Any:
         return _run(["access", machine, "--allow", may_be_reached_by,
                      "--user", user, "--json"])
 
-    @server.tool(description="Apply pending access changes and collect telemetry. Only "
-                             "the center can do this. Safe to repeat.")
+    @server.tool(description="Take that access away again, applied on the spot. Ask "
+                             "before calling it: the other machine loses its way in.")
+    def revoke_access(machine: str, reached_by: str, user: str = "root") -> Any:
+        return _run(["access", machine, "--deny", reached_by, "--user", user, "--json"])
+
+    @server.tool(description="Bring this machine up to date. On the center: apply "
+                             "pending access changes and collect telemetry. On a member: "
+                             "fetch a fresh copy from the center. Safe to repeat.")
     def sync_fleet() -> Any:
         return _run(["sync", "--json"])
 

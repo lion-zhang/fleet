@@ -127,8 +127,10 @@ def test_the_tools_mirror_the_cli():
     from fleet.mcpserver import build_server
 
     tools = {t.name for t in asyncio.run(build_server().list_tools())}
+    # what a person may ask for by conversation (docs/design/layers.md)
     assert {"list_machines", "show_machine", "run_on_machine", "show_access",
-            "center_status"} <= tools
+            "center_status", "add_machine", "invite_machine", "grant_access",
+            "revoke_access", "edit_machine", "sync_fleet"} <= tools
     # the irreversible ones stay with a human, as the agent instructions already say
     assert not {"remove_machine", "dissolve_fleet", "handover"} & tools
 
@@ -189,3 +191,47 @@ def test_an_empty_config_is_still_written(tmp_path):
     changes = st.install_mcp(tmp_path, ["vscode"], "/bin/fleet", platform="darwin")
     assert [c.action for c in changes] == ["created"]
     assert json.loads((cfg / "mcp.json").read_text())["servers"]["fleet"]
+
+
+def _fake_fleet(tmp_path, script: str):
+    exe = tmp_path / "fleet"
+    exe.write_text("#!/bin/sh\n" + script)
+    exe.chmod(0o755)
+    return str(exe)
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="POSIX stand-in for fleet")
+def test_json_is_read_even_when_the_command_failed(monkeypatch, tmp_path):
+    """`fleet add` reports an enrolment that did not work as a document and exit 1;
+    returning only stderr threw that document away."""
+    from fleet import mcpserver
+
+    fake = _fake_fleet(tmp_path, 'echo \'{"enrolment": "failed", "name": "gpu"}\'\n'
+                                 'echo "no key accepted" >&2\nexit 1\n')
+    monkeypatch.setattr(mcpserver, "_fleet", lambda: fake)
+    out = mcpserver._run(["add", "ssh root@gpu", "--json"])
+    assert out["enrolment"] == "failed" and out["ok"] is False and out["exit_code"] == 1
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="POSIX stand-in for fleet")
+def test_a_command_never_reads_the_protocol_pipe(monkeypatch, tmp_path):
+    """The server's stdin is the client's messages. A child that reads stdin -- an ssh
+    session, a prompt -- would consume them."""
+    from fleet import mcpserver
+
+    fake = _fake_fleet(tmp_path, 'if read line; then echo "{\\"read\\": true}"; '
+                                 'else echo "{\\"read\\": false}"; fi\n')
+    monkeypatch.setattr(mcpserver, "_fleet", lambda: fake)
+    assert mcpserver._run(["ls", "--json"]) == {"read": False}
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="POSIX stand-in for fleet")
+def test_what_fleet_says_on_stderr_reaches_the_agent(monkeypatch, tmp_path):
+    """`fleet ls --tag` says on stderr how many machines it could not judge; the skill
+    tells agents to report that, and through MCP it used to vanish."""
+    from fleet import mcpserver
+
+    fake = _fake_fleet(tmp_path, 'echo "[]"\necho "2 machines have no telemetry" >&2\n')
+    monkeypatch.setattr(mcpserver, "_fleet", lambda: fake)
+    out = mcpserver._run(["ls", "--json", "--tag", "cuda"])
+    assert out["result"] == [] and "no telemetry" in out["notes"]
