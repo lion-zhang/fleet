@@ -7,11 +7,14 @@ fleet and teaches every agent it finds there, in one step:
 curl -LsSf https://raw.githubusercontent.com/lion-zhang/fleet/main/install.sh | sh
 ```
 
-**Several agents on one machine is the normal case.** fleet is installed once per
-machine — one command, one inventory, one set of keys — and each agent only gets a small
-skill or MCP entry that points at it. Claude Code, Codex and a desktop app on the same
-machine all see the same fleet, and can use it at the same time: changes are written
-under a lock, so two agents editing at once never undo each other. Added an agent later?
+**Several agents on one machine is the normal case.** fleet has three layers
+([design](design/layers.md)): the **core** — the `fleet` command and its state, installed
+once per machine — a **skill** per agent, which is only text telling it how to use the
+command, and **MCP** for apps that cannot run commands, which runs the same command for
+them. Claude Code, Codex and a desktop app on one machine all use the same core, at the
+same time: reads never wait, and changes queue and are each applied to the state as it
+is, so two agents changing things at once never undo each other. Installing fleet again
+for another agent keeps the core that is already there. Added an agent later?
 `fleet setup` teaches it.
 
 This page is for adding fleet from inside one agent, or to an agent the installer does not
@@ -228,10 +231,13 @@ region.
 | Agent | What it gets |
 |---|---|
 | Claude Code | skill: `~/.claude/skills/fleet/SKILL.md` |
-| Codex | skill: `~/.codex/skills/fleet/SKILL.md` |
-| Gemini CLI | a marked region in `~/.gemini/GEMINI.md` |
+| Codex, Gemini CLI, Copilot CLI, OpenCode, Kilo, Amp | one shared skill: `~/.agents/skills/fleet/SKILL.md` — every one of them reads it (checked with each CLI), so it is written once |
 | Hermes | skill, in Hermes' own home |
 | Claude Desktop, Cursor, VS Code, Windsurf | the MCP server, merged into the app's own config |
+
+Older versions put Codex's skill in `~/.codex/skills` and a region in
+`~/.gemini/GEMINI.md`; the next `fleet update` (or `fleet setup --refresh`) moves them,
+so no agent ever reads fleet twice.
 
 `fleet setup --project` writes into the current repository instead:
 `.claude/skills/fleet/SKILL.md`, or with `--target codex` (or `hermes`, `gemini`) a marked

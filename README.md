@@ -34,8 +34,8 @@ curl -LsSf https://raw.githubusercontent.com/lion-zhang/fleet/main/install.sh | 
 
 <sub>Windows: `powershell -ExecutionPolicy ByPass -c "irm https://raw.githubusercontent.com/lion-zhang/fleet/main/install.ps1 | iex"`</sub>
 
-That is the whole setup. This machine becomes your fleet's **center**, and every coding
-agent installed on it learns fleet. From here on you say what you want in plain words —
+That is the whole setup. This machine becomes your fleet's **center**, and every
+[supported agent](docs/agents.md) installed on it learns fleet. From here on you say what you want in plain words —
 no commands to remember. When something is missing, the agent asks (illustrative):
 
 > **You:** add my new GPU server
@@ -146,9 +146,10 @@ that already has fleet to do it).
 <details>
 <summary><b>What does my agent actually get?</b></summary>
 
-Agents with a shell (Claude Code, Codex, Gemini CLI, …) get a skill that tells them the
-`fleet` commands; it costs nothing until a task needs a machine. Desktop apps (Claude
-Desktop, Cursor, VS Code, …) get an MCP server. The installer sets up whichever agents
+Agents with a shell (Claude Code, Codex, Gemini CLI, Copilot CLI, OpenCode, …) get a
+skill — text that tells them the `fleet` commands; it costs nothing until a task needs a
+machine. Apps that cannot run commands (Claude Desktop, Cursor, VS Code, …) get an MCP
+server that runs the same commands for them. The installer sets up the supported agents
 you have; [docs/agents.md](docs/agents.md) has the details for each.
 </details>
 

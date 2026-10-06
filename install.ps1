@@ -4,8 +4,8 @@
 # it on the machine you work from. Every other machine is a member.
 #
 #   powershell -ExecutionPolicy ByPass -c "irm https://raw.githubusercontent.com/lion-zhang/fleet/main/install.ps1 | iex"
-#       center (the default): installs fleet, starts a new fleet here, and teaches every
-#       coding agent installed here (Claude Code, Codex, Gemini CLI, ...) to use it.
+#       center (the default): installs fleet, starts a new fleet here, and teaches every supported
+#       agent installed here (Claude Code, Codex, Gemini CLI, ...) to use it.
 #
 #   $env:FLEET_JOIN='CODE'; irm https://raw.githubusercontent.com/lion-zhang/fleet/main/install.ps1 | iex
 #       member (in PowerShell): installs fleet and joins the fleet whose center printed

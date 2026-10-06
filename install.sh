@@ -6,7 +6,7 @@
 #
 #   curl -LsSf https://raw.githubusercontent.com/lion-zhang/fleet/main/install.sh | sh
 #       center (the default): installs fleet, starts a new fleet here, and teaches
-#       every coding agent installed here (Claude Code, Codex, Gemini CLI, ...) to use it.
+#       every supported agent installed here (Claude Code, Codex, Gemini CLI, ...) to use it.
 #
 #   curl -LsSf https://raw.githubusercontent.com/lion-zhang/fleet/main/install.sh | sh -s -- --join CODE
 #       member: installs fleet and joins the fleet whose center printed CODE
@@ -33,7 +33,7 @@ usage: install.sh [--join CODE] [--no-setup] [--force-core]
 Two modes: the center decides who may reach what; every other machine is a member.
 
   (nothing)     center: install fleet, start a new fleet on this machine, and teach
-                every coding agent installed here to use it
+                every supported agent installed here to use it
   --join CODE   member: install fleet and join the fleet whose center printed CODE
                 (`fleet invite`); FLEET_JOIN=CODE does the same
   --no-setup    install the command only; start or join nothing
