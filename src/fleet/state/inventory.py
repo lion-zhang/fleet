@@ -10,11 +10,11 @@ from __future__ import annotations
 
 import os
 import time
-import tempfile
 from pathlib import Path
 
 import yaml
-from filelock import FileLock, Timeout
+
+from .writes import QueueTimeout, atomic_write, turn
 
 from ..config import INVENTORY_PATH, ensure_dirs
 from ..models import Device, Kind
@@ -27,8 +27,9 @@ class InventoryError(RuntimeError):
     pass
 
 
-def _lock(path: Path) -> FileLock:
-    return FileLock(str(path) + ".lock", timeout=10)
+def _lock(path: Path):
+    """Writes take their turn, like every other state file (see state/writes.py)."""
+    return turn(path)
 
 
 def _identity(raw: str) -> str:
@@ -115,16 +116,9 @@ def _payload(devices: list[Device]) -> dict:
 
 
 def _write(devices: list[Device], path: Path) -> None:
-    """Atomic replace. The caller must already hold the lock."""
-    payload = _payload(prune_tombstones(devices))
-    fd, tmp = tempfile.mkstemp(dir=str(path.parent), prefix=".inventory-", suffix=".yaml")
-    try:
-        with os.fdopen(fd, "w") as fh:
-            yaml.safe_dump(payload, fh, sort_keys=False, allow_unicode=True, width=100)
-        os.replace(tmp, path)
-    except BaseException:
-        os.unlink(tmp)
-        raise
+    """Atomic replace. The caller must already hold the turn."""
+    atomic_write(path, yaml.safe_dump(_payload(prune_tombstones(devices)), sort_keys=False,
+                                      allow_unicode=True, width=100))
 
 
 def save(devices: list[Device], path: Path | None = None) -> None:
@@ -134,7 +128,7 @@ def save(devices: list[Device], path: Path | None = None) -> None:
     try:
         with _lock(path):
             _write(devices, path)
-    except Timeout as exc:
+    except QueueTimeout as exc:
         raise InventoryError("another fleet process is holding the inventory lock") from exc
 
 
@@ -143,9 +137,8 @@ def update(mutate, path: Path | None = None):
 
     save() prevents two writers interleaving; it does nothing about a writer holding a
     list it loaded minutes ago, which silently erases everything committed since. Sync
-    is exactly that writer -- it carries a snapshot across an SSH round trip -- and
-    auto-sync is spawned before the command that triggered it has even run, so a
-    `fleet add` lands squarely in the middle.
+    is exactly that writer -- it carries a snapshot across an SSH round trip -- and so
+    is any agent running `fleet add` or `fleet edit` beside another.
 
     `mutate(devices) -> (devices_to_write, result)`; returns (written, result).
     """
@@ -156,7 +149,7 @@ def update(mutate, path: Path | None = None):
             devices, result = mutate(load(path))
             _write(devices, path)
             return devices, result
-    except Timeout as exc:
+    except QueueTimeout as exc:
         raise InventoryError("another fleet process is holding the inventory lock") from exc
 
 

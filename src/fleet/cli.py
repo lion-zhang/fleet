@@ -753,12 +753,13 @@ def _route_known(dev) -> None:
         return
     if not acl.is_center(acc):
         return
-    changed = False
-    for meta in acc.keys.values():
-        if meta.get("device_id") == dev.id and meta.pop("no_route", None):
-            changed = True
+
+    def restore(current):
+        return any([meta.pop("no_route", None) for meta in current.keys.values()
+                    if meta.get("device_id") == dev.id])
+
+    _, changed = acl.update(restore)
     if changed:
-        acl.save(acc)
         console.print("  [dim]the center will manage it again from its next sweep[/dim]")
 
 
@@ -777,13 +778,13 @@ def _rename_in_access_list(dev, old_name: str) -> None:
         return
     if not acl.is_center(acc):
         return
-    changed = False
-    for meta in acc.keys.values():
-        if (dev.id and meta.get("device_id") == dev.id) or meta.get("name") == old_name:
-            meta["name"] = dev.name
-            changed = True
-    if changed:
-        acl.save(acc)
+
+    def rename(current):
+        for meta in current.keys.values():
+            if (dev.id and meta.get("device_id") == dev.id) or meta.get("name") == old_name:
+                meta["name"] = dev.name
+
+    acl.update(rename)
 
 
 def configured_repo() -> str:
@@ -1152,8 +1153,9 @@ def cmd_sync(serve: bool = typer.Option(False, "--serve",
     try:
         acc_here = acl.load()
         if acl.is_center(acc_here) and not _stepped_down(acc_here):
-            with _as_exit():
+            with _as_exit(), _chatter_to_stderr(json_out):
                 _sweep(devices)
+            _emit({"synced": "center", "machines": len(inv.live(inv.load()))}, json_out)
             return
     except acl.AccessError:
         pass                               # no access list here: a member, or no fleet yet
@@ -1165,8 +1167,10 @@ def cmd_sync(serve: bool = typer.Option(False, "--serve",
         before = acl.center_last_seen()
         _sync.ensure_fresh(force=True)
         if acl.center_last_seen() > before:
-            console.print(f"[green]✓[/green] up to date with the center "
-                          f"({len(inv.live(inv.load()))} machines)")
+            n = len(inv.live(inv.load()))
+            if _emit({"synced": "member", "machines": n}, json_out):
+                return
+            console.print(f"[green]✓[/green] up to date with the center ({n} machines)")
             return
         err.print(f"[yellow]The center did not answer at {acl.center_url()}.[/yellow] "
                   "Everything here keeps working from the last copy.")
@@ -1359,13 +1363,17 @@ def cmd_rm(name: str, yes: bool = typer.Option(False, "--yes", "-y")):
     try:
         acc = acl.load()
         if acl.is_center(acc) and not itself:
+            # The network work first, on a copy; then the change, to the list as it is
+            # by then. Saving the copy instead erased any grant made meanwhile.
             _, unreached = _remove_now(acc, dev)
-            fps = [fp for fp, m in acc.keys.items() if m.get("device_id") == dev.id]
-            for fp in fps:
-                acc.allow = [e for e in acc.allow if fp not in (e.src, e.dst)]
-                acc.keys.pop(fp, None)
-            if fps:
-                acl.save(acc)
+
+            def forget_keys(current):
+                for fp in [fp for fp, m in current.keys.items()
+                           if m.get("device_id") == dev.id]:
+                    current.allow = [e for e in current.allow if fp not in (e.src, e.dst)]
+                    current.keys.pop(fp, None)
+
+            acl.update(forget_keys)
     except acl.AccessError:
         pass
 
@@ -1573,27 +1581,38 @@ def cmd_access(target: str = typer.Argument(None, help="one machine, instead of 
         raise typer.Exit(2)
 
     if allow or deny:
+        def change(acc):
+            # Resolved and applied to the list as it is now, in turn with every other
+            # writer: two agents granting at once each keep their grant.
+            dst = _access_fp(acc, target)
+            src = _access_fp(acc, allow or deny)
+            done = (acl.grant(acc, src, dst, user=user) if allow
+                    else acl.revoke(acc, src, dst, user=user))
+            return src, dst, done
+
         try:
-            dst = _access_fp(current, target)
-            src = _access_fp(current, allow or deny)
-            changed = (acl.grant(current, src, dst, user=user) if allow
-                       else acl.revoke(current, src, dst, user=user))
+            current, (src, dst, changed) = acl.update(change)
         except acl.AccessError as exc:
             err.print(f"[red]{exc}[/red]")
             raise typer.Exit(2)
-        if changed:
-            acl.save(current)
         verb = "granted" if allow else "revoked"
-        console.print(f"[green]✓[/green] {verb} {current.name_of(src)} -> "
-                      f"{current.name_of(dst)}"
-                      + ("" if changed else "  [dim](already so)[/dim]"))
-        if changed:
-            # Applied here rather than left for a sweep. You have just said what you
-            # want, so telling you to run a second command to mean it was always a poor
-            # trade -- and for a revoke it is worse than that: a machine that waits to
-            # be asked would keep the key until it next happened to sync, which for an
-            # idle machine is never, while the peer losing access carries on using it.
-            _apply_now(current, src, dst, user, install=bool(allow))
+        # With --json, stdout is one document and nothing else: the progress lines go to
+        # stderr. An MCP client parses stdout, and text before the JSON made every grant
+        # it asked for come back unreadable.
+        with _chatter_to_stderr(json_out):
+            console.print(f"[green]✓[/green] {verb} {current.name_of(src)} -> "
+                          f"{current.name_of(dst)}"
+                          + ("" if changed else "  [dim](already so)[/dim]"))
+            if changed:
+                # Applied here rather than left for a sweep. You have just said what you
+                # want, so telling you to run a second command to mean it was always a
+                # poor trade -- and for a revoke it is worse than that: a machine that
+                # waits to be asked would keep the key until it next happened to sync,
+                # which for an idle machine is never, while the peer losing access
+                # carries on using it.
+                _apply_now(current, src, dst, user, install=bool(allow))
+        change_done = {"change": verb, "from": current.name_of(src),
+                       "to": current.name_of(dst), "user": user, "changed": changed}
 
     ledger = rec.load_ledger()
     rows = []
@@ -1607,7 +1626,8 @@ def cmd_access(target: str = typer.Argument(None, help="one machine, instead of 
                      "pending_s": (int(time.time()) - st.pending_since)
                                   if not st.converged and st.pending_since else 0,
                      "last_error": st.last_error})
-    if _emit({"center": current.name_of(current.center), "edges": rows}, json_out):
+    if _emit({"center": current.name_of(current.center), "edges": rows,
+              **(change_done if allow or deny else {})}, json_out):
         return
     if not rows:
         console.print("[dim]no access granted yet[/dim]")
@@ -2083,7 +2103,8 @@ def cmd_mcp():
 
     # A desktop client launching this is someone using fleet here. The line goes to
     # stderr, which clients log, because stdout is the protocol.
-    firstrun.maybe("mcp", lambda line: print(f"fleet: {line}", file=sys.stderr))
+    firstrun.maybe("mcp", lambda line: print(f"fleet: {Text.from_markup(line).plain}",
+                                             file=sys.stderr))
     try:
         serve_mcp()
     except McpUnavailable as exc:

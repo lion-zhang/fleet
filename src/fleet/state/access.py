@@ -34,6 +34,7 @@ import yaml
 
 from .. import config
 from ..config import CONFIG_DIR, STATE_DIR
+from .writes import atomic_write, turn
 
 # CONFIG_DIR and STATE_DIR are the *same directory* on macOS (platformdirs gives both as
 # ~/Library/Application Support/fleet). So every name here is globally distinct, and
@@ -171,17 +172,36 @@ def dumps(acc: Access) -> str:
 
 
 def save(acc: Access, path: Path | None = None) -> None:
-    """Write atomically, bumping the generation so a stale copy is recognisable."""
+    """Write atomically, bumping the generation so a stale copy is recognisable.
+
+    Prefer `update`: a save of a list loaded before some other work erases whatever
+    another fleet process changed in between.
+    """
     path = path or ACCESS_PATH
     acc.generation += 1
     if path == ACCESS_PATH:
         config.ensure_dirs()                # owner-only, before the authority lands in it
-    path.parent.mkdir(parents=True, exist_ok=True)
-    tmp = path.with_suffix(".tmp")
-    tmp.write_text(dumps(acc))
-    with suppress_oserror():
-        os.chmod(tmp, 0o600)           # the authority: owner-only, whatever the umask
-    os.replace(tmp, path)
+    atomic_write(path, dumps(acc))          # the authority: owner-only, whatever the umask
+
+
+def update(mutate, path: Path | None = None):
+    """Apply `mutate(access)` to the access list as it is now, in turn with every other
+    writer, and save it if it changed. Returns (access, whatever mutate returned).
+
+    The one way to change the list. Two agents granting at once used to each load the
+    list, add their grant and save -- and the later save erased the earlier grant (and a
+    lost *revoke* came back to life at the next sweep). Here each change is applied to
+    the list as the previous writer left it. Never do network work inside `mutate`: do
+    it first, then queue the small change.
+    """
+    path = path or ACCESS_PATH
+    with turn(path):
+        acc = load(path)
+        before = dumps(acc)
+        result = mutate(acc)
+        if dumps(acc) != before:
+            save(acc, path)
+        return acc, result
 
 
 def grant(acc: Access, src: str, dst: str, *, user: str = "root", note: str = "") -> bool:
@@ -487,6 +507,32 @@ def is_pinned(acc: Access, pubkey: str) -> bool:
     return bool(pubkey) and fingerprint(pubkey) in acc.keys
 
 
+def _read_yaml(path: Path) -> dict:
+    try:
+        data = yaml.safe_load(path.read_text()) or {}
+    except (OSError, yaml.YAMLError):
+        return {}
+    return data if isinstance(data, dict) else {}
+
+
+def _update_cache(change, cache_path: Path | None = None) -> None:
+    """Change this machine's record of its center, in turn with every other writer.
+
+    Several agents reading the fleet at once each refresh from the center and note what
+    they learned (when it answered, where it listens, its key). Each note is applied to
+    the record as it is now, so none erases another's -- and the trusted key, above all,
+    can never be lost to a half-written file and then re-learned from whoever answers.
+    `change(data)` edits the dict in place; nothing is written if it changed nothing.
+    """
+    path = cache_path or CACHE_PATH
+    with turn(path):
+        data = _read_yaml(path)
+        before = dict(data)
+        change(data)
+        if data != before:
+            atomic_write(path, yaml.safe_dump(data, sort_keys=False))
+
+
 def center_url(cache_path: Path | None = None) -> str:
     """Where this machine last learned the center listens, or ""."""
     path = cache_path or CACHE_PATH
@@ -497,20 +543,8 @@ def center_url(cache_path: Path | None = None) -> str:
 
 
 def note_center_url(url: str, cache_path: Path | None = None) -> None:
-    if not url:
-        return
-    path = cache_path or CACHE_PATH
-    try:
-        data = yaml.safe_load(path.read_text()) or {}
-    except (OSError, yaml.YAMLError):
-        data = {}
-    if data.get("center_url") == url:
-        return
-    data["center_url"] = url
-    path.parent.mkdir(parents=True, exist_ok=True)
-    tmp = path.with_suffix(".tmp")
-    tmp.write_text(yaml.safe_dump(data, sort_keys=False))
-    os.replace(tmp, path)
+    if url:
+        _update_cache(lambda data: data.__setitem__("center_url", url), cache_path)
 
 
 def trusted_center_pubkey(cache_path: Path | None = None) -> str:
@@ -528,17 +562,12 @@ def trusted_center_pubkey(cache_path: Path | None = None) -> str:
 
 
 def pin_center_pubkey(pubkey: str, cache_path: Path | None = None) -> None:
-    path = cache_path or CACHE_PATH
-    try:
-        data = yaml.safe_load(path.read_text()) or {}
-    except (OSError, yaml.YAMLError):
-        data = {}
-    data["center_pubkey"] = pubkey.strip()
-    data["pinned_at"] = int(time.time())
-    path.parent.mkdir(parents=True, exist_ok=True)
-    tmp = path.with_suffix(".tmp")
-    tmp.write_text(yaml.safe_dump(data, sort_keys=False))
-    os.replace(tmp, path)
+    def pin(data: dict) -> None:
+        if data.get("center_pubkey") != pubkey.strip():
+            data["center_pubkey"] = pubkey.strip()
+            data["pinned_at"] = int(time.time())
+
+    _update_cache(pin, cache_path)
 
 
 def unseal_first_contact(payload: str) -> str:
@@ -583,18 +612,12 @@ def center_last_seen(cache_path: Path | None = None) -> int:
 
 
 def note_center_seen(cache_path: Path | None = None) -> None:
-    path = cache_path or CACHE_PATH
-    try:
-        data = yaml.safe_load(path.read_text()) or {}
-    except (OSError, yaml.YAMLError):
-        data = {}
-    data["seen_at"] = int(time.time())
-    data.pop("unanswered_at", None)        # it answered: any backoff is over
-    data.pop("unanswered", None)
-    path.parent.mkdir(parents=True, exist_ok=True)
-    tmp = path.with_suffix(".tmp")
-    tmp.write_text(yaml.safe_dump(data, sort_keys=False))
-    os.replace(tmp, path)
+    def seen(data: dict) -> None:
+        data["seen_at"] = int(time.time())
+        data.pop("unanswered_at", None)    # it answered: any backoff is over
+        data.pop("unanswered", None)
+
+    _update_cache(seen, cache_path)
 
 
 def bootstrap(name: str, pubkey: str, device_id: str = "", *,
@@ -603,13 +626,16 @@ def bootstrap(name: str, pubkey: str, device_id: str = "", *,
     import uuid
 
     path = path or ACCESS_PATH
-    if path.exists():
-        raise AccessError(f"{path} already exists -- this fleet has a center already")
-    fp = fingerprint(pubkey)
-    acc = Access(fleet_id=fleet_id or uuid.uuid4().hex[:6], center=fp,
-                 keys={fp: {"name": name, "pubkey": pubkey.strip(),
-                            "device_id": device_id, "pinned_at": int(time.time())}})
-    save(acc, path)
+    # In turn, and checked inside it: two agents starting at once used to both see no
+    # list, and the second silently replaced the first one's fleet with another.
+    with turn(path):
+        if path.exists():
+            raise AccessError(f"{path} already exists -- this fleet has a center already")
+        fp = fingerprint(pubkey)
+        acc = Access(fleet_id=fleet_id or uuid.uuid4().hex[:6], center=fp,
+                     keys={fp: {"name": name, "pubkey": pubkey.strip(),
+                                "device_id": device_id, "pinned_at": int(time.time())}})
+        save(acc, path)
     return acc
 
 
@@ -675,17 +701,11 @@ def note_center_unanswered(cache_path: Path | None = None) -> None:
     `fleet ls` until it came back -- which is the sync outage the design says must cost
     freshness and nothing else.
     """
-    path = cache_path or CACHE_PATH
-    try:
-        data = yaml.safe_load(path.read_text()) or {}
-    except (OSError, yaml.YAMLError):
-        data = {}
-    data["unanswered_at"] = int(time.time())
-    data["unanswered"] = int(data.get("unanswered") or 0) + 1
-    path.parent.mkdir(parents=True, exist_ok=True)
-    tmp = path.with_suffix(".tmp")
-    tmp.write_text(yaml.safe_dump(data, sort_keys=False))
-    os.replace(tmp, path)
+    def unanswered(data: dict) -> None:
+        data["unanswered_at"] = int(time.time())
+        data["unanswered"] = int(data.get("unanswered") or 0) + 1
+
+    _update_cache(unanswered, cache_path)
 
 
 def center_retry_after(base_s: int, max_s: int, cache_path: Path | None = None) -> int:
@@ -714,20 +734,8 @@ def note_fleet_id(fleet_id: str, cache_path: Path | None = None) -> None:
     and the id is what names the blocks in its authorized_keys, which `--leave` must
     find to remove.
     """
-    if not fleet_id:
-        return
-    path = cache_path or CACHE_PATH
-    try:
-        data = yaml.safe_load(path.read_text()) or {}
-    except (OSError, yaml.YAMLError):
-        data = {}
-    if data.get("fleet_id") == fleet_id:
-        return
-    data["fleet_id"] = fleet_id
-    path.parent.mkdir(parents=True, exist_ok=True)
-    tmp = path.with_suffix(".tmp")
-    tmp.write_text(yaml.safe_dump(data, sort_keys=False))
-    os.replace(tmp, path)
+    if fleet_id:
+        _update_cache(lambda data: data.__setitem__("fleet_id", fleet_id), cache_path)
 
 
 def member_fleet_id(cache_path: Path | None = None) -> str:
@@ -751,11 +759,7 @@ def handover_chain(path: Path | None = None) -> list[dict]:
 
 
 def save_handover_chain(chain: list[dict], path: Path | None = None) -> None:
-    path = path or CHAIN_PATH
-    path.parent.mkdir(parents=True, exist_ok=True)
-    tmp = path.with_suffix(".tmp")
-    tmp.write_text(yaml.safe_dump({"chain": chain}, sort_keys=False))
-    os.replace(tmp, path)
+    atomic_write(path or CHAIN_PATH, yaml.safe_dump({"chain": chain}, sort_keys=False))
 
 
 def follow_chain(chain: list, trusted_pubkey: str) -> str:

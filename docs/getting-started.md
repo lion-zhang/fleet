@@ -49,7 +49,7 @@ powershell -ExecutionPolicy ByPass -c "irm https://raw.githubusercontent.com/lio
 The installer fetches [uv](https://docs.astral.sh/uv) if it is missing, installs fleet
 (the [agent-fleet](https://pypi.org/project/agent-fleet/) package; the command is
 `fleet`), puts it on the PATH of every new shell, and runs `fleet setup`: this machine
-becomes the center of a new fleet (§2), and every coding agent installed here learns to
+becomes the center of a new fleet (§2), and every supported agent installed here learns to
 use it (§4). Run it again any time to upgrade; it leaves the fleet alone.
 
 Two options: `--join CODE` installs a member of an existing fleet instead (§3), and
@@ -200,9 +200,11 @@ upgrade: `fleet install` and `fleet update` refresh what is already set up, on e
 machine they touch, and never add fleet to an agent you left alone. `fleet ls` says so
 if an agent here is reading an older description — `fleet setup --refresh` fixes that.
 
-**Agents with a shell** — Claude Code, Codex, Gemini CLI, Hermes — get a skill, which
-costs nothing until a task actually needs a machine. Where fleet owns the file it writes
-the whole thing; where you own it (`AGENTS.md`, `GEMINI.md`) it marks a region and leaves
+**Agents with a shell** — Claude Code, Codex, Gemini CLI, Copilot CLI, OpenCode, Kilo,
+Amp, Hermes — get a skill, which costs nothing until a task actually needs a machine.
+Claude Code reads its own `~/.claude/skills`; the next six all read the shared
+`~/.agents/skills`, so one file serves them. Where fleet owns the file it writes the whole
+thing; where you own it (`AGENTS.md`, `GEMINI.md` in a repo) it marks a region and leaves
 every other byte alone.
 
 Each skill goes where that agent actually looks, which is not always the same place on every OS: Hermes reads `%LOCALAPPDATA%\hermes` on Windows (or `$HERMES_HOME` wherever it is set), and fleet writes there — removing any copy it left in `~/.hermes` before, which Hermes could not see.

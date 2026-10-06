@@ -16,6 +16,7 @@ import re
 from contextlib import suppress
 from pathlib import Path
 
+from ..state.writes import replace_file
 from .registry import AGENTS, BY_NAME, TARGETS, Change
 from .usage import agents_block, hermes_skill_text, skill_text
 
@@ -93,10 +94,34 @@ def installed_targets(root: Path, *, project: bool = False) -> list[str]:
         try:
             text = path.read_text()
         except OSError:
-            continue
-        if path.name == "SKILL.md" or BEGIN in text:
+            text = None
+        if text is not None and (path.name == "SKILL.md" or BEGIN in text):
+            out.append(target)
+        elif not project and _left_behind(root, target):
+            # Taught at an older location -- ~/.codex/skills, a region in GEMINI.md. Still
+            # "set up", so a refresh moves it to where the agent reads it now, rather than
+            # leaving the old copy for ever.
             out.append(target)
     return out
+
+
+def _left_behind(root: Path, target: str) -> bool:
+    agent = BY_NAME.get(target)
+    if agent is None:
+        return False
+    for path in agent.stray_paths(root):
+        try:
+            if path.is_file() and "name: fleet" in path.read_text().split("---", 2)[1]:
+                return True
+        except (OSError, IndexError):
+            continue
+    for path in legacy_paths(root).get(target, []):
+        try:
+            if BEGIN in path.read_text():
+                return True
+        except OSError:
+            continue
+    return False
 
 
 def stale_targets(root: Path, cmd: str, *, project: bool = False) -> list[str]:
@@ -137,6 +162,9 @@ def install(root: Path, targets: list[str], cmd: str, *,
         # so writing twice is harmless, but reporting two changes for one file is a lie
         # about what happened.
         if path in seen:
+            # Written already for another agent that reads the same file -- but this
+            # agent's own old copies still have to go.
+            changes += _drop_legacy(root, target, seen, dry_run=dry_run)
             continue
         seen.add(path)
         current = path.read_text() if path.exists() else None
@@ -145,7 +173,7 @@ def install(root: Path, targets: list[str], cmd: str, *,
                   else "created" if current is None else "updated")
         if action != "unchanged" and not dry_run:
             path.parent.mkdir(parents=True, exist_ok=True)
-            path.write_text(desired)
+            replace_file(path, desired)
         changes.append(Change(target, path, action))
         changes += _drop_legacy(root, target, seen, dry_run=dry_run)
     return changes
@@ -193,7 +221,7 @@ def _drop_legacy(root: Path, target: str, seen: set[Path], *, dry_run: bool) -> 
             # Nothing but our region was ever in it -- that file existed because fleet
             # made it -- so leaving an empty one behind is litter, not caution.
             if stripped.strip():
-                path.write_text(stripped)
+                replace_file(path, stripped)
             else:
                 path.unlink()
         out.append(Change(target, path, "removed"))
@@ -212,6 +240,9 @@ def uninstall(root: Path, targets: list[str], *,
         # so writing twice is harmless, but reporting two changes for one file is a lie
         # about what happened.
         if path in seen:
+            # Written already for another agent that reads the same file -- but this
+            # agent's own old copies still have to go.
+            changes += _drop_legacy(root, target, seen, dry_run=dry_run)
             continue
         seen.add(path)
         if not path.exists():
@@ -235,7 +266,7 @@ def uninstall(root: Path, targets: list[str], *,
         stripped = remove_block(current)
         action = "removed" if stripped != current else "unchanged"
         if action == "removed" and not dry_run:
-            path.write_text(stripped)
+            replace_file(path, stripped)
         changes.append(Change(target, path, action))
     return changes
 

@@ -42,15 +42,28 @@ def ensure_keypair(path: Path | None = None) -> tuple[Path, str]:
     match them by and no way to find them again. Same rule, and same reason, as the age
     identity this replaces.
     """
-    import socket
-    import subprocess
-
     path = path or config.FLEET_KEY     # at call time: a redirected key must be the one made
     pub = path.with_suffix(".pub")
     if path.exists() and pub.exists():
         return path, pub.read_text().strip()
 
+    from ..state.writes import turn
+
     path.parent.mkdir(parents=True, exist_ok=True)
+    # In turn, and looked at again inside it. Two agents starting fleet at once used to
+    # race here: the second saw the first one's private key before its .pub existed,
+    # took it for an interrupted run, deleted it, and made its own -- after which the
+    # first pinned a public key whose private half was gone.
+    with turn(path):
+        if path.exists() and pub.exists():
+            return path, pub.read_text().strip()
+        return _make_keypair(path, pub)
+
+
+def _make_keypair(path: Path, pub: Path) -> tuple[Path, str]:
+    import socket
+    import subprocess
+
     # ssh-keygen refuses to overwrite, which is the behaviour we want, but a half-made
     # pair from an interrupted run would wedge it forever. Clear only that case.
     if path.exists() or pub.exists():

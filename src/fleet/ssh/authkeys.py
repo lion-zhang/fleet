@@ -48,6 +48,38 @@ def block(fleet_id: str, from_id: str, user: str, pubkey: str) -> str:
     ])
 
 
+# Two edits of one authorized_keys at once -- two fleet processes granting on the same
+# machine, or the member itself joining while the center sweeps it -- each read the file,
+# and the later `mv` erased the earlier edit while both reported success. A directory is
+# the one lock every POSIX shell can take atomically (macOS has no flock(1)). It is held
+# for the read-edit-rename only, and one left behind by a killed edit is taken over after
+# a minute. Gives up, loudly, after about half a minute.
+_POSIX_TAKE_TURN = (
+    'l="$f.fleet.lock"; n=0; '
+    'while ! mkdir "$l" 2>/dev/null; do n=$((n+1)); '
+    'if [ $n -gt 100 ] && [ -n "$(find "$l" -prune -mmin +1 2>/dev/null)" ]; then '
+    'rmdir "$l" 2>/dev/null; n=0; continue; fi; '
+    'if [ $n -gt 300 ]; then echo "fleet: $f is being edited by another fleet process" >&2; '
+    'exit 75; fi; sleep 0.1 2>/dev/null || sleep 1; done; '
+)
+
+# The Windows twin. Not a directory: PowerShell's New-Item checks for one and then
+# creates it, and .NET's create succeeds on a directory that is already there -- so two
+# edits could both "take" it, and one erased the other (found under real pwsh, 2 rounds
+# in 25). [IO.File]::Open with CreateNew is the exclusive create every OS provides. One
+# line, because `powershell -Command -` reads piped input statement by statement.
+# `$lk`, because the edit below loops over `$l`.
+_PS_TAKE_TURN = (
+    "$lk=\"$f.fleet.lock\"; $n=0; while($true){try{"
+    "[IO.File]::Open($lk,'CreateNew','Write','None').Close();break}catch{$n++; "
+    "$it=Get-Item -LiteralPath $lk -ErrorAction SilentlyContinue; "
+    "if($n -gt 100 -and $it -and $it.LastWriteTime -lt (Get-Date).AddMinutes(-1)){"
+    "Remove-Item -LiteralPath $lk -Force -ErrorAction SilentlyContinue;$n=0;continue}; "
+    "if($n -gt 300){throw \"$f is being edited by another fleet process\"}; "
+    "Start-Sleep -Milliseconds 100}}\n"
+)
+
+
 def posix_sync_command(fleet_id: str, from_id: str, *, user: str = "",
                        pubkey: str | None = None, path: str = "") -> str:
     """Drop our block, then optionally append a fresh one. Idempotent either way.
@@ -69,6 +101,7 @@ def posix_sync_command(fleet_id: str, from_id: str, *, user: str = "",
     return (
         # umask before mkdir: sshd ignores a group-writable ~/.ssh, silently.
         f"umask 077; f={target}; mkdir -p \"$(dirname \"$f\")\"; "
+        + _POSIX_TAKE_TURN +
         f"t=\"$f.fleet.$$\"; : >> \"$f\"; "
         f"awk -v b={shlex.quote(begin)} -v e={shlex.quote(end)} "
         "'index($0,e)==1{s=0;next} "
@@ -79,7 +112,8 @@ def posix_sync_command(fleet_id: str, from_id: str, *, user: str = "",
         "s&&index($0,\"# fleet:\")==1{s=0} "
         "index($0,b)==1{s=1;next} !s' \"$f\" > \"$t\" && "
         + append +
-        "mv \"$t\" \"$f\""
+        "mv \"$t\" \"$f\"; "
+        "r=$?; rmdir \"$l\" 2>/dev/null; [ $r -eq 0 ]"
     )
 
 
@@ -120,7 +154,12 @@ def powershell_sync_command(fleet_id: str, from_id: str, *, user: str = "",
            "if($admin){$f=Join-Path $env:ProgramData 'ssh\\administrators_authorized_keys'}"
            "else{$f=Join-Path $env:USERPROFILE '.ssh\\authorized_keys'}\n")
         +
-        "$d=Split-Path $f; if(!(Test-Path $d)){New-Item -ItemType Directory -Path $d|Out-Null}\n"
+        # -Force: another edit may create the directory between the test and the create.
+        "$d=Split-Path $f; if(!(Test-Path $d)){New-Item -ItemType Directory -Path $d -Force|Out-Null}\n"
+        # The file is created inside the turn, not before it: found by CI, eight edits of a
+        # file that did not exist yet all tried to create it, and all but one died on
+        # "already exists".
+        + _PS_TAKE_TURN +
         "if(!(Test-Path $f)){New-Item -ItemType File -Path $f|Out-Null}\n"
         "$lines=@(Get-Content -LiteralPath $f -ErrorAction SilentlyContinue)\n"
         f"$b='{begin}'; $e='{end}'\n"
@@ -135,6 +174,10 @@ def powershell_sync_command(fleet_id: str, from_id: str, *, user: str = "",
         "$t=\"$f.fleet.$PID\"\n"
         "Set-Content -LiteralPath $t -Value $keep -Encoding ascii\n"
         "Move-Item -LiteralPath $t -Destination $f -Force\n"
+        # Guarded: a failed last statement sets the exit code even when its error is
+        # silenced, and a release must never turn a good edit into a failure.
+        "if(Test-Path -LiteralPath $lk){Remove-Item -LiteralPath $lk -Force "
+        "-ErrorAction SilentlyContinue}\n"
         # inheritance:r first, or inherited ACEs survive and sshd still refuses the file
         + ("" if path else
            "icacls $f /inheritance:r /grant 'SYSTEM:F' 'Administrators:F' | Out-Null\n")

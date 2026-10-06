@@ -7,6 +7,8 @@ production, it removes the only way into a box.
 
 from __future__ import annotations
 
+import os
+import shutil
 import stat
 import subprocess
 import sys
@@ -203,3 +205,43 @@ def test_windows_takes_an_explicit_path_for_testing():
     real = powershell_sync_command(FID, SRC, user="lin", pubkey=KEY)
     assert "administrators_authorized_keys" in real
     assert "icacls" in real
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="POSIX twin")
+def test_simultaneous_edits_of_one_file_all_land(tmp_path):
+    """Two fleet processes granting on the same machine at once -- or the member joining
+    while the center sweeps it. Each edit read the file and the later rename erased the
+    earlier one, both reporting success."""
+    home = tmp_path / "home"
+    home.mkdir()
+    keys = [f"ssh-ed25519 AAAAkey{i} k{i}" for i in range(20)]
+    # fixed width, like the fingerprints real blocks carry: markers match by prefix
+    cmds = [posix_sync_command("f1", f"from{i:02d}", user="root", pubkey=k)
+            for i, k in enumerate(keys)]
+    procs = [subprocess.Popen(["sh", "-c", c], env={"HOME": str(home), "PATH": "/usr/bin:/bin"})
+             for c in cmds]
+    assert all(p.wait(60) == 0 for p in procs)
+    text = (home / ".ssh" / "authorized_keys").read_text()
+    assert all(k in text for k in keys), "every edit kept"
+    assert not list((home / ".ssh").glob("*.fleet.lock")), "and the turn released"
+
+
+@pytest.mark.skipif(not shutil.which("pwsh"), reason="needs PowerShell")
+def test_the_windows_twin_keeps_simultaneous_edits_too(tmp_path):
+    """Run for real under pwsh. The lock variable once shared a name with the edit's
+    loop variable, so the lock was never released and every other edit gave up."""
+    f = tmp_path / "authorized_keys"
+    keys = [f"ssh-ed25519 AAAAkey{i} k{i}" for i in range(8)]
+    env = {**os.environ, "DOTNET_SYSTEM_GLOBALIZATION_INVARIANT": "1"}
+    procs = []
+    for i, k in enumerate(keys):
+        p = subprocess.Popen(["pwsh", "-NoProfile", "-Command", "-"], stdin=subprocess.PIPE,
+                             stdout=subprocess.DEVNULL, env=env)
+        p.stdin.write(powershell_sync_command("f1", f"from{i:02d}", user="root", pubkey=k,
+                                              path=str(f)).encode())
+        p.stdin.close()
+        procs.append(p)
+    assert all(p.wait(120) == 0 for p in procs)
+    text = f.read_text()
+    assert all(k in text for k in keys)
+    assert not (tmp_path / "authorized_keys.fleet.lock").exists()

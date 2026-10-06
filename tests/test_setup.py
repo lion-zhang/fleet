@@ -201,12 +201,11 @@ def test_installing_twice_changes_nothing_the_second_time(tmp_path):
 def test_install_preserves_a_users_existing_agents_file(tmp_path):
     """A file the user owns belongs to them. We may add a region; we may not rewrite it.
 
-    Codex moved to a skill, so the home-level example here is GEMINI.md -- the rule is
-    about ownership, not about which agent happens to use a shared file this month."""
-    (tmp_path / ".gemini").mkdir()
-    agents = tmp_path / ".gemini" / "GEMINI.md"
+    At home every agent now gets a skill, so the example is the project GEMINI.md --
+    the rule is about ownership, not about which file an agent reads this month."""
+    agents = tmp_path / "GEMINI.md"
     agents.write_text("# My rules\n\nPrefer small commits.\n")
-    install(tmp_path, ["gemini"], "fleet")
+    install(tmp_path, ["gemini"], "fleet", project=True)
     text = agents.read_text()
     assert "Prefer small commits." in text
     assert BEGIN in text
@@ -235,9 +234,48 @@ def test_moving_codex_to_a_skill_takes_the_old_block_back_out(tmp_path):
     assert BEGIN in old.read_text()
 
     install(tmp_path, ["codex"], "fleet")
-    assert (tmp_path / ".codex" / "skills" / "fleet" / "SKILL.md").exists()
+    assert (tmp_path / ".agents" / "skills" / "fleet" / "SKILL.md").exists()
     assert BEGIN not in old.read_text(), "the old region is gone"
     assert "# Mine" in old.read_text(), "and the user's own text is not"
+
+
+def test_codex_reads_the_shared_skill_once(tmp_path):
+    """Codex reads ~/.codex/skills and ~/.agents/skills both, without de-duplicating:
+    the copy fleet used to write in the first is moved to the second, not repeated."""
+    from fleet.agents import skill_text
+
+    (tmp_path / ".codex").mkdir()
+    old = tmp_path / ".codex" / "skills" / "fleet" / "SKILL.md"
+    old.parent.mkdir(parents=True)
+    old.write_text(skill_text("fleet"))
+    install(tmp_path, ["codex"], "fleet")
+    assert not old.exists() and (tmp_path / ".agents/skills/fleet/SKILL.md").exists()
+
+
+def test_an_agent_sharing_the_skill_still_loses_its_old_copy(tmp_path):
+    """Found running `fleet setup` for real: Codex wrote the shared skill first, Gemini
+    was skipped as already done -- and so was taking its old region out of GEMINI.md,
+    which then gave Gemini fleet twice."""
+    from fleet.agents import agents_block, apply_block
+
+    for d in (".codex", ".gemini"):
+        (tmp_path / d).mkdir()
+    gemini_md = tmp_path / ".gemini" / "GEMINI.md"
+    gemini_md.write_text(apply_block("# mine\n", agents_block("fleet")))
+    install(tmp_path, ["codex", "gemini"], "fleet")
+    assert BEGIN not in gemini_md.read_text() and "# mine" in gemini_md.read_text()
+
+
+def test_one_shared_skill_for_every_agent_that_reads_the_shared_folder(tmp_path):
+    for d in (".codex", ".gemini", ".copilot", ".config/opencode", ".config/kilo",
+              ".config/amp"):
+        (tmp_path / d).mkdir(parents=True)
+    targets = detect_targets(tmp_path)
+    assert {"codex", "gemini", "copilot", "opencode", "kilo", "amp"} <= set(targets)
+    changes = install(tmp_path, targets, "fleet")
+    shared = tmp_path / ".agents" / "skills" / "fleet" / "SKILL.md"
+    assert [c.path for c in changes].count(shared) == 1, "written once, not six times"
+    assert shared.read_text().startswith("---\nname: fleet\n")
 
 
 def test_dry_run_reports_the_change_without_touching_the_disk(tmp_path):

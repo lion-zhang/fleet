@@ -256,6 +256,29 @@ def test_a_grant_is_applied_on_the_spot(a_center, monkeypatch):
     assert "applied on box" in r.output
 
 
+def test_a_grant_with_json_prints_one_document(a_center, monkeypatch):
+    """An MCP client parses stdout; the progress lines in front of the JSON made every
+    grant it asked for come back unreadable."""
+    import json
+
+    from typer.testing import CliRunner
+
+    from fleet import cli
+    from fleet import reconcile as rec
+
+    inv.save([Device(id="id:hub", name="hub", kind=Kind.PERMANENT, role="center"),
+              Device(id="id:box", name="box", kind=Kind.PERMANENT,
+                     endpoints=[{"target": "1.2.3.4", "user": "root", "port": 22}])],
+             inv.INVENTORY_PATH)
+    monkeypatch.setattr(rec, "apply_edge", lambda acc, edge, ep, **kw: (True, ""))
+    r = CliRunner().invoke(cli.app, ["access", "box", "--allow", "hub",
+                                     "--json"])
+    assert r.exit_code == 0, r.output
+    doc = json.loads(r.stdout)
+    assert doc["change"] == "granted" and doc["changed"] is True and doc["to"] == "box"
+    assert "applied on box" in r.stderr
+
+
 def test_a_revoke_reaches_the_target_without_waiting_to_be_asked(a_center, monkeypatch):
     """Lazy pull cannot carry a removal: a machine that waits to be asked would keep the
     key until it next happened to sync, which for an idle machine is never -- while the

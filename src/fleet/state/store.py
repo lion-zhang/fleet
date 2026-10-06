@@ -44,7 +44,17 @@ def connect(path: Path | None = None) -> sqlite3.Connection:
     conn.row_factory = sqlite3.Row
     conn.execute("PRAGMA journal_mode=WAL")
     conn.execute("PRAGMA busy_timeout=5000")
-    _migrate(conn)
+    # Two fleet processes opening the cache just after an upgrade used to both see the
+    # old shape and both alter it; the second died on "duplicate column name". One at a
+    # time, and the shape is checked again by whoever goes second.
+    conn.execute("BEGIN IMMEDIATE")
+    try:
+        _migrate(conn)
+    except BaseException:
+        conn.rollback()
+        raise
+    if conn.in_transaction:
+        conn.commit()
     conn.executescript(SCHEMA)
     return conn
 
@@ -110,6 +120,10 @@ def record(conn: sqlite3.Connection, device_id: str, res: ProbeResult, *,
     """Store a probe result. `source` is 'self' for one we ran, 'broadcast' for one
     relayed by the center for a device we cannot reach ourselves."""
     now = int(time.time())
+    if not conn.in_transaction:
+        # The read below and the write after it as one step: two processes probing the
+        # same machine each read the streak and wrote it +1, losing a failure.
+        conn.execute("BEGIN IMMEDIATE")
     prev = conn.execute("SELECT last_ok_at, fail_streak FROM device_state "
                         "WHERE device_id=? AND source=?", (device_id, source)).fetchone()
     # A failed probe degrades a device to "stale but known" -- last_ok_at is preserved

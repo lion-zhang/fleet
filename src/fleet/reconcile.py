@@ -22,6 +22,7 @@ import yaml
 
 from .state import access as acc_mod
 from .state.access import Access, AccessError
+from .state.writes import atomic_write, turn
 from .ssh.authkeys import sync_command
 from .ssh.cmd import run as sshrun
 from .ssh.cmd import Endpoint, build_argv
@@ -52,24 +53,53 @@ def _key(edge: tuple[str, str, str]) -> str:
     return ">".join(edge)
 
 
-def load_ledger(path: Path | None = None) -> dict[str, EdgeState]:
+class Ledger(dict):
+    """The ledger, remembering what it looked like when it was loaded.
+
+    A sweep loads the ledger, spends minutes reaching machines, and saves. Saved whole,
+    that erased every edge another fleet process recorded meanwhile -- a grant applied
+    by `fleet access` came back "unknown", or worse, an install recorded as present by a
+    sweep that had raced a revoke. Saving writes only the edges this copy changed, onto
+    the ledger as it is now.
+    """
+
+    base: dict[str, dict]
+
+    def __init__(self, *args, base: dict[str, dict] | None = None):
+        super().__init__(*args)
+        self.base = base if base is not None else {}
+
+
+def load_ledger(path: Path | None = None) -> Ledger:
     """Unlike the access list, a missing ledger is fine -- it means nothing has been
     observed yet, which is true on a fresh center and is not a dangerous belief."""
-    path = path or acc_mod.LEDGER_PATH
+    return _parse(path or acc_mod.LEDGER_PATH)
+
+
+def _parse(path: Path) -> Ledger:
     try:
         raw = yaml.safe_load(path.read_text()) or {}
     except (OSError, yaml.YAMLError):
-        return {}
-    return {k: EdgeState(**v) for k, v in (raw.get("edges") or {}).items()}
+        return Ledger()
+    edges = {k: EdgeState(**v) for k, v in (raw.get("edges") or {}).items()}
+    return Ledger(edges, base={k: asdict(v) for k, v in edges.items()})
 
 
 def save_ledger(ledger: dict[str, EdgeState], path: Path | None = None) -> None:
+    """Write the edges this copy changed onto the ledger as it is now, in turn with every
+    other writer. A ledger built from nothing (no `base`) has changed every edge."""
     path = path or acc_mod.LEDGER_PATH
-    path.parent.mkdir(parents=True, exist_ok=True)
-    tmp = path.with_suffix(".tmp")
-    tmp.write_text(yaml.safe_dump(
-        {"edges": {k: asdict(v) for k, v in ledger.items()}}, sort_keys=True))
-    os.replace(tmp, path)
+    base = getattr(ledger, "base", None)
+    with turn(path):
+        current = _parse(path) if base is not None else Ledger()
+        for k, st in ledger.items():
+            if base is None or base.get(k) != asdict(st):
+                current[k] = st
+        for k in (base or {}):
+            if k not in ledger:
+                current.pop(k, None)       # this copy dropped it
+        atomic_write(path, yaml.safe_dump(
+            {"edges": {k: asdict(v) for k, v in current.items()}}, sort_keys=True))
 
 
 def plan(acc: Access, ledger: dict[str, EdgeState]) -> dict[str, EdgeState]:
@@ -78,7 +108,7 @@ def plan(acc: Access, ledger: dict[str, EdgeState]) -> dict[str, EdgeState]:
     than disappearing, because "this key should not be there" is work, not silence."""
     now = int(time.time())
     wanted = acc.edges()
-    out = dict(ledger)
+    out = Ledger(ledger, base=getattr(ledger, "base", None))
     for edge in wanted:
         st = out.setdefault(_key(edge), EdgeState(pending_since=now))
         if st.desired != "present":
@@ -120,6 +150,34 @@ def _remote(ep: Endpoint, script: str, *, platform: str = "posix",
         # Callers that need what the far side *said*, not just whether it worked.
         return p.returncode == 0, (p.stdout or p.stderr or b"").decode(errors="replace")
     return p.returncode == 0, (p.stderr or p.stdout or b"").decode(errors="replace").strip()[-300:]
+
+
+def converge_edge(acc: Access, edge: tuple[str, str, str], ep: Endpoint, *,
+                  install: bool, platform: str = "posix",
+                  access_path: Path | None = None) -> tuple[bool, str, bool]:
+    """Make one machine match what the access list says *now*, not when we started.
+
+    Two fleet processes can change the same edge at once -- an agent grants while
+    another revokes, or a sweep planned minutes ago reaches a machine just after a
+    revoke. Each edit on the machine is atomic, but the order they land in is not ours
+    to choose, so a revoke could land first and the stale install after it, leaving a
+    key the list says is gone. So after each edit the list is read again, and if what it
+    wants changed meanwhile, the edit is made again. Whoever edits last has read the
+    newest list. Returns (ok, detail, whether the key is now meant to be installed).
+    """
+    for _ in range(3):
+        ok, detail = apply_edge(acc, edge, ep, install=install, platform=platform)
+        if not ok:
+            return ok, detail, install
+        try:
+            acc = acc_mod.load(access_path)
+        except AccessError:
+            return ok, detail, install     # no list here any more: nothing newer to obey
+        wanted = edge in acc.edges()
+        if wanted == install:
+            return ok, detail, install
+        install = wanted                   # it changed while we were connected
+    return ok, detail, install
 
 
 def apply_edge(acc: Access, edge: tuple[str, str, str], ep: Endpoint, *,
