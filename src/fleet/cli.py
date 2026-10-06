@@ -789,7 +789,11 @@ def configured_repo() -> str:
             continue
         if out.returncode == 0 and out.stdout.strip():
             return out.stdout.strip()
-    return ""
+    # Installed from PyPI or by the one-line installer: no clone anywhere, and the
+    # repository it was published from is the one to deploy.
+    from . import links
+
+    return f"{links.REPO}.git"
 
 
 def _remote_platform_of(dev) -> str:

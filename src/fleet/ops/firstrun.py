@@ -97,4 +97,26 @@ def maybe(command: str, say) -> bool:
     say(f"started fleet {acc.fleet_id} with {dev.name} as its center"
         + (f"; taught {', '.join(taught)} to use it" if taught else "")
         + f"  (to join another fleet instead: fleet join CODE)")
+    if svc := start_listening():
+        say(f"service: {svc}")
     return True
+
+
+def start_listening() -> str:
+    """What `fleet center --init` does next: the background service, so the center
+    answers invites and refreshes without anyone holding a terminal open. Returns what
+    the service manager said, or "" when it was not attempted.
+
+    Not from a `uvx` environment: the service would run a path uv may delete.
+    """
+    from .. import service
+    from ..agents import fleet_executable
+    from ..agents.registry import _ephemeral
+    from ..config import DEFAULT_PORT
+
+    if _ephemeral():
+        return ""
+    try:
+        return service.install(fleet_executable(), DEFAULT_PORT)
+    except Exception as exc:        # a center without its service still works
+        return f"not installed ({exc})"

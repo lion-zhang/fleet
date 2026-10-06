@@ -538,6 +538,18 @@ def test_the_repo_is_found_from_the_clone_an_install_left(tmp_path, monkeypatch)
     assert cli.configured_repo() == "https://example.invalid/fleet.git"
 
 
+def test_installed_from_pypi_the_repo_is_the_one_it_was_published_from(tmp_path, monkeypatch):
+    """No clone anywhere: installed with `uv tool install agent-fleet` or install.sh."""
+    from fleet import cli
+    from fleet.config import Config
+
+    monkeypatch.setattr(cli, "load_config", lambda: Config({}))
+    monkeypatch.setattr(cli, "install_source", lambda: None)
+    monkeypatch.setattr(cli.Path, "home", staticmethod(lambda: tmp_path))
+    monkeypatch.setattr(cli, "__file__", str(tmp_path / "site-packages" / "fleet" / "cli.py"))
+    assert cli.configured_repo() == "https://github.com/lion-zhang/fleet.git"
+
+
 def test_the_installer_offers_the_fleet_key(tmp_path, monkeypatch):
     """The same key the probe and `fleet ssh` offer. Without it the installer used
     whatever personal key the machine happened to have, so it worked from the laptop

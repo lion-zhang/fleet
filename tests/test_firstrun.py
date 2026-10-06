@@ -22,6 +22,7 @@ def fresh(tmp_path, monkeypatch):
         Device(id="id:me", name="laptop", kind=Kind.PERMANENT), ProbeResult(status=Status.OK)))
     taught = []
     monkeypatch.setattr(firstrun, "teach_agents", lambda: taught.append(1) or ["claude"])
+    monkeypatch.setattr(firstrun, "start_listening", lambda: "")
     return taught
 
 
@@ -62,3 +63,21 @@ def test_it_happens_once(fresh):
 def test_a_handover_is_not_mistaken_for_a_status_check(fresh):
     CliRunner().invoke(cli.app, ["center", "gpu-box"])
     assert not acl.ACCESS_PATH.exists()
+
+
+def test_the_center_it_starts_listens_like_an_init_one(fresh, monkeypatch):
+    """Without the service, the `fleet invite` that follows an install hands out a code
+    nothing can redeem: the center is not listening."""
+    said = []
+    monkeypatch.setattr(firstrun, "start_listening", lambda: said.append(1) or "running")
+    r = CliRunner().invoke(cli.app, ["ls"])
+    assert said == [1] and "service: running" in r.output
+
+
+def test_no_service_from_a_uvx_environment(monkeypatch, tmp_path):
+    from fleet import service
+    from fleet.agents import registry
+
+    monkeypatch.setattr(registry.sys, "prefix", str(tmp_path / "archive-v0" / "x"))
+    monkeypatch.setattr(service, "install", lambda *a: pytest.fail("installed a service"))
+    assert firstrun.start_listening() == ""
