@@ -316,3 +316,32 @@ def test_a_cost_can_be_set_and_cleared():
     assert "usd_per_hour" not in dev.cost
     with pytest.raises(ValueError):
         apply_edits(dev, usd_per_hour=-1)
+
+
+def test_two_agents_editing_at_once_keep_both_edits(tmp_path, monkeypatch):
+    """Found running two agents on one machine: twelve `fleet edit --tag` at once all
+    said done, and four tags survived. Each loaded the inventory, and whichever wrote
+    last erased the others. Here the other agent's edit lands between our load and our
+    write, deterministically."""
+    from fleet import cli
+    from fleet.state import inventory as inv
+    from fleet.cli import app
+
+    runner, path = _cli_env(tmp_path, monkeypatch, _dev())
+    real = cli.apply_edits
+    calls = []
+
+    def meanwhile(dev, **kw):
+        if not calls:
+            def other_agent(current):
+                current[0].tags = [*current[0].tags, "theirs"]
+                return current, None
+
+            inv.update(other_agent, path)
+        calls.append(1)
+        return real(dev, **kw)
+
+    monkeypatch.setattr(cli, "apply_edits", meanwhile)
+    result = runner.invoke(app, ["edit", "box", "--tag", "mine"])
+    assert result.exit_code == 0, result.output
+    assert {"theirs", "mine"} <= set(inv.load(path)[0].tags)

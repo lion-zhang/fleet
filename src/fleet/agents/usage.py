@@ -103,7 +103,8 @@ where to run them: report that to the user, nothing is queued.
 - `{cmd} rm NAME` -- remove another machine: its keys come off every other machine and
   the fleet's keys come off it, at once. Any machine may remove *itself*
 - `{cmd} invite [NAME]` -- let one machine join by itself: prints `{cmd} join CODE` to
-  run there. Single use; `--ttl 30m` for how long (default 15m), `--list` for what
+  run there, and one line that installs fleet and joins in one go on a machine that
+  has no fleet yet (`--json`: `command`, `install`, `install_windows`). Single use; `--ttl 30m` for how long (default 15m), `--list` for what
   became of recent ones, `--revoke ID` to withdraw one, `--url` when the machine must
   dial some other address than the one the center listens on. The code admits a
   machine, so hand it to the user and nowhere else: not into a file, a commit or a

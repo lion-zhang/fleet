@@ -345,19 +345,26 @@ def cmd_add(ssh_command: str = typer.Argument(None, help='e.g. "ssh -p 58418 roo
         _emit({"device": dev.name, "id": dev.id, "kind": dev.kind.value,
                "status": res.status.value}, True)
         return
-    devices, action = inv.upsert(devices, dev)
-    if tags := _tags(tag):
+    tags = _tags(tag) or []
+
+    def _record(current):
+        # Into the inventory as it is now, not as it was before the probe: another agent
+        # may have added or edited a machine in the seconds the probe took, and writing
+        # back the list loaded then would silently undo that.
+        current, action = inv.upsert(current, dev)
         # `upsert` matches on id, merges only endpoints and discards every other field of
         # the incoming record, so on a machine already known -- re-adding a rental whose
         # port moved, say -- the tags would be dropped without a word. Apply them to the
         # record that actually survived.
-        if survivor := inv.find_exact(devices, dev.id):
+        if tags and (survivor := inv.find_exact(current, dev.id)):
             apply_edits(survivor, add_tags=tags)
-            for t in tags:
-                if view_mod.is_fact_name(t):
-                    console.print(f"  [dim]note: {t!r} is also derived from telemetry — "
-                                  "kept, since a probe cannot see everything[/dim]")
-    inv.save(devices)
+        return current, action
+
+    devices, action = inv.update(_record)
+    for t in tags:
+        if view_mod.is_fact_name(t):
+            console.print(f"  [dim]note: {t!r} is also derived from telemetry — "
+                          "kept, since a probe cannot see everything[/dim]")
     if res.snapshot is not None or not res.ok:
         conn = store.connect()
         store.record(conn, dev.id, res)
@@ -672,14 +679,20 @@ def cmd_edit(name: str = typer.Argument(None, help="defaults to this machine"),
 
     endpoint = resolve_command(ssh_command) if ssh_command else None
     paths = [] if clear_disk_paths else (list(disk_path) if disk_path else None)
-    old_name = dev.name
+    old_name, dev_id = dev.name, dev.id
+
+    def _edit(target, current):
+        return apply_edits(target, name=new_name, alias=new_alias,
+                           add_tags=_tags(tag), drop_tags=_tags(untag),
+                           taken=inv.handles(current, excluding=target.id),
+                           endpoint=endpoint, disk_paths=paths,
+                           role=None if role == "center" else role,
+                           usd_per_hour=cost)
+
     try:
-        result = apply_edits(dev, name=new_name, alias=new_alias,
-                             add_tags=_tags(tag), drop_tags=_tags(untag),
-                             taken=inv.handles(devices, excluding=dev.id),
-                             endpoint=endpoint, disk_paths=paths,
-                             role=None if role == "center" else role,
-                             usd_per_hour=cost)
+        # A dry run on the copy loaded above, to refuse or report "nothing to change"
+        # before taking the lock.
+        result = _edit(dev, devices)
     except ValueError as exc:
         # apply_edits refuses in words -- a clashing alias, a name already taken -- and
         # those words are the whole answer. A traceback around them was not.
@@ -700,7 +713,19 @@ def cmd_edit(name: str = typer.Argument(None, help="defaults to this machine"),
         console.print(f"[dim]· nothing to change on {dev.name}.[/dim]")
         return
 
-    inv.save(devices)
+    def _apply(current):
+        # Again, on the inventory as it is now: two agents tagging one machine at once
+        # each loaded the same list, and whichever saved last erased the other's tag.
+        target = inv.find_exact(current, dev_id)
+        if target is None:
+            raise ValueError(f"{old_name} was removed meanwhile")
+        return current, (target, _edit(target, current))
+
+    try:
+        _, (dev, result) = inv.update(_apply)
+    except ValueError as exc:
+        err.print(f"[red]{exc}[/red]")
+        raise typer.Exit(2)
     if dev.name != old_name:
         _rename_in_access_list(dev, old_name)
     if endpoint is not None:
@@ -883,9 +908,14 @@ def cmd_install(name: str = typer.Argument(None,
     if role is None:
         role = dev.role
     if role != dev.role:
+        def _set_role(current):
+            if target := inv.find_exact(current, dev.id):
+                target.role = role
+                inv.touch(target)
+            return current, None
+
+        inv.update(_set_role)
         dev.role = role
-        inv.touch(dev)
-    inv.save(devices)
     # The role only when it is one: "gpu is now none" read as a sentence about the
     # machine rather than about a field nobody had asked to change.
     what = output.strip().splitlines()[-1] if output.strip() else "installed"
@@ -1339,8 +1369,11 @@ def cmd_rm(name: str, yes: bool = typer.Option(False, "--yes", "-y")):
     except acl.AccessError:
         pass
 
-    inv.remove(devices, dev)
-    inv.save(devices)
+    def _forget(current):
+        inv.remove(current, inv.find_exact(current, dev.id))
+        return current, None
+
+    inv.update(_forget)
     console.print(f"[green]✓[/green] removed {dev.name}")
     if unreached:
         console.print("  [yellow]not everything could be reached:[/yellow]")
