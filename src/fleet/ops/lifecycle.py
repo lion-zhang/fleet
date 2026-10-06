@@ -141,3 +141,35 @@ def leave(acc) -> None:
         subprocess.run(shell, input=script.encode(), capture_output=True)
     console.print(f"[green]✓[/green] removed fleet {acc.fleet_id}'s keys from this machine.")
     console.print("  [dim]the center will see this as unreachable until you tell it[/dim]")
+
+
+def retire_empty_center(acc) -> bool:
+    """Forget a fleet that never had anything in it, so this machine can join another.
+
+    Every install makes its machine a center (so fleet is useful at once), which means a
+    machine meant to join someone else's fleet is, by then, the center of an empty one.
+    Empty is the whole condition: no other machine pinned and no grant, so no key of
+    this fleet sits anywhere but here, and forgetting it strands nothing. A center with
+    machines in it must be dissolved or handed over deliberately -- never here.
+    """
+    if not acl.is_center(acc) or set(acc.keys) - {acc.center} or acc.allow:
+        return False
+    from .. import service
+    from ..state import invites
+
+    with suppress(Exception):
+        service.remove()                   # its listener would refuse to serve, forever
+    for path in (acl.ACCESS_PATH, acl.LEDGER_PATH, acl.CHAIN_PATH, acl.HANDING_PATH,
+                 invites.INVITES_PATH):
+        with suppress(OSError):
+            path.unlink()
+
+    def demote(current):
+        for d in current:
+            if d.role == "center":
+                d.role = "none"
+                inv.touch(d)
+        return current, None
+    inv.update(demote)
+    return True
+

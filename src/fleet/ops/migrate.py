@@ -35,7 +35,7 @@ def run() -> None:
         # escaped: rich reads a bare [migrate] as a style tag and silently eats it,
         # leaving the user an install command that does not install the reader
         err.print("  [dim]install the reader with [bold]uv tool install "
-                  r"'fleet-broker\[migrate]'[/bold][/dim]")
+                  r"'agent-fleet\[migrate]'[/bold][/dim]")
         raise FleetError("the migrate extra is not installed", code=2)
     if not data:
         console.print("[dim]nothing stored -- nothing to migrate[/dim]")

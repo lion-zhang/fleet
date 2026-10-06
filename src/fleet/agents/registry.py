@@ -13,6 +13,7 @@ installed on a machine where it plainly is.
 
 from __future__ import annotations
 
+import functools
 import os
 import shutil
 import sys
@@ -38,7 +39,32 @@ def fleet_command() -> str:
     not inherit that activation -- cannot see. Skip venv directories and keep walking:
     a real install further down PATH still means the bare name works everywhere.
     """
-    return "fleet" if _fleet_on_path() else str(_fallback_exe())
+    return "fleet" if _fleet_on_path() and _found_by_a_fresh_shell() else str(_fallback_exe())
+
+
+@functools.lru_cache(maxsize=1)
+def _found_by_a_fresh_shell() -> bool:
+    """Whether a shell that starts from nothing finds `fleet` by name.
+
+    Finding it on *our* PATH is not enough. The installer puts ~/.local/bin on its own
+    PATH before running setup, and agents often run commands through a plain `sh -c`
+    that inherits no such thing -- on Ubuntu, root's profile never adds ~/.local/bin at
+    all. A skill that says `fleet ls` there fails on its first command. So ask a login
+    shell with a bare environment; when it cannot find fleet, the skill carries the full
+    path, which is never wrong on the machine it was written for.
+    """
+    if sys.platform == "win32":
+        return True                         # PATH is per-user in the registry there
+    import subprocess
+
+    env = {"HOME": str(Path.home()), "PATH": "/usr/local/bin:/usr/bin:/bin",
+           "USER": os.environ.get("USER", ""), "LOGNAME": os.environ.get("LOGNAME", "")}
+    try:
+        p = subprocess.run(["sh", "-lc", "command -v fleet"], env=env, capture_output=True,
+                           text=True, timeout=5)
+    except (OSError, subprocess.SubprocessError):
+        return False
+    return p.returncode == 0 and bool(p.stdout.strip())
 
 
 
@@ -250,8 +276,12 @@ BY_NAME = {a.name: a for a in AGENTS}
 def package_version() -> str:
     """The installed version, never a hardcoded one, which would drift immediately."""
     from importlib.metadata import PackageNotFoundError, version
-    try:
-        return version("fleet-broker")
-    except PackageNotFoundError:            # running from a source tree, not installed
-        return "0.0.0"
+    # The distribution was `fleet-broker` until 0.5; a machine mid-update can still have
+    # only that installed.
+    for dist in ("agent-fleet", "fleet-broker"):
+        try:
+            return version(dist)
+        except PackageNotFoundError:
+            continue
+    return "0.0.0"                          # running from a source tree, not installed
 

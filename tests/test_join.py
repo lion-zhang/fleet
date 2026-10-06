@@ -448,11 +448,27 @@ def test_a_machine_in_another_fleet_must_leave_first(joining, tmp_path):
         join_mod.join(_code(joining))
 
 
-def test_a_center_cannot_join(joining):
+def test_a_center_with_machines_cannot_join(joining):
     f = joining
     with being(f["c"]):
-        with pytest.raises(FleetError, match="center already"):
+        with pytest.raises(FleetError, match="other machines in it"):
             join_mod.join(_code(f))
+
+
+def test_the_empty_fleet_an_install_started_steps_aside_for_a_join(joining, monkeypatch, tmp_path):
+    """Every install makes its machine a center, so a machine meant to join someone
+    else's fleet is, by then, the center of an empty one."""
+    from fleet import service
+
+    f = joining
+    monkeypatch.setattr(service, "remove", lambda: "removed")
+    _, mine = _keypair(f["j"], "own")
+    acl.bootstrap("newbox", f["jpub"], "linux:machine-id:new")   # j's own empty fleet
+    assert acl.is_center()
+    out = join_mod.join(_code(f))
+    assert out["fleet_id"] == f["fleet_id"]
+    assert not acl.ACCESS_PATH.exists() and not acl.is_center()
+    assert acl.fingerprint(acl.trusted_center_pubkey()) == f["cfp"]
 
 
 # ------------------------------------------------------------------ the listener

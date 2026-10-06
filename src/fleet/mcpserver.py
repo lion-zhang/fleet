@@ -71,20 +71,15 @@ def _run(args: list[str]) -> Any:
 
 
 def build_server():
-    """The MCP server, with the tools registered. Imported lazily: `mcp` is an extra."""
+    """The MCP server, with the tools registered. `mcp` is imported here, not at the top:
+    every other command should not pay for loading it."""
     try:
         from mcp.server.mcpserver import MCPServer
-    except ModuleNotFoundError as exc:     # pragma: no cover - depends on the extra
-        # fleet is not on PyPI, so the hint this used to give -- install
-        # 'fleet-broker[mcp]' by name -- failed as "unsatisfiable" for everyone. It has
-        # to come from the clone fleet was installed from, which uv recorded.
-        from .install import install_source
-
-        src = install_source()
-        where = f"'{src}[mcp]'" if src else "'./fleet[mcp]' (from where you cloned fleet)"
+    except ModuleNotFoundError as exc:     # pragma: no cover - mcp is a core dependency
+        # Only an install from before 0.5, when mcp was an optional extra, gets here.
         raise McpUnavailable(
-            f"the MCP extra is not installed -- `uv tool install --reinstall {where}`"
-        ) from exc
+            "the MCP SDK is missing -- this fleet predates it being included; "
+            "`uv tool install --reinstall agent-fleet`") from exc
 
     from .agents import package_version
 

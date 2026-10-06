@@ -369,7 +369,7 @@ def test_a_windows_device_gets_powershell_not_sh():
 
     script = install_script("https://github.com/x/y.git", platform=WINDOWS)
     assert "$ErrorActionPreference" in script
-    assert "uv tool install --force --reinstall-package fleet-broker" in script
+    assert "uv tool install --force --reinstall-package agent-fleet" in script
     assert "crontab" not in script, "Windows never had the timer this cleans up"
 
 

@@ -501,7 +501,8 @@ def test_reinitialising_does_not_rename_the_center(tmp_path, monkeypatch):
     subprocess.run(["ssh-keygen", "-t", "ed25519", "-N", "", "-q", "-f", str(key)], check=True)
     pub = key.with_suffix(".pub").read_text().strip()
     monkeypatch.setattr(enrol, "ensure_keypair", lambda *a, **k: (key, pub))
-    monkeypatch.setattr(cli, "onboard_self", lambda **k: (
+    monkeypatch.setattr(__import__("fleet.ssh.keys").ssh.keys, "ensure_keypair", lambda *a, **k: (key, pub))
+    monkeypatch.setattr(__import__("fleet.onboard").onboard, "onboard_self", lambda **k: (
         Device(id="id:me", name="beelink", kind=Kind.PERMANENT), ProbeResult(status=Status.OK)))
 
     runner = CliRunner()
@@ -584,7 +585,7 @@ def test_init_marks_the_center_in_the_inventory_too(tmp_path, monkeypatch):
     subprocess.run(["ssh-keygen", "-t", "ed25519", "-N", "", "-q", "-f", str(key)], check=True)
     monkeypatch.setattr(enrol, "ensure_keypair",
                         lambda *a, **k: (key, key.with_suffix(".pub").read_text().strip()))
-    monkeypatch.setattr(cli, "onboard_self", lambda **k: (
+    monkeypatch.setattr(__import__("fleet.onboard").onboard, "onboard_self", lambda **k: (
         Device(id="id:me", name="hub", kind=Kind.PERMANENT), ProbeResult(status=Status.OK)))
 
     assert CliRunner().invoke(cli.app, ["center", "--init"]).exit_code == 0

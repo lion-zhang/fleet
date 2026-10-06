@@ -371,8 +371,14 @@ def join(code: str, *, name: str = "", ssh_command: str = "") -> dict:
 
     where = membership()
     if where == "center":
-        raise FleetError("this machine is a center already -- a center cannot join "
-                         "another fleet", code=2)
+        from .lifecycle import retire_empty_center
+
+        # The fleet every install starts here is empty until something is added to it;
+        # such a machine joining another fleet is the ordinary case, not a conflict.
+        if not retire_empty_center(acl.load()):
+            raise FleetError("this machine is the center of a fleet with other machines "
+                             "in it -- hand it over (`fleet center NAME`) or dissolve it "
+                             "(`fleet center --dissolve`) before joining another", code=2)
     pinned = acl.trusted_center_pubkey()
     if pinned:
         try:

@@ -116,6 +116,13 @@ def _this_machine(devices, what: str):
     return me
 
 
+def _first_run(command: str) -> None:
+    """On a machine in no fleet, start one here and teach the agents. See ops.firstrun."""
+    from .ops import firstrun
+
+    firstrun.maybe(command, lambda line: err.print(f"[green]✓[/green] {line}"))
+
+
 @app.command("ls")
 def cmd_ls(names: list[str] = typer.Argument(None, help="only these devices"),
            json_out: bool = typer.Option(False, "--json"),
@@ -128,6 +135,7 @@ def cmd_ls(names: list[str] = typer.Argument(None, help="only these devices"),
 
     [dim]Example:[/dim]  fleet ls --json
     """
+    _first_run("ls")
     ensure_fresh()
     rows = _rows(list(names) if names else None, refresh=refresh)
     if online:
@@ -171,6 +179,7 @@ def cmd_show(name: str = typer.Argument(None, help="defaults to this machine"),
 
     [dim]Example:[/dim]  fleet show machine_A
     """
+    _first_run("show")
     ensure_fresh()
     unrecorded = False
     if name is None:
@@ -298,6 +307,7 @@ def cmd_add(ssh_command: str = typer.Argument(None, help='e.g. "ssh -p 58418 roo
 
     [dim]Example:[/dim]  fleet add "ssh -p 58418 root@1.2.3.4"
     """
+    _first_run("add")
     if this_machine == bool(ssh_command):
         err.print("[red]Give an ssh command, or --self -- not both, not neither.[/red]")
         raise typer.Exit(2)
@@ -479,6 +489,7 @@ def cmd_invite(name: str = typer.Argument(None, help="what the machine will be c
 
     [dim]Example:[/dim]  fleet invite gpu-box --ttl 30m
     """
+    _first_run("invite")
     from .state import invites as invites_mod
     from .ops.join import encode_code
 
@@ -915,6 +926,7 @@ def _before_any_command(
     removes keys: `fleet ls` would have quietly mutated credentials across the fleet
     every few minutes, unsupervised, with every exception swallowed by design. Sync is
     explicit now.
+
     """
 
 
@@ -1171,6 +1183,7 @@ def cmd_top(name: str = typer.Argument(None, help="one device, instead of the wh
 
     [dim]Example:[/dim]  fleet top machine_A -i 1
     """
+    _first_run("top")
     cfg = load_config()
     devices = inv.live(inv.load())
     if name:
@@ -1468,6 +1481,7 @@ def cmd_access(target: str = typer.Argument(None, help="one machine, instead of 
 
     [dim]Example:[/dim]  fleet access machine_A --allow machine_B
     """
+    _first_run("access")
 
     if migrate:
         with _as_exit():
@@ -1658,39 +1672,12 @@ def cmd_center(name: str = typer.Argument(None, help="hand the role to this mach
         return
 
     if init:
-        key_path, pub = ensure_keypair()
-        devices = inv.load()
-        dev, res = onboard_self()
-        # Re-running --init must not rename this machine. Passing every existing name as
-        # taken counted its *own* record among them, so a second --init came back as
-        # "<name>-2" and pinned that into the access list while the inventory kept the
-        # first -- the exact name split seeding both from one object exists to prevent.
-        if existing := inv.find_exact(devices, dev.id):
-            dev.name = existing.name
-        else:
-            taken, base, n = inv.handles(devices), dev.name, 2
-            while dev.name in taken:
-                dev.name, n = f"{base}-{n}", n + 1
+        from .ops.firstrun import init_center
         try:
-            acc = acl.bootstrap(dev.name, pub, dev.id)
+            acc, dev = init_center()
         except acl.AccessError as exc:
             err.print(f"[red]{exc}[/red]")
             raise typer.Exit(2)
-        # Reflect the role in the inventory too. `is_center()` remains the authority --
-        # this field rides the merge and cannot be trusted for a decision -- but it is
-        # what `ls` and `top` draw the diamond from, and a center nobody can see in the
-        # table is the problem the glyph was added to solve.
-        dev.role = "center"
-        # Seed the inventory from the same object the access list was pinned from. Done
-        # separately the two derive a name each, and nothing reconciles them: the access
-        # list would keep answering to one name while `fleet show` knew the other. It
-        # also spares the user a `fleet add --self` they have no way to know they need.
-        devices, _ = inv.upsert(devices, dev)
-        inv.save(devices)
-        if res.snapshot is not None:
-            conn = store.connect()
-            store.record(conn, dev.id, res)
-            conn.close()
         console.print(f"[green]✓[/green] fleet {acc.fleet_id} started; "
                       f"{dev.name} is the center.")
         if not no_service:
@@ -1703,6 +1690,8 @@ def cmd_center(name: str = typer.Argument(None, help="hand the role to this mach
                       f"[bold]fleet center --pubkey[/bold][/dim]")
         return
 
+    if not (leave or dissolve or accept or export or name or cancel):
+        _first_run("center")               # a bare status check, on a machine in no fleet
     try:
         acc = acl.load()
     except acl.AccessError:
@@ -1927,6 +1916,8 @@ def cmd_setup(
 
     [dim]Example:[/dim]  fleet setup --dry-run
     """
+    if not (refresh or remove or dry_run):
+        _first_run("setup")
     root = Path.cwd() if project else Path.home()
     # MCP clients are a second namespace: a desktop app is registered, not written to.
     # `--project` never touches them -- their config is per-user, not per-repo.
@@ -2038,6 +2029,11 @@ def cmd_mcp():
     [dim]Example:[/dim]  fleet mcp
     """
 
+    from .ops import firstrun
+
+    # A desktop client launching this is someone using fleet here. The line goes to
+    # stderr, which clients log, because stdout is the protocol.
+    firstrun.maybe("mcp", lambda line: print(f"fleet: {line}", file=sys.stderr))
     try:
         serve_mcp()
     except McpUnavailable as exc:

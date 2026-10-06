@@ -116,7 +116,7 @@ def test_a_fleet_can_be_created_again_afterwards(a_fleet, monkeypatch):
     runner, _ = a_fleet
     monkeypatch.setattr(rec, "apply_edge", lambda *a, **k: (True, ""))
     runner.invoke(cli.app, ["center", "--dissolve"], input="y\n")
-    monkeypatch.setattr(cli, "onboard_self",
+    monkeypatch.setattr(__import__("fleet.onboard").onboard, "onboard_self",
                         lambda **k: (Device(id="id:me", name="macbook",
                                             kind=Kind.PERMANENT),
                                      ProbeResult(status=Status.OK)))
@@ -133,7 +133,7 @@ def test_creating_a_fleet_puts_the_center_in_its_own_inventory(a_fleet, monkeypa
     runner, _ = a_fleet
     monkeypatch.setattr(rec, "apply_edge", lambda *a, **k: (True, ""))
     runner.invoke(cli.app, ["center", "--dissolve"], input="y\n")
-    monkeypatch.setattr(cli, "onboard_self",
+    monkeypatch.setattr(__import__("fleet.onboard").onboard, "onboard_self",
                         lambda **k: (Device(id="id:me", name="macbook",
                                             kind=Kind.PERMANENT),
                                      ProbeResult(status=Status.OK)))

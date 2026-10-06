@@ -113,9 +113,25 @@ def _fake_binary(d):
     return exe
 
 
+def _a_fresh_shell_finds_it(monkeypatch, found: bool) -> None:
+    import fleet.agents.registry as reg
+    monkeypatch.setattr(reg, "_found_by_a_fresh_shell", lambda: found)
+
+
+def test_on_our_path_but_not_a_fresh_shells_gets_the_full_path(tmp_path, monkeypatch):
+    """The installer puts ~/.local/bin on its own PATH before running setup; an agent's
+    plain `sh -c` may not have it -- on Ubuntu root's profile never adds it. A skill
+    saying `fleet ls` there fails on its first command."""
+    real = _fake_binary(tmp_path / "bin").parent
+    monkeypatch.setenv("PATH", _path_with(real))
+    _a_fresh_shell_finds_it(monkeypatch, False)
+    assert fleet_command().startswith("/")
+
+
 def test_fleet_command_uses_the_bare_name_when_a_real_install_is_on_path(tmp_path, monkeypatch):
     real = _fake_binary(tmp_path / "bin").parent
     monkeypatch.setenv("PATH", _path_with(real))
+    _a_fresh_shell_finds_it(monkeypatch, True)
     assert fleet_command() == "fleet"
 
 
@@ -138,6 +154,7 @@ def test_fleet_command_looks_past_a_venv_that_shadows_a_real_install(tmp_path, m
 
     real = _fake_binary(tmp_path / "bin").parent
     monkeypatch.setenv("PATH", _path_with(Path(sys.prefix) / "bin", real))
+    _a_fresh_shell_finds_it(monkeypatch, True)
     assert fleet_command() == "fleet"
 
 
