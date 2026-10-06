@@ -1,5 +1,8 @@
 """Expose fleet to agents that speak MCP rather than read a file.
 
+The MCP layer of docs/design/layers.md: it runs the core (the `fleet` CLI) for agents that
+cannot run commands, and is never a second implementation of it.
+
 Two kinds of agent exist and they need opposite things. A coding agent with a shell
 reads the skill `fleet setup` writes and types commands. A desktop client -- Claude
 Desktop, ChatGPT -- has no shell at all, so instructions are useless to it; it needs

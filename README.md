@@ -178,7 +178,7 @@ center included.
 
 - [Getting started](docs/getting-started.md) — the full walkthrough, every command
 - [Every agent](docs/agents.md) — install commands and config for 35+ agents
-- [Design](docs/design/access.md) — how access is granted, signed and revoked
+- [Design](docs/design/layers.md) — one core per machine, a skill per agent, MCP for the rest; and [access](docs/design/access.md) — how access is granted, signed and revoked
 
 **Status:** v0.5. Every command has been run end to end on fleets of Linux machines built
 from scratch; the test suite runs on Linux and macOS. Windows works as a target and a
