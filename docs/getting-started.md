@@ -213,10 +213,8 @@ Cursor and Windsurf. Only the ones actually installed are touched, and a config 
 cannot parse is left alone and reported rather than rewritten. The MCP server is part of
 every install.
 
-**Installing from inside an agent instead** — a Claude Code plugin, a Gemini CLI
-extension, `codex mcp add`, a one-click button — is covered by the table in the
-[README](../README.md#or-install-from-inside-your-agent). Those launch `uvx agent-fleet
-mcp`, or ship a skill that tells the agent how to install the CLI when it is missing.
+**Installing from inside an agent instead** — a plugin, an extension, an `mcp add`
+command, a one-click button — is covered agent by agent in [agents.md](agents.md).
 
 Supporting another agent is one entry in `AGENTS` (or `MCP_CLIENTS`) in `setup.py`. The
 paths are a table, not code.
