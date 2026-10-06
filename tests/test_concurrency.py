@@ -108,3 +108,28 @@ def test_two_fleets_are_never_started_at_once(tmp_path):
     acl.bootstrap("a", _key(tmp_path, 1), path=path)
     with pytest.raises(acl.AccessError):
         acl.bootstrap("b", _key(tmp_path, 2), path=path)
+
+
+def test_a_revoke_made_while_an_install_is_in_flight_wins(tmp_path, monkeypatch):
+    """An agent grants; while that install is on its way to the machine, another agent
+    revokes. Whatever order the two edits reach the machine in, it must end without the
+    key -- the list's newest word -- not with the stale install landing last."""
+    from fleet import reconcile as rec
+    from fleet.ssh.cmd import Endpoint
+    from fleet.state import access as acl
+
+    path, fps = _fleet(tmp_path)
+    edge = (fps[0], fps[1], "root")
+    acl.update(lambda acc: acl.grant(acc, edge[0], edge[1]), path)
+    on_machine = []
+
+    def apply_edge(acc, e, ep, *, install, platform="posix"):
+        on_machine.append(install)
+        if len(on_machine) == 1:            # the revoke arrives during the install
+            acl.update(lambda a: acl.revoke(a, e[0], e[1]), path)
+        return True, ""
+
+    monkeypatch.setattr(rec, "apply_edge", apply_edge)
+    ok, _, installed = rec.converge_edge(acl.load(path), edge, Endpoint(target="m1"),
+                                         install=True, access_path=path)
+    assert ok and on_machine == [True, False] and installed is False

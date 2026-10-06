@@ -152,6 +152,34 @@ def _remote(ep: Endpoint, script: str, *, platform: str = "posix",
     return p.returncode == 0, (p.stderr or p.stdout or b"").decode(errors="replace").strip()[-300:]
 
 
+def converge_edge(acc: Access, edge: tuple[str, str, str], ep: Endpoint, *,
+                  install: bool, platform: str = "posix",
+                  access_path: Path | None = None) -> tuple[bool, str, bool]:
+    """Make one machine match what the access list says *now*, not when we started.
+
+    Two fleet processes can change the same edge at once -- an agent grants while
+    another revokes, or a sweep planned minutes ago reaches a machine just after a
+    revoke. Each edit on the machine is atomic, but the order they land in is not ours
+    to choose, so a revoke could land first and the stale install after it, leaving a
+    key the list says is gone. So after each edit the list is read again, and if what it
+    wants changed meanwhile, the edit is made again. Whoever edits last has read the
+    newest list. Returns (ok, detail, whether the key is now meant to be installed).
+    """
+    for _ in range(3):
+        ok, detail = apply_edge(acc, edge, ep, install=install, platform=platform)
+        if not ok:
+            return ok, detail, install
+        try:
+            acc = acc_mod.load(access_path)
+        except AccessError:
+            return ok, detail, install     # no list here any more: nothing newer to obey
+        wanted = edge in acc.edges()
+        if wanted == install:
+            return ok, detail, install
+        install = wanted                   # it changed while we were connected
+    return ok, detail, install
+
+
 def apply_edge(acc: Access, edge: tuple[str, str, str], ep: Endpoint, *,
                install: bool, platform: str = "posix") -> tuple[bool, str]:
     """Put one machine's key on another, or take it off.

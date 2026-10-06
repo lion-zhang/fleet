@@ -173,8 +173,8 @@ def apply_now(acc, src: str, dst: str, user: str, *, install: bool) -> None:
         _, snap = store.latest(conn, dev.id)
     finally:
         conn.close()
-    ok, out = rec.apply_edge(acc, (src, dst, user), ep, install=install,
-                             platform=remote_platform(snap))
+    ok, out, install = rec.converge_edge(acc, (src, dst, user), ep, install=install,
+                                         platform=remote_platform(snap))
     if ok:
         st.observed = st.desired = "present" if install else "absent"
         st.last_error = ""
@@ -285,8 +285,8 @@ def run(devices) -> None:
             out = []
             touched = None
             for st, dev, ep, triple, install, platform in batch:
-                ok, detail = rec.apply_edge(acc, triple, ep, install=install,
-                                            platform=platform)
+                ok, detail, install = rec.converge_edge(acc, triple, ep, install=install,
+                                                        platform=platform)
                 out.append((st, dev, triple, install, ok, detail))
                 if ok:
                     touched = (dev, ep)
@@ -319,7 +319,9 @@ def run(devices) -> None:
                 store.record(conn, probe[0], probe[1])
             for st, dev, (src, _dst, _user), install, ok, detail in results:
                 if ok:
-                    st.observed, st.last_error = st.desired, ""
+                    # What was applied last, which is what the list wanted by then.
+                    st.desired = st.observed = "present" if install else "absent"
+                    st.last_error = ""
                     done += 1
                     verb = "installed on" if install else "removed from"
                     console.print(f"[green]✓[/green] {acc.name_of(src)}'s key {verb} {dev.name}")

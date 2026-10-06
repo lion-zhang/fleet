@@ -48,6 +48,33 @@ def block(fleet_id: str, from_id: str, user: str, pubkey: str) -> str:
     ])
 
 
+# Two edits of one authorized_keys at once -- two fleet processes granting on the same
+# machine, or the member itself joining while the center sweeps it -- each read the file,
+# and the later `mv` erased the earlier edit while both reported success. A directory is
+# the one lock every POSIX shell can take atomically (macOS has no flock(1)). It is held
+# for the read-edit-rename only, and one left behind by a killed edit is taken over after
+# a minute. Gives up, loudly, after about half a minute.
+_POSIX_TAKE_TURN = (
+    'l="$f.fleet.lock"; n=0; '
+    'while ! mkdir "$l" 2>/dev/null; do n=$((n+1)); '
+    'if [ $n -gt 100 ] && [ -n "$(find "$l" -prune -mmin +1 2>/dev/null)" ]; then '
+    'rmdir "$l" 2>/dev/null; n=0; continue; fi; '
+    'if [ $n -gt 300 ]; then echo "fleet: $f is being edited by another fleet process" >&2; '
+    'exit 75; fi; sleep 0.1 2>/dev/null || sleep 1; done; '
+)
+
+# The Windows twin: a directory again, created with -ErrorAction Stop so that "already
+# there" is an error to retry on. One line, because `powershell -Command -` reads piped
+# input statement by statement. `$lk`, because the edit below loops over `$l`.
+_PS_TAKE_TURN = (
+    "$lk=\"$f.fleet.lock\"; $n=0; while($true){try{New-Item -ItemType Directory -Path $lk "
+    "-ErrorAction Stop|Out-Null;break}catch{$n++; if($n -gt 100 -and (Test-Path $lk) -and "
+    "((Get-Item $lk).LastWriteTime -lt (Get-Date).AddMinutes(-1))){Remove-Item $lk -Force "
+    "-ErrorAction SilentlyContinue;$n=0;continue}; if($n -gt 300){throw \"$f is being "
+    "edited by another fleet process\"}; Start-Sleep -Milliseconds 100}}\n"
+)
+
+
 def posix_sync_command(fleet_id: str, from_id: str, *, user: str = "",
                        pubkey: str | None = None, path: str = "") -> str:
     """Drop our block, then optionally append a fresh one. Idempotent either way.
@@ -69,6 +96,7 @@ def posix_sync_command(fleet_id: str, from_id: str, *, user: str = "",
     return (
         # umask before mkdir: sshd ignores a group-writable ~/.ssh, silently.
         f"umask 077; f={target}; mkdir -p \"$(dirname \"$f\")\"; "
+        + _POSIX_TAKE_TURN +
         f"t=\"$f.fleet.$$\"; : >> \"$f\"; "
         f"awk -v b={shlex.quote(begin)} -v e={shlex.quote(end)} "
         "'index($0,e)==1{s=0;next} "
@@ -79,7 +107,8 @@ def posix_sync_command(fleet_id: str, from_id: str, *, user: str = "",
         "s&&index($0,\"# fleet:\")==1{s=0} "
         "index($0,b)==1{s=1;next} !s' \"$f\" > \"$t\" && "
         + append +
-        "mv \"$t\" \"$f\""
+        "mv \"$t\" \"$f\"; "
+        "r=$?; rmdir \"$l\" 2>/dev/null; [ $r -eq 0 ]"
     )
 
 
@@ -122,6 +151,7 @@ def powershell_sync_command(fleet_id: str, from_id: str, *, user: str = "",
         +
         "$d=Split-Path $f; if(!(Test-Path $d)){New-Item -ItemType Directory -Path $d|Out-Null}\n"
         "if(!(Test-Path $f)){New-Item -ItemType File -Path $f|Out-Null}\n"
+        + _PS_TAKE_TURN +
         "$lines=@(Get-Content -LiteralPath $f -ErrorAction SilentlyContinue)\n"
         f"$b='{begin}'; $e='{end}'\n"
         "$keep=@(); $s=$false\n"
@@ -135,6 +165,7 @@ def powershell_sync_command(fleet_id: str, from_id: str, *, user: str = "",
         "$t=\"$f.fleet.$PID\"\n"
         "Set-Content -LiteralPath $t -Value $keep -Encoding ascii\n"
         "Move-Item -LiteralPath $t -Destination $f -Force\n"
+        "Remove-Item -LiteralPath $lk -Force -ErrorAction SilentlyContinue\n"
         # inheritance:r first, or inherited ACEs survive and sshd still refuses the file
         + ("" if path else
            "icacls $f /inheritance:r /grant 'SYSTEM:F' 'Administrators:F' | Out-Null\n")
