@@ -143,7 +143,7 @@ def register_identity(dev) -> str:
     from ..ssh.keys import ensure_remote_keypair_command
 
     try:
-        acc = acl.load()
+        acl.load()                         # only to know there is a fleet to pin into
     except acl.AccessError:
         console.print("  [dim]no fleet here yet -- run [bold]fleet center --init[/bold] "
                       "and enrol again to register its key[/dim]")
@@ -171,11 +171,13 @@ def register_identity(dev) -> str:
                   "[/dim]")
         return ""
     try:
-        fp = acl.enroll(acc, dev.name, pub, dev.id, user=eps[0].user or "root")
+        # The key was read over the network above; the pin goes into the list as it is
+        # now, not the copy loaded before that round trip.
+        _, fp = acl.update(lambda current: acl.enroll(current, dev.name, pub, dev.id,
+                                                      user=eps[0].user or "root"))
     except acl.AccessError as exc:
         err.print(f"  [red]{exc}[/red]")
         return ""
-    acl.save(acc)
     console.print(f"[green]✓[/green] {dev.name} registered as {fp[:24]}...")
     return fp
 

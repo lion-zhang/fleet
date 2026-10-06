@@ -27,16 +27,15 @@ from __future__ import annotations
 
 import hashlib
 import hmac
-import os
 import secrets
 import time
 from dataclasses import asdict, dataclass
 from pathlib import Path
 
 import yaml
-from filelock import FileLock
 
 from ..config import STATE_DIR
+from .writes import atomic_write, turn
 
 INVITES_PATH = STATE_DIR / "access-invites.yaml"     # center only
 
@@ -84,8 +83,9 @@ def mac(secret_key_hex: str, message: str) -> str:
                     hashlib.sha256).hexdigest()
 
 
-def _lock(path: Path) -> FileLock:
-    return FileLock(str(path) + ".lock", timeout=10)
+def _lock(path: Path):
+    """Writes to the invite list take their turn, like every other state file."""
+    return turn(path)
 
 
 def _read(path: Path) -> list[Invite]:
@@ -103,13 +103,9 @@ def _read(path: Path) -> list[Invite]:
 
 
 def _write(invites: list[Invite], path: Path) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    tmp = path.with_suffix(".tmp")
-    tmp.write_text(yaml.safe_dump({"invites": [asdict(i) for i in invites]},
-                                  sort_keys=False))
-    # Owner-only before it is renamed into place: the file holds MAC keys.
-    os.chmod(tmp, 0o600)
-    os.replace(tmp, path)
+    # Owner-only from its first byte: the file holds MAC keys.
+    atomic_write(path, yaml.safe_dump({"invites": [asdict(i) for i in invites]},
+                                      sort_keys=False))
 
 
 def _prune(invites: list[Invite], now: int) -> list[Invite]:

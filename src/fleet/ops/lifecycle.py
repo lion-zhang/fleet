@@ -68,8 +68,8 @@ def dissolve(acc, *, force: bool) -> None:
     now = int(time.time())
     for st in ledger.values():
         st.desired, st.pending_since = "absent", now
-    acc.allow = []
-    acl.save(acc)
+    # Onto the list as it is now: the confirmation above may have waited minutes.
+    acc, _ = acl.update(lambda current: setattr(current, "allow", []))
 
     devices = {d.id: d for d in inv.live(inv.load())}
     left, gone = [], 0
@@ -159,9 +159,11 @@ def retire_empty_center(acc) -> bool:
 
     with suppress(Exception):
         service.remove()                   # its listener would refuse to serve, forever
+    from ..state.writes import turn
+
     for path in (acl.ACCESS_PATH, acl.LEDGER_PATH, acl.CHAIN_PATH, acl.HANDING_PATH,
                  invites.INVITES_PATH):
-        with suppress(OSError):
+        with turn(path), suppress(OSError):  # after any write already queued on it
             path.unlink()
 
     def demote(current):

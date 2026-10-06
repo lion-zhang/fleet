@@ -38,6 +38,7 @@ import yaml
 
 from ..config import DEFAULT_PORT
 from ..state import access as acl
+from ..state.writes import atomic_write, turn
 from ..state import inventory as inv
 from .. import reconcile as rec
 from ..ssh.authkeys import sync_command
@@ -90,14 +91,17 @@ def give_away(acc, name: str, *, force: bool) -> None:
     # Every machine but the two ends, as the user that machine is reached as. Granting
     # as root everywhere left the successor pending forever on a machine only reached as
     # alice; granting it the outgoing center left it pending on a machine with no route.
-    added = []
-    for other, other_meta in acc.keys.items():
-        if other in (fp, acc.center):
-            continue
-        user = other_meta.get("user", "root")
-        if acl.grant(acc, fp, other, user=user, note="handover"):
-            added.append((other, user))
-    acl.save(acc)
+    def grant_successor(current):
+        added = []
+        for other, other_meta in current.keys.items():
+            if other in (fp, current.center):
+                continue
+            user = other_meta.get("user", "root")
+            if acl.grant(current, fp, other, user=user, note="handover"):
+                added.append((other, user))
+        return added
+
+    acc, added = acl.update(grant_successor)
     for other, user in added:
         apply_now(acc, fp, other, user, install=True)
     console.print(f"[green]✓[/green] {acc.name_of(fp)} granted {len(added)} machine(s)")
@@ -126,8 +130,7 @@ def give_away(acc, name: str, *, force: bool) -> None:
                   "been retired.[/dim]")
         raise FleetError("handover not delivered", code=1)
 
-    acl.HANDING_PATH.parent.mkdir(parents=True, exist_ok=True)
-    acl.HANDING_PATH.write_text(yaml.safe_dump({
+    atomic_write(acl.HANDING_PATH, yaml.safe_dump({
         "to": fp, "to_name": acc.name_of(fp), "to_pubkey": meta["pubkey"],
         "url": f"http://{ep.target}:{DEFAULT_PORT}/sync", "at": int(time.time()),
     }, sort_keys=False))
@@ -167,16 +170,14 @@ def receive(raw: str) -> str:
     _, pub = ensure_keypair()
     if record.get("to") != acl.fingerprint(pub):
         raise FleetError("this handover names a different machine", code=2)
-    acl.INBOX_PATH.parent.mkdir(parents=True, exist_ok=True)
-    acl.INBOX_PATH.write_text(yaml.safe_dump({
+    atomic_write(acl.INBOX_PATH, yaml.safe_dump({
         "record": inner["record"], "signature": inner.get("signature", ""),
         "chain": inner.get("chain") or []}, sort_keys=False))
-    acl.ACCESS_PATH.parent.mkdir(parents=True, exist_ok=True)
-    tmp = acl.ACCESS_PATH.with_suffix(".tmp")
-    tmp.write_text(inner.get("access") or "")
-    os.replace(tmp, acl.ACCESS_PATH)
+    with turn(acl.ACCESS_PATH):
+        atomic_write(acl.ACCESS_PATH, inner.get("access") or "")
     if inner.get("ledger"):
-        acl.LEDGER_PATH.write_text(inner["ledger"])
+        with turn(acl.LEDGER_PATH):
+            atomic_write(acl.LEDGER_PATH, inner["ledger"])
     if inner.get("inventory"):
         incoming = inv.loads(inner["inventory"])
         inv.update(lambda current: inv.merge(current, incoming, authoritative=True))
@@ -252,14 +253,20 @@ def accept(acc) -> None:
 
     outgoing = acc.name_of(acc.center)
     old_fp = acc.center
-    acc.center = mine
-    # The outgoing center stays in the list -- it is a member now, and its listener
-    # requests must still be answered -- but its record has no address by design, so an
-    # edge to it would sit "pending" for ever. Marked, until someone gives it a route.
-    old_dev = devices.get((acc.keys.get(old_fp) or {}).get("device_id", ""))
-    if old_dev is None or not inv.endpoints_of(old_dev):
-        acc.keys.setdefault(old_fp, {})["no_route"] = True
-    acl.save(acc)
+
+    def take_role(current):
+        current.center = mine
+        # The outgoing center stays in the list -- it is a member now, and its listener
+        # requests must still be answered -- but its record has no address by design, so
+        # an edge to it would sit "pending" for ever. Marked, until someone gives it a
+        # route.
+        old_dev = devices.get((current.keys.get(old_fp) or {}).get("device_id", ""))
+        if old_dev is None or not inv.endpoints_of(old_dev):
+            current.keys.setdefault(old_fp, {})["no_route"] = True
+
+    # The checks above wrote to every machine over ssh; the role changes in the list as
+    # it is now, so nothing granted meanwhile is lost.
+    acc, _ = acl.update(take_role)
     _retire_key(acc, old_fp, mine)
     if inbox.get("record"):
         acl.save_handover_chain(list(inbox.get("chain") or [])

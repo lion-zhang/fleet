@@ -305,7 +305,12 @@ def _admit(dev: Device, signer: str, fp: str, invite, *, peer: str,
         invites_mod.redeem(invite.id, fp, name)
     except invites_mod.InviteError as exc:
         return 403, f"{exc}\n"         # lost a race to another key; nothing was saved
-    acl.save(acc)
+    try:
+        # Checked above on a copy; pinned here into the list as it is now, so a grant
+        # some agent made in the meantime is not erased by saving that copy.
+        acl.update(lambda current: acl.enroll(current, name, signer, record.id, user=user))
+    except acl.AccessError as exc:
+        return 409, f"{exc}\n"
 
     def admit(current):
         merged, _ = inv.upsert(current, record)
