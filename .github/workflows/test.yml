@@ -1,8 +1,12 @@
 name: tests
 
 on:
+  # A branch with a pull request is tested by the pull_request run; testing its pushes
+  # too ran every commit twice and sent every failure twice.
   push:
+    branches: [main]
   pull_request:
+  workflow_dispatch:
 
 jobs:
   test:
