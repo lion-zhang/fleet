@@ -31,6 +31,8 @@ import urllib.request
 from pathlib import Path
 
 WINDOWS = os.name == "nt"
+# The Windows console is cp1252 by default; the report has ✅ in it.
+sys.stdout.reconfigure(encoding="utf-8", errors="replace")
 RESULTS: list[tuple[str, str, str]] = []          # (status, name, detail)
 # The installed fleet, not one this script's own environment may carry.
 FLEET = os.environ.get("FLEET_BIN") or shutil.which("fleet") or "fleet"

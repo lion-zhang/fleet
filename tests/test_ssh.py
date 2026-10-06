@@ -121,3 +121,17 @@ def test_fleet_ssh_never_falls_back_to_a_password(box, monkeypatch):
     CliRunner().invoke(cli.app, ["ssh", "lin-xps"])
     argv = box[-1][1]
     assert "PasswordAuthentication=no" in argv and "KbdInteractiveAuthentication=no" in argv
+
+
+def test_on_windows_the_remote_exit_code_is_passed_on(box, monkeypatch):
+    """Windows has no exec: os.execvp there starts ssh and exits at once with 0, so every
+    `fleet ssh NAME -- cmd` reported success whatever cmd did (found on a real Windows
+    runner). There it waits for ssh and exits with its code."""
+    import subprocess
+    import sys
+
+    monkeypatch.setattr(sys, "platform", "win32")
+    monkeypatch.setattr(subprocess, "call", lambda argv: 3)
+    r = CliRunner().invoke(cli.app, ["ssh", "lin-xps", "--", "exit", "3"])
+    assert r.exit_code == 3
+    assert not box, "never execvp on Windows"

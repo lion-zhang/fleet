@@ -1505,6 +1505,11 @@ def cmd_ssh(ctx: typer.Context, name: str):
     if extra:
         argv.append(remote_command(extra, windows=platform == "windows"))
 
+    if sys.platform == "win32":
+        # Windows has no exec: os.execvp starts ssh and exits this process at once with
+        # 0, so every `fleet ssh NAME -- cmd` reported success whatever cmd did (found on
+        # a real Windows runner), and an interactive shell fought the prompt for input.
+        raise typer.Exit(subprocess.call(argv))
     os.execvp("ssh", argv)      # replace this process; ssh owns the tty from here
 
 
