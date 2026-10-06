@@ -1,6 +1,6 @@
 """The center, listening.
 
-Under center-dials-spokes nothing ever reached the center, so a machine learned the fleet
+Under center-dials-members nothing ever reached the center, so a machine learned the fleet
 only when the center got round to telling it -- which meant a human typing `fleet sync`,
 because the timer that once did it was deleted when the direction flipped and nothing
 replaced it.
@@ -100,7 +100,7 @@ def exchange(raw: str) -> tuple[int, str]:
         return 503, f"{exc}\n"
     if not acl.is_center(acc):
         # Serving without the signing key would mean handing out a list we cannot sign,
-        # which no spoke would accept anyway.
+        # which no member would accept anyway.
         return 503, "not the center\n"
 
     signer = acl.claimed_signer(raw)
@@ -124,7 +124,7 @@ def exchange(raw: str) -> tuple[int, str]:
         # A truncated body must never be read as "that machine has no devices".
         return 400, f"unreadable inventory: {exc}\n"
 
-    # A member may describe machines -- adding one from a spoke is allowed -- but only
+    # A member may describe machines -- adding one from a member is allowed -- but only
     # the center removes them. A deletion is honoured from the machine it is about and
     # from nobody else: otherwise any member, by syncing, could erase any machine from
     # the fleet while its keys stayed installed with no record left of them.

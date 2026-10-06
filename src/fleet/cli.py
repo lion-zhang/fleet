@@ -686,7 +686,7 @@ def cmd_edit(name: str = typer.Argument(None, help="defaults to this machine"),
         err.print(f"[red]{exc}[/red]")
         raise typer.Exit(2)
     if role == "center":
-        # Flipping the role alone strands the fleet: spokes verify the list against the
+        # Flipping the role alone strands the fleet: members verify the list against the
         # key they have pinned, so a center nobody installed keys for and nobody signed
         # a handover from is a center no machine will accept.
         err.print("[red]Use [bold]fleet center NAME[/bold] to move the role.[/red]")
@@ -1075,7 +1075,7 @@ def cmd_sync(serve: bool = typer.Option(False, "--serve",
 
         raw = sys.stdin.read()
         # The inventory carries the endpoints that decide where `fleet ssh` dials, and
-        # this filter runs on a spoke that every granted peer holds a key for. Verifying
+        # this filter runs on a member that every granted peer holds a key for. Verifying
         # the access list and taking the routing on trust would have secured the policy
         # and left the routes open, so the whole envelope is checked.
         pinned = acl.trusted_center_pubkey()
@@ -1126,7 +1126,7 @@ def cmd_sync(serve: bool = typer.Option(False, "--serve",
                 _sweep(devices)
             return
     except acl.AccessError:
-        pass                               # no access list here: a spoke, or no fleet yet
+        pass                               # no access list here: a member, or no fleet yet
 
     if acl.center_url() and acl.trusted_center_pubkey():
         # A member that knows where the center listens asks it, as every read already
@@ -1417,7 +1417,7 @@ def cmd_ssh(ctx: typer.Context, name: str):
     # A cached refusal is evidence only while it is fresh. A grant applies on the target
     # within seconds of `fleet access --allow` on the center, and nothing tells this
     # machine that it happened, so an old reading refused a connection that now works --
-    # and sent the reader to `fleet sync`, which a spoke holding no key on the center
+    # and sent the reader to `fleet sync`, which a member holding no key on the center
     # cannot run either. Stale, we try: a key that really is missing fails in under a
     # second with ssh's own message, which is a cheaper way to be wrong than this was.
     fresh_s = int(load_config().get("telemetry_ttl_s") or 0)
@@ -1750,7 +1750,10 @@ def cmd_center(name: str = typer.Argument(None, help="hand the role to this mach
 
     # bare: status
     centre = acl.is_center(acc)
-    if _emit({"center": acc.name_of(acc.center), "is_center": centre,
+    # `role` names this machine's install mode in one word -- center or member -- where
+    # the older keys need reading together.
+    if _emit({"role": "center" if centre else "member",
+              "center": acc.name_of(acc.center), "is_center": centre,
               "fleet_id": acc.fleet_id, "machines": len(acc.keys),
               "edges": len(acc.edges()),
               "last_seen_s": (int(time.time()) - acl.center_last_seen())
@@ -1847,7 +1850,7 @@ def _refuse_while_handing_over(acc) -> None:
 
 
 def _not_in_a_fleet(json_out: bool) -> None:
-    if _emit({"is_center": False, "member": False}, json_out):
+    if _emit({"role": "", "is_center": False, "member": False}, json_out):
         return
     err.print("[red]This machine is not in a fleet.[/red]")
     err.print("  [dim]start one here with [bold]fleet center --init[/bold], or join one "

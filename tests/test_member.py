@@ -36,6 +36,7 @@ def test_center_json_answers_is_center_false(member):
     assert r.exit_code == 0, r.output
     out = json.loads(r.output)
     assert out["is_center"] is False and out["member"] is True
+    assert out["role"] == "member", "the install mode, in one word"
     assert out["center"] == "hub" and out["fleet_id"] == "4b6d36"
 
 
@@ -51,7 +52,8 @@ def test_outside_any_fleet_it_names_both_ways_in():
     flat = " ".join(r.output.split())
     assert "fleet center --init" in flat and "fleet invite" in flat
     r = CliRunner().invoke(cli.app, ["center", "--json"])
-    assert r.exit_code == 0 and json.loads(r.output) == {"is_center": False, "member": False}
+    assert r.exit_code == 0 and json.loads(r.output) == {"role": "", "is_center": False,
+                                                         "member": False}
 
 
 def test_access_on_a_member_points_at_the_center(member):

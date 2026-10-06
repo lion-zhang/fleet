@@ -1,18 +1,33 @@
 # Install fleet on Windows: https://github.com/lion-zhang/fleet
 #
+# Two modes. The center is the one machine that decides who may reach what -- install
+# it on the machine you work from. Every other machine is a member.
+#
 #   powershell -ExecutionPolicy ByPass -c "irm https://raw.githubusercontent.com/lion-zhang/fleet/main/install.ps1 | iex"
-#       installs fleet, makes this machine the center of a new fleet, and teaches every
+#       center (the default): installs fleet, starts a new fleet here, and teaches every
 #       coding agent installed here (Claude Code, Codex, Gemini CLI, ...) to use it.
 #
 #   $env:FLEET_JOIN='CODE'; irm https://raw.githubusercontent.com/lion-zhang/fleet/main/install.ps1 | iex
-#       (in PowerShell) installs fleet and joins the fleet whose center printed CODE
-#       (`fleet invite`) instead of starting one here.
+#       member (in PowerShell): installs fleet and joins the fleet whose center printed
+#       CODE (`fleet invite` prints this whole line) instead of starting one here.
 #
 # FLEET_NO_SETUP=1 installs the command only. Safe to run again: it upgrades fleet and
 # leaves the fleet this machine is in alone.
 #
 # `irm | iex` passes no arguments, which is why the options are environment variables.
 # Everything runs inside a function, so a download cut short runs nothing.
+
+# What an installed fleet says this machine is: role (center, member, or empty),
+# fleet_id and center. Never starts a fleet to answer. Fleets before `role` existed
+# answered with is_center / member, which are read too.
+function Get-FleetRole($fleet) {
+    $env:FLEET_NO_AUTO_CENTER = '1'
+    try { $j = (& $fleet center --json 2>$null) -join "`n" | ConvertFrom-Json } catch { $j = $null }
+    Remove-Item Env:FLEET_NO_AUTO_CENTER -ErrorAction SilentlyContinue
+    if (-not $j) { return @{ role = ''; fleet_id = ''; center = '' } }
+    $role = if ($j.role) { $j.role } elseif ($j.is_center) { 'center' } elseif ($j.member) { 'member' } else { '' }
+    return @{ role = $role; fleet_id = "$($j.fleet_id)"; center = "$($j.center)" }
+}
 
 function Install-Fleet {
     # Not 'Stop': Windows PowerShell 5.1 turns any stderr line from a native command into
@@ -25,6 +40,21 @@ function Install-Fleet {
     if ($join -and -not $join.StartsWith('fleet1:')) {
         throw "that is not a fleet invite code -- it starts with fleet1: (run ``fleet invite`` on the center)"
     }
+
+    # Say which mode this run installs, before doing anything. A re-run reads it from the
+    # fleet already here, which may have been installed in the other mode.
+    $was = ''
+    $found = (Get-Command fleet -ErrorAction SilentlyContinue).Source
+    if (-not $found) {
+        $f = Join-Path $HOME ".local/bin/fleet$exe"
+        if (Test-Path $f) { $found = $f }
+    }
+    if ($found) { $was = (Get-FleetRole $found).role }
+    if (-not $setup) { Write-Host 'mode: none -- installing the command only' }
+    elseif ($join) { Write-Host 'mode: member -- joining the fleet whose center printed this code' }
+    elseif ($was -eq 'center') { Write-Host 'mode: center (already; upgrading)' }
+    elseif ($was -eq 'member') { Write-Host 'mode: member (already; upgrading)' }
+    else { Write-Host 'mode: center -- starting a new fleet on this machine' }
 
     # 1. uv, which installs and runs fleet.
     $uv = (Get-Command uv -ErrorAction SilentlyContinue).Source
@@ -90,7 +120,15 @@ function Install-Fleet {
     Write-Host ''
     Write-Host 'open a new terminal so `fleet` is found everywhere'
     # Center or member: by what this machine is now, not by how this run began.
-    $isCenter = $setup -and ((& $fleet center --json 2>$null) -join '' -match '"is_center": true')
+    $isCenter = $false
+    if ($setup) {
+        $now = Get-FleetRole $fleet
+        $isCenter = $now.role -eq 'center'
+        if ($isCenter) { Write-Host "OK this machine is the center of fleet $($now.fleet_id)" }
+        elseif ($now.role -eq 'member') {
+            Write-Host "OK this machine is a member of fleet $($now.fleet_id); its center is $($now.center)"
+        }
+    }
     if ($isCenter) {
         Write-Host 'next:  fleet show          this machine, as your agents will see it'
         Write-Host '       fleet invite NAME   prints one line to run on another machine to add it'

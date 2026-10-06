@@ -29,8 +29,8 @@ Fleet is neutral about which overlay. Tailscale, ZeroTier, Nebula, Netbird, Head
 hand-rolled WireGuard all work; fleet wants a routable address and nothing more, and
 hard-codes none of them. `Endpoint.via` says `mesh`, never a vendor.
 
-This is also why the center dials out rather than being dialled: center→spoke reachability
-is required regardless, so carrying sync over it costs nothing, where spokes dialling the
+This is also why the center dials out rather than being dialled: center→member reachability
+is required regardless, so carrying sync over it costs nothing, where members dialling the
 center would need a second guarantee on top.
 
 ## Three ways in
@@ -54,7 +54,7 @@ and `_install_key` tries these in the order that asks least of the user:
    exists anywhere. See *Invites* below.
 
 Enrolment is not a command. `fleet add` does it on the center, and the sweep does it for
-anything still unpinned — a machine added from a spoke, or one whose enrolment was
+anything still unpinned — a machine added from a member, or one whose enrolment was
 interrupted. Neither ever prompts outside case 2, and the sweep never prompts at all.
 
 ## What lives where
@@ -113,8 +113,8 @@ saying so. A Windows grant is therefore only ever confirmed by connecting on the
 
 ## Signing
 
-The center dials a spoke and runs `fleet sync --serve` **there** — but a grant *is* a key
-on that spoke, so any granted peer can reach it and run the same filter. SSH proves *a*
+The center dials a member and runs `fleet sync --serve` **there** — but a grant *is* a key
+on that member, so any granted peer can reach it and run the same filter. SSH proves *a*
 peer, not *the* center.
 
 So the whole sync envelope is signed (SSHSIG, over the fleet key we already have) and

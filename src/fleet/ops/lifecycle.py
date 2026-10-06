@@ -27,7 +27,7 @@ from .sweep import endpoint_for
 def membership() -> str:
     """Is this machine in a fleet, and does it decide? `center`, `member`, or `""`.
 
-    A spoke holds no access list -- only the center does -- so membership there is the
+    A member holds no access list -- only the center does -- so membership there is the
     signed cache the sweep leaves behind. Checking for either is what lets `fleet add`
     run anywhere while still refusing on a machine that is in no fleet at all.
     """

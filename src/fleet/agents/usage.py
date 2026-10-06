@@ -42,7 +42,7 @@ Anywhere. A name may be omitted where the obvious subject is the machine you are
 - `{cmd} ssh NAME -- COMMAND` -- run a command there
 - `{cmd} ssh NAME` -- an interactive shell, exactly as plain ssh
 - `{cmd} access [NAME]` -- who may reach what, and what is still pending
-- `{cmd} center --json` -- `is_center`, who decides, and when it was last heard from
+- `{cmd} center --json` -- `role` (center or member), who decides, and when it was last heard from
 - `{cmd} center --pubkey` -- the key to pre-place on a host that takes no password;
   works with nothing reachable, which is the point
 - `{cmd} center --export` -- the access list and pins, worth keeping off the machine
@@ -73,8 +73,9 @@ Anywhere. A name may be omitted where the obvious subject is the machine you are
 - `{cmd} install NAME` -- put fleet on a machine that has none
 - `{cmd} paths` -- where the inventory, keys and access list live on this machine
 
-Only on the center. `{cmd} center --json` has `is_center` -- on a member it is false
-and `center` names the machine that decides. These refuse anywhere else and say
+Only on the center. `{cmd} center --json` says which this machine is: `role` is
+`center` or `member` (empty when it is in no fleet), and `center` names the machine
+that decides. These refuse anywhere else and say
 where to run them: report that to the user, nothing is queued.
 
 - `{cmd} access NAME --allow MACHINE` -- grant, and it is applied on the spot.
@@ -213,15 +214,15 @@ def agents_block(cmd: str) -> str:
 # there -- and the answer is to tell the user, not to install it unasked: installing
 # makes the machine the center of a fleet.
 _INSTALL_HINT = """If `fleet` is not found, it is not installed on this machine. Do not install it
-yourself: tell the user it installs in one line, and that this makes the machine the
-center of a new fleet --
+yourself: ask the user which of the two modes this machine is for --
 
-- macOS / Linux: `curl -LsSf https://raw.githubusercontent.com/lion-zhang/fleet/main/install.sh | sh`
-- Windows: `powershell -ExecutionPolicy ByPass -c "irm https://raw.githubusercontent.com/lion-zhang/fleet/main/install.ps1 | iex"`
-- or `uv tool install agent-fleet`
-
-To add this machine to a fleet that already exists instead, run `fleet invite` on that
-fleet's center: it prints the line to paste here.
+- **center**, the one machine that decides who may reach what (usually the one they
+  work from), starting a new fleet:
+  - macOS / Linux: `curl -LsSf https://raw.githubusercontent.com/lion-zhang/fleet/main/install.sh | sh`
+  - Windows: `powershell -ExecutionPolicy ByPass -c "irm https://raw.githubusercontent.com/lion-zhang/fleet/main/install.ps1 | iex"`
+  - or `uv tool install agent-fleet`
+- **member** of a fleet that already exists: `fleet invite` on that fleet's center
+  prints the one line to paste here.
 """
 
 

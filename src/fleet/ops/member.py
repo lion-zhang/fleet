@@ -55,7 +55,7 @@ def center_name() -> str:
 
 def status() -> dict:
     seen = acl.center_last_seen()
-    return {"is_center": False, "member": True,
+    return {"role": "member", "is_center": False, "member": True,
             "fleet_id": fleet_id(),
             "center": center_name(),
             "center_url": acl.center_url(),
