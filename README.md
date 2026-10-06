@@ -24,27 +24,7 @@ across the room and a rented A100 bills you by the hour. It cannot use what it c
 - **Finding a free GPU is manual.** SSH into five hosts, run `nvidia-smi`, compare in your head.
 - **Handing it a server means pasting credentials** into the chat, and hoping.
 
-## With fleet
-
-You ask in words. The agent checks every machine and picks the right one:
-
-> **You:** train `train.py` on whatever has a free 24 GB card
->
-> **Agent:** runs `fleet ls --tag cuda --tag vram-24g --json` — `rtx4090` has 23.1 GB free
-> and an idle GPU; `a100-spot` is free too but costs $1.89/hr. Starting on `rtx4090`:
-> `fleet ssh rtx4090 -- 'cd ~/proj && nohup python train.py > train.log 2>&1 &'`
-
-| You say | The agent runs |
-|---|---|
-| "what's free right now?" | `fleet ls --json` |
-| "find me a box with a 24 GB card" | `fleet ls --tag cuda --tag vram-24g --json` |
-| "what's costing me money?" | `fleet ls --json`, and reads the idle-rental alerts |
-| "run the tests on the Linux box" | `fleet ssh linux-box -- 'cd proj && pytest'` |
-| "add my new rental, `ssh -p 40001 root@1.2.3.4`" | `fleet add "ssh -p 40001 root@1.2.3.4"` |
-
-No hostnames, keys or passwords ever go into the conversation.
-
-## Install
+## Install once, then just talk to your agent
 
 On the machine you work from:
 
@@ -55,17 +35,39 @@ curl -LsSf https://raw.githubusercontent.com/lion-zhang/fleet/main/install.sh | 
 <sub>Windows: `powershell -ExecutionPolicy ByPass -c "irm https://raw.githubusercontent.com/lion-zhang/fleet/main/install.ps1 | iex"`</sub>
 
 That is the whole setup. This machine becomes your fleet's **center**, and every coding
-agent installed on it learns to use fleet. Now add your other machines:
+agent installed on it learns fleet. From here on you say what you want in plain words —
+no commands to remember. When something is missing, the agent asks (illustrative):
 
-```bash
-fleet add "ssh root@gpu-box"      # any SSH command you already use; nothing is installed there
-fleet invite gpu-box              # or: prints one line to paste on gpu-box, which joins by itself
-```
+> **You:** add my new GPU server
+>
+> **Agent:** Sure — how do you usually connect to it? An SSH command like
+> `ssh -p 40001 root@1.2.3.4` is all I need.
+>
+> **You:** `ssh ubuntu@10.0.0.7`
+>
+> **Agent:** Added as `gpu-box`: 2× RTX 4090, both idle, 46 GB free. It's ready to use.
 
-Every machine besides the center is a **member**. A member needs nothing installed — just
-sshd. Paste the `fleet invite` line on machines where you also want to *run* fleet, or
-where you would rather not type a password: it installs fleet there and joins with no
-password at all.
+> **You:** train `train.py` on whatever has a free 24 GB card
+>
+> **Agent:** `rtx4090` has 23.1 GB free and an idle GPU; `a100-spot` is free too but costs
+> $1.89/hr. Starting on `rtx4090`, logging to `train.log`.
+
+| You say | What happens |
+|---|---|
+| "what's free right now?" | every machine checked, the free ones listed |
+| "find me a box with a 24 GB card" | machines matched by what they have, not by name |
+| "run the tests on the Linux box" | run there, results brought back |
+| "what's costing me money?" | idle paid rentals flagged, with their hourly price |
+| "let the laptop reach the NAS" | access granted, applied at once |
+| "add a machine without typing its password" | a one-time line to paste there; it joins by itself |
+
+No hostnames, keys or passwords go into the conversation, and anything irreversible
+waits for your yes.
+
+Every machine besides the center is a **member**. A member needs nothing installed —
+just sshd. For machines where you also want to *run* fleet, or that you would rather not
+type a password for, the agent gives you an invite line: pasted there, it installs fleet
+and joins by itself.
 
 ### Already in your agent? Install from there
 
@@ -82,6 +84,9 @@ password at all.
 Plus OpenCode, Amp, Windsurf, Cline, Zed, Qwen Code, Goose, Hermes and more:
 **[every agent →](docs/agents.md)**
 
+On a machine in no fleet yet, these make it a center on first use, like the installer.
+For a member, paste its invite line first.
+
 ## Built to be safe
 
 - **Nothing to install on your machines.** fleet probes with one script over one SSH
@@ -93,12 +98,19 @@ Plus OpenCode, Amp, Windsurf, Cline, Zed, Qwen Code, Goose, Hermes and more:
 - **The agent asks, not guesses.** It is told to ask which machine you mean, and to leave
   irreversible commands to you.
 
-## Also for you, not just your agent
+## Prefer the command line?
+
+Everything the agent does is a plain `fleet` command, for when you want to drive it
+yourself:
 
 ```bash
 fleet ls                            # every machine, with what is free right now
+fleet ls --tag cuda --tag vram-24g  # by capability: NVIDIA, a card of 24 GB or more
 fleet top                           # live view, like htop for the whole fleet
 fleet show gpu-box                  # one machine in detail: GPU processes, services, disks
+fleet ssh gpu-box -- nvidia-smi     # run something there
+fleet add "ssh ubuntu@10.0.0.7"     # add a machine; fleet invite NAME for a join line
+fleet access nas --allow laptop     # let one machine reach another
 ```
 
 <img src="docs/assets/fleet-top.svg" alt="fleet top: a live view of GPU utilisation, free VRAM, CPU, RAM and disk across all machines" width="100%">
