@@ -61,8 +61,9 @@ def LOG_PATH() -> Path:
 def _plist(cmd: str, port: int) -> str:
     args = "".join(f"    <string>{a}</string>\n"
                    for a in (cmd, "center", "--listen", "--port", str(port)))
-    # Where launchd puts the listener's output. Without it an agent that dies at start-up
-    # leaves no trace anywhere a person would look.
+    # Where launchd puts the listener's output, unbuffered and with a traceback on a
+    # crash. Without it an agent that dies or hangs at start-up leaves no trace anywhere
+    # a person would look.
     log = LOG_PATH()
     log.parent.mkdir(parents=True, exist_ok=True)
     return f"""<?xml version="1.0" encoding="UTF-8"?>
@@ -78,6 +79,11 @@ def _plist(cmd: str, port: int) -> str:
   <key>KeepAlive</key><true/>
   <key>StandardOutPath</key><string>{log}</string>
   <key>StandardErrorPath</key><string>{log}</string>
+  <key>EnvironmentVariables</key>
+  <dict>
+    <key>PYTHONUNBUFFERED</key><string>1</string>
+    <key>PYTHONFAULTHANDLER</key><string>1</string>
+  </dict>
 </dict>
 </plist>
 """

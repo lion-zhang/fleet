@@ -63,7 +63,7 @@ def check(name: str, ok: bool, detail: str = "", *, required: bool = True) -> bo
     status = "PASS" if ok else ("FAIL" if required else "WARN")
     took, _LAST[0] = time.monotonic() - _LAST[0], time.monotonic()
     RESULTS.append((status, name, detail.strip().replace("\n", " ⏎ ")[-300:]))
-    print(f"{status}  {name}  ({took:.1f}s)" + ("" if ok else f"\n      {detail.strip()[-1500:]}"),
+    print(f"{status}  {name}  ({took:.1f}s)" + ("" if ok else f"\n      {detail.strip()[-5000:]}"),
           flush=True)
     if took > 15:
         print(f"      slow: {detail.strip()[-400:]}", flush=True)
@@ -192,7 +192,16 @@ def main() -> int:
         why += f"; {log}: " + (log.read_text(errors="replace")[-1500:] if log.exists()
                               else "no log")
         if platform.system() == "Darwin":
-            why += "\n" + run(["launchctl", "print", f"gui/{os.getuid()}/io.fleet.center"])[1][-1500:]
+            said = run(["launchctl", "print", f"gui/{os.getuid()}/io.fleet.center"])[1]
+            pid = re.search(r"\bpid = (\d+)", said)
+            if pid:
+                # Where it is stuck: faulthandler (PYTHONFAULTHANDLER in the plist)
+                # prints every thread's Python stack into the log on SIGABRT.
+                why += "\nlsof: " + run(["lsof", "-nP", "-a", "-p", pid[1], "-i"])[1][-800:]
+                run(["kill", "-ABRT", pid[1]])
+                time.sleep(2)
+                why += "\nstack: " + (log.read_text(errors="replace")[-3000:] if log.exists()
+                                       else "no log")
     check("the service is listening on 7373", up, why, required=False)
     if not up:
         listener = subprocess.Popen([FLEET, "center", "--listen"], stdout=subprocess.DEVNULL,
