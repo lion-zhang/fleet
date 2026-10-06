@@ -202,7 +202,7 @@ def main() -> int:
                 time.sleep(2)
                 why += "\nstack: " + (log.read_text(errors="replace")[-3000:] if log.exists()
                                        else "no log")
-    check("the service is listening on 7373", up, why, required=False)
+    check("the service is listening on 7373", up, why)
     if not up:
         listener = subprocess.Popen([FLEET, "center", "--listen"], stdout=subprocess.DEVNULL,
                                     stderr=subprocess.DEVNULL, stdin=subprocess.DEVNULL)

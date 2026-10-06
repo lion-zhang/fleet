@@ -22,6 +22,7 @@ read from stdin, over HTTP instead. Nothing new had to be trusted for this to wo
 from __future__ import annotations
 
 import json
+import socketserver
 import threading
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
@@ -169,8 +170,23 @@ def current_url() -> str:
     return _URL["value"]
 
 
+class _Server(ThreadingHTTPServer):
+    """ThreadingHTTPServer without the reverse name lookup it does before listening.
+
+    `HTTPServer.server_bind` calls `socket.getfqdn` on the bound address just to fill in
+    `server_name`, which nothing here reads. On a real macOS runner that lookup hung for
+    over a minute, so the service launchd started was "running" with its port closed --
+    and any Mac whose own name resolves slowly would do the same.
+    """
+
+    def server_bind(self) -> None:
+        socketserver.TCPServer.server_bind(self)
+        host, port = self.server_address[:2]
+        self.server_name, self.server_port = str(host), port
+
+
 def build(host: str, port: int) -> ThreadingHTTPServer:
-    httpd = ThreadingHTTPServer((host, port), _Handler)
+    httpd = _Server((host, port), _Handler)
     httpd.exchange = staticmethod(exchange)         # type: ignore[attr-defined]
     httpd.join = staticmethod(join_handle)          # type: ignore[attr-defined]
     return httpd

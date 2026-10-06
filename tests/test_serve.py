@@ -345,3 +345,20 @@ def test_a_member_may_remove_itself(a_center):
                 updated_at=2_000_000_000)
     serve.exchange(_sealed(a_center["skey"], [me]))
     assert "box" not in {d.name for d in inv.live(inv.load(inv.INVENTORY_PATH))}
+
+
+def test_the_listener_binds_without_a_reverse_name_lookup(monkeypatch):
+    """HTTPServer.server_bind calls socket.getfqdn before listening; on a real macOS
+    runner that hung for over a minute, so the launchd service ran with its port shut."""
+    import socket
+
+    from fleet import serve
+
+    def hang(*a, **k):
+        raise AssertionError("getfqdn called: it can hang for minutes on macOS")
+    monkeypatch.setattr(socket, "getfqdn", hang)
+    httpd = serve.build("127.0.0.1", 0)
+    try:
+        assert httpd.server_address[1] > 0
+    finally:
+        httpd.server_close()
