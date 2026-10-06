@@ -15,6 +15,7 @@ import json
 import sys
 from pathlib import Path
 
+from ..state.writes import replace_file
 from .registry import MCP_CLIENTS, UVX, Change, fleet_executable
 
 
@@ -138,7 +139,7 @@ def install_mcp(root: Path, clients: list[str], cmd: str, *,
                   else "created" if not current else "updated")
         if action != "unchanged" and not dry_run:
             path.parent.mkdir(parents=True, exist_ok=True)
-            path.write_text(desired)
+            replace_file(path, desired)
         changes.append(Change(client.name, path, action))
     return changes
 
@@ -158,7 +159,7 @@ def uninstall_mcp(root: Path, clients: list[str], *,
         desired = remove_mcp(current, client.key)
         action = "removed" if desired != current else "unchanged"
         if action == "removed" and not dry_run:
-            path.write_text(desired)
+            replace_file(path, desired)
         changes.append(Change(client.name, path, action))
     return changes
 

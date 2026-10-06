@@ -16,6 +16,7 @@ import re
 from contextlib import suppress
 from pathlib import Path
 
+from ..state.writes import replace_file
 from .registry import AGENTS, BY_NAME, TARGETS, Change
 from .usage import agents_block, hermes_skill_text, skill_text
 
@@ -145,7 +146,7 @@ def install(root: Path, targets: list[str], cmd: str, *,
                   else "created" if current is None else "updated")
         if action != "unchanged" and not dry_run:
             path.parent.mkdir(parents=True, exist_ok=True)
-            path.write_text(desired)
+            replace_file(path, desired)
         changes.append(Change(target, path, action))
         changes += _drop_legacy(root, target, seen, dry_run=dry_run)
     return changes
@@ -193,7 +194,7 @@ def _drop_legacy(root: Path, target: str, seen: set[Path], *, dry_run: bool) -> 
             # Nothing but our region was ever in it -- that file existed because fleet
             # made it -- so leaving an empty one behind is litter, not caution.
             if stripped.strip():
-                path.write_text(stripped)
+                replace_file(path, stripped)
             else:
                 path.unlink()
         out.append(Change(target, path, "removed"))
@@ -235,7 +236,7 @@ def uninstall(root: Path, targets: list[str], *,
         stripped = remove_block(current)
         action = "removed" if stripped != current else "unchanged"
         if action == "removed" and not dry_run:
-            path.write_text(stripped)
+            replace_file(path, stripped)
         changes.append(Change(target, path, action))
     return changes
 

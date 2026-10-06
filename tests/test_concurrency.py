@@ -133,3 +133,39 @@ def test_a_revoke_made_while_an_install_is_in_flight_wins(tmp_path, monkeypatch)
     ok, _, installed = rec.converge_edge(acl.load(path), edge, Endpoint(target="m1"),
                                          install=True, access_path=path)
     assert ok and on_machine == [True, False] and installed is False
+
+
+def _first_run(cfg: str, state: str, start, out) -> None:
+    import os
+
+    os.environ["FLEET_CONFIG_DIR"], os.environ["FLEET_STATE_DIR"] = cfg, state
+    os.environ.pop("FLEET_NO_AUTO_CENTER", None)
+    from fleet.ops import firstrun
+
+    firstrun.teach_agents = lambda: []          # no agents, and no service, in a test
+    firstrun.start_listening = lambda: ""
+    start.wait()
+    out.put(firstrun.maybe("ls", lambda line: None))
+
+
+def test_two_agents_starting_fleet_at_once_make_one_fleet(tmp_path):
+    """Their first commands at the same moment. Before, each could see no fleet, each
+    made a key (one deleting the other's), and the second replaced the first's fleet."""
+    import yaml
+
+    cfg, state = tmp_path / "config", tmp_path / "state"
+    ctx = mp.get_context("spawn")
+    start, out = ctx.Event(), ctx.Queue()
+    procs = [ctx.Process(target=_first_run, args=(str(cfg), str(state), start, out))
+             for _ in range(2)]
+    for p in procs:
+        p.start()
+    start.set()
+    for p in procs:
+        p.join(120)
+        assert p.exitcode == 0
+    assert sorted([out.get(), out.get()]) == [False, True], "one started it, one found it"
+    access = yaml.safe_load((cfg / "access.yaml").read_text())
+    pub = (cfg / "id_ed25519.pub").read_text().strip()
+    pinned = [k["pubkey"] for k in access["keys"].values()]
+    assert pinned == [pub], "the key on disk is the key the fleet pinned"

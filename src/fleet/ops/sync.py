@@ -189,6 +189,22 @@ def ensure_fresh(*, force: bool = False) -> None:
     # connect timeout every one of them was paying to rediscover that it is away.
     if not force and acl.center_retry_after(60, int(cfg.offline_backoff_max_s or 0)):
         return
+    from ..config import STATE_DIR
+    from ..state.writes import try_turn
+
+    # One refresh at a time is enough. Several agents reading the fleet at once each
+    # went to the center for the same answer; now one asks and the others read what is
+    # on disk, without waiting for it.
+    with try_turn(STATE_DIR / "refresh") as ours:
+        if not ours:
+            return
+        if not force and int(time.time()) - acl.center_last_seen() < int(cfg.sync_ttl_s):
+            return                         # refreshed by another while we got here
+        _refresh(url, pinned)
+
+
+def _refresh(url: str, pinned: str) -> None:
+    """Ask the center for a fresh copy, and keep what it says. One process at a time."""
     try:
         payload = acl.seal(inv.dumps(inv.load()), telemetry=telemetry_to_relay())
     except Exception:

@@ -76,6 +76,21 @@ def atomic_write(path: Path, text: str, *, mode: int = 0o600) -> None:
         raise
 
 
+def replace_file(path: Path, text: str) -> None:
+    """`atomic_write` for a file that is the user's, not fleet's: keep its permissions.
+
+    An agent's AGENTS.md, a client's config, a skill file. Written in place, an agent
+    starting up at that moment could read it half-written, and two `fleet setup` runs at
+    once could interleave -- leaving fragments outside fleet's marked region that
+    nothing would ever clean up. New files get the usual 0644.
+    """
+    try:
+        mode = Path(path).stat().st_mode & 0o777
+    except OSError:
+        mode = 0o644
+    atomic_write(path, text, mode=mode)
+
+
 def _replace(src: str, dst: Path) -> None:
     """os.replace, patient on Windows, where a reader holding the file makes it fail."""
     for attempt in range(50):
@@ -216,5 +231,34 @@ def turn(path: Path, *, timeout: float = 60.0):
         yield
     finally:
         held.discard(key)
+        with contextlib.suppress(OSError):
+            ticket.unlink()
+
+
+@contextlib.contextmanager
+def try_turn(path: Path):
+    """Take the turn only if it is free right now; yields whether we have it.
+
+    For work that one process doing is enough -- refreshing from the center, say: when
+    several agents read the fleet at once, one refreshes and the rest carry on with
+    what is on disk, rather than queueing to repeat the same round trip.
+    """
+    key = str(Path(path).resolve())
+    held = _held.__dict__.setdefault("paths", set())
+    if key in held:
+        yield True
+        return
+    qdir = _queue_dir(path)
+    ticket, mine = _take_ticket(qdir)
+    try:
+        if _must_wait(qdir, mine):
+            yield False
+            return
+        held.add(key)
+        try:
+            yield True
+        finally:
+            held.discard(key)
+    finally:
         with contextlib.suppress(OSError):
             ticket.unlink()

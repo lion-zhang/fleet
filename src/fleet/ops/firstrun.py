@@ -84,14 +84,22 @@ def maybe(command: str, say) -> bool:
     a member. `say` prints one line; the MCP server passes a stderr printer, because its
     stdout is the protocol.
     """
+    from ..config import STATE_DIR
+    from ..state.writes import turn
     from .lifecycle import membership
 
     if os.environ.get(OPT_OUT) or membership() != "":
         return False
-    try:
-        acc, dev = init_center()
-    except acl.AccessError:
-        return False
+    # Two agents' first commands at the same moment: the second waits for the first to
+    # finish starting the fleet, then finds it and does nothing -- rather than starting a
+    # second fleet beside it.
+    with turn(STATE_DIR / "first-run"):
+        if membership() != "":
+            return False
+        try:
+            acc, dev = init_center()
+        except acl.AccessError:
+            return False
     taught = [] if command == "setup" else teach_agents()
     say(f"started fleet {acc.fleet_id} with {dev.name} as its center"
         + (f"; taught {', '.join(taught)} to use it" if taught else "")
