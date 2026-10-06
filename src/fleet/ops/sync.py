@@ -46,11 +46,24 @@ def this_host(acc) -> str:
     """
     me = inv.find_exact(inv.load(), acc.name_of(acc.center))
     for ep in sorted(inv.endpoints_of(me) if me else [], key=lambda e: e.preference):
-        if ep.target:
+        # Never a loopback name: the center reached as `ssh me@localhost` is a real
+        # endpoint for it, and advertised it sent every invited machine to dial itself.
+        if ep.target and not _loopback(ep.target):
             return ep.target
     import socket
 
     return socket.gethostname()
+
+def _loopback(target: str) -> bool:
+    import ipaddress
+
+    if target.lower() in ("localhost", "localhost.localdomain", "ip6-localhost"):
+        return True
+    try:
+        return ipaddress.ip_address(target.strip("[]")).is_loopback
+    except ValueError:
+        return False
+
 
 def sealed_envelope(payload: str) -> str:
     """Sign our inventory once, for whoever is about to be handed it.

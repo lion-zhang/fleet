@@ -56,10 +56,17 @@ def fleet(*args: str, **kw) -> tuple[int, str]:
     return run([FLEET, *args], **kw)
 
 
+_LAST = [time.monotonic()]
+
+
 def check(name: str, ok: bool, detail: str = "", *, required: bool = True) -> bool:
     status = "PASS" if ok else ("FAIL" if required else "WARN")
+    took, _LAST[0] = time.monotonic() - _LAST[0], time.monotonic()
     RESULTS.append((status, name, detail.strip().replace("\n", " ⏎ ")[-300:]))
-    print(f"{status}  {name}" + ("" if ok else f"\n      {detail.strip()[-1500:]}"), flush=True)
+    print(f"{status}  {name}  ({took:.1f}s)" + ("" if ok else f"\n      {detail.strip()[-1500:]}"),
+          flush=True)
+    if took > 15:
+        print(f"      slow: {detail.strip()[-400:]}", flush=True)
     return ok
 
 

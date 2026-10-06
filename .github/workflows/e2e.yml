@@ -37,6 +37,17 @@ jobs:
           sudo launchctl load -w /System/Library/LaunchDaemons/ssh.plist 2>/dev/null \
             || sudo systemsetup -f -setremotelogin on
           for i in $(seq 1 20); do nc -z localhost 22 && break; sleep 1; done
+      # sshd refuses a key when the home or ~/.ssh is writable by others (StrictModes);
+      # prove a key login works before blaming fleet for one that does not.
+      - name: a key login to localhost works
+        if: runner.os != 'Windows'
+        run: |
+          chmod go-w "$HOME"; mkdir -p ~/.ssh; chmod 700 ~/.ssh
+          ssh-keygen -q -t ed25519 -N "" -f ~/.ssh/e2e_check
+          cat ~/.ssh/e2e_check.pub >> ~/.ssh/authorized_keys; chmod 600 ~/.ssh/authorized_keys
+          ls -ld "$HOME" ~/.ssh ~/.ssh/authorized_keys
+          ssh -i ~/.ssh/e2e_check -o BatchMode=yes -o StrictHostKeyChecking=accept-new localhost true \
+            || { ssh -vv -i ~/.ssh/e2e_check -o BatchMode=yes localhost true 2>&1 | tail -30; exit 1; }
       - name: sshd (Windows)
         if: runner.os == 'Windows'
         shell: pwsh
