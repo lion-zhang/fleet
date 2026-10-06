@@ -54,8 +54,7 @@ def init_center():
     dev.role = "center"
     # Seed the inventory from the same object the access list was pinned from, so the
     # two never derive a name each.
-    devices, _ = inv.upsert(devices, dev)
-    inv.save(devices)
+    inv.update(lambda current: inv.upsert(current, dev))
     if res.snapshot is not None:
         conn = store.connect()
         try:

@@ -77,11 +77,11 @@ and joins by itself.
 | **Codex** | `codex plugin marketplace add lion-zhang/fleet` then `codex plugin add fleet@fleet` |
 | **Gemini CLI** | `gemini extensions install https://github.com/lion-zhang/fleet` |
 | **GitHub Copilot CLI** | `copilot plugin marketplace add lion-zhang/fleet` then `copilot plugin install fleet@fleet` |
-| **Cursor** | [![Add to Cursor](https://cursor.com/deeplink/mcp-install-dark.svg)](https://cursor.com/en/install-mcp?name=fleet&config=eyJjb21tYW5kIjoidXZ4IiwiYXJncyI6WyJhZ2VudC1mbGVldCIsIm1jcCJdfQ==) |
+| **Cursor** | [![Add to Cursor](https://cursor.com/deeplink/mcp-install-dark.svg)](https://cursor.com/en/install-mcp?name=fleet&config=eyJjb21tYW5kIjoidXZ4IiwiYXJncyI6WyJhZ2VudC1mbGVldCIsIm1jcCJdfQ%3D%3D) |
 | **VS Code** | [![Install in VS Code](https://img.shields.io/badge/VS_Code-Install_fleet-0098FF?logo=visualstudiocode&logoColor=white)](https://insiders.vscode.dev/redirect/mcp/install?name=fleet&config=%7B%22command%22%3A%22uvx%22%2C%22args%22%3A%5B%22agent-fleet%22%2C%22mcp%22%5D%7D) |
 | **Claude Desktop** | open `fleet.mcpb` from the [latest release](https://github.com/lion-zhang/fleet/releases/latest) |
 
-Plus OpenCode, Amp, Windsurf, Cline, Zed, Qwen Code, Goose, Hermes and more:
+Plus OpenCode, Amp, Windsurf, Cline, Zed, Qwen Code, Goose, Kiro, Hermes — 35+ agents in all:
 **[every agent →](docs/agents.md)**
 
 On a machine in no fleet yet, these make it a center on first use, like the installer.
@@ -134,6 +134,16 @@ fleet is about the machines you already have. It complements tools that launch n
 ## FAQ
 
 <details>
+<summary><b>I use Claude Code <i>and</i> Codex (and more) on one machine. Does that work?</b></summary>
+
+Yes — that is the normal case. fleet is installed once per machine: one command, one
+inventory, one set of keys. Each agent only gets a small skill or MCP entry pointing at
+it, so Claude Code, Codex, Gemini CLI and a desktop app all see the same machines, and can
+use them at the same time. Install a new agent later? Run `fleet setup` (or ask an agent
+that already has fleet to do it).
+</details>
+
+<details>
 <summary><b>What does my agent actually get?</b></summary>
 
 Agents with a shell (Claude Code, Codex, Gemini CLI, …) get a skill that tells them the
@@ -167,7 +177,7 @@ center included.
 ## Learn more
 
 - [Getting started](docs/getting-started.md) — the full walkthrough, every command
-- [Every agent](docs/agents.md) — install commands and config for 20+ agents
+- [Every agent](docs/agents.md) — install commands and config for 35+ agents
 - [Design](docs/design/access.md) — how access is granted, signed and revoked
 
 **Status:** v0.5. Every command has been run end to end on fleets of Linux machines built
