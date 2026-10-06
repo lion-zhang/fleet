@@ -9,7 +9,7 @@ on:
   pull_request:
     paths: ["src/**", "install.sh", "install.ps1", "tests/e2e/**", ".github/workflows/e2e.yml"]
   push:
-    branches: [main, claude/continue-fleet-development-y01p2j]   # TEMP: while it is built
+    branches: [main]
     paths: ["src/**", "install.sh", "install.ps1", "tests/e2e/**", ".github/workflows/e2e.yml"]
 
 jobs:

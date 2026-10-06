@@ -228,3 +228,34 @@ def test_an_existing_open_directory_is_tightened(tmp_path, monkeypatch):
     monkeypatch.setattr(config, "STATE_DIR", d)
     config.ensure_dirs()
     assert d.stat().st_mode & 0o777 == 0o700
+
+
+def test_rm_takes_the_centers_key_off_last(a_fleet, monkeypatch):
+    """`fleet rm` logs in with the center's key for every removal. In fingerprint order
+    that key came off first on about half of real fleets, and the other blocks on the
+    machine being removed were refused and left behind (found on a five-machine fleet).
+    '~' sorts after every base64 character, so the old order put the center first."""
+    from fleet.ops import sweep
+
+    runner, me = a_fleet
+    acc = acl.load(acl.ACCESS_PATH)
+    acc.keys["SHA256:~worker"] = {"name": "worker", "pubkey": "ssh-ed25519 AAAA w",
+                                  "device_id": "id:w"}
+    acl.grant(acc, me, "SHA256:xps", user="lin")
+    acl.grant(acc, "SHA256:~worker", "SHA256:xps", user="lin")
+    acl.save(acc, acl.ACCESS_PATH)
+    locked_out: set[tuple[str, str]] = set()
+
+    def apply_edge(acc, edge, ep, **kw):      # one authorized_keys per (machine, user)
+        src, dst, user = edge
+        if (dst, user) in locked_out:
+            return False, "Permission denied (publickey)"
+        if src == me:
+            locked_out.add((dst, user))
+        return True, ""
+    monkeypatch.setattr(rec, "apply_edge", apply_edge)
+
+    dev = next(d for d in inv.load(inv.INVENTORY_PATH) if d.id == "id:xps")
+    removed, unreached = sweep.remove_now(acl.load(acl.ACCESS_PATH), dev)
+    assert unreached == [], unreached
+    assert removed == 3, "the worker's block, and the center's as lin and as root"

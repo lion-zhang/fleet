@@ -113,7 +113,11 @@ def remove_now(acc, dev) -> tuple[int, list[str]]:
     removed, unreached = 0, []
     conn = store.connect()
     try:
-        for key, st in sorted(ledger.items()):
+        # The center's own key last: every removal logs in with it. In fingerprint order
+        # it came first on about half of real fleets, and the other blocks on the machine
+        # being removed were then refused and left behind (found on a five-machine fleet).
+        for key, st in sorted(ledger.items(),
+                              key=lambda kv: (kv[0].split(">")[0] == acc.center, kv[0])):
             src, dst, user = key.split(">")
             if src not in fps and dst not in fps:
                 continue
