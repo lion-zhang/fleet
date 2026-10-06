@@ -718,3 +718,27 @@ def test_hermes_home_set_in_the_environment_wins(tmp_path, monkeypatch):
 def test_hermes_elsewhere_is_unchanged(tmp_path):
     (tmp_path / ".hermes").mkdir()
     assert plan(tmp_path)["hermes"] == tmp_path / ".hermes" / "skills" / "devops" / "fleet" / "SKILL.md"
+
+
+def test_run_from_uvx_and_installed_nowhere_the_skill_says_uvx(monkeypatch, tmp_path):
+    """`uvx agent-fleet mcp` runs from uv's cache. Its path in a skill or a client config
+    would point at a directory uv deletes whenever the cache is cleaned."""
+    from fleet.agents import clients, registry
+
+    monkeypatch.setattr(registry, "_fleet_on_path", lambda: None)
+    monkeypatch.setattr(registry.sys, "prefix", str(tmp_path / "uv" / "archive-v0" / "abc"))
+    assert registry.fleet_command() == "uvx agent-fleet"
+    assert registry.config_command() == registry.UVX
+    entry = clients.mcp_entry(registry.config_command())
+    assert entry["args"] == ["agent-fleet", "mcp"] and entry["command"].endswith("uvx")
+
+
+def test_an_installed_fleet_is_never_swapped_for_uvx(monkeypatch, tmp_path):
+    from fleet.agents import registry
+
+    exe = tmp_path / "bin" / "fleet"
+    monkeypatch.setattr(registry, "_fleet_on_path", lambda: exe)
+    monkeypatch.setattr(registry, "_found_by_a_fresh_shell", lambda: False)
+    monkeypatch.setattr(registry.sys, "prefix", str(tmp_path / "uv" / "archive-v0" / "abc"))
+    assert registry.fleet_command() == str(exe)
+    assert registry.config_command() == str(exe)

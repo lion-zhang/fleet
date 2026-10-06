@@ -42,6 +42,8 @@ def fleet_command() -> str:
     found = _fleet_on_path()
     if found and _found_by_a_fresh_shell():
         return "fleet"
+    if not found and _ephemeral():
+        return UVX
     # The one on PATH by preference: uv's shim in ~/.local/bin outlives a reinstall's
     # rebuilt environment, and reads as what it is.
     return str(found or _fallback_exe())
@@ -255,6 +257,29 @@ MCP_CLIENTS = (
               linux=".codeium/windsurf/mcp_config.json"),
 )
 
+
+
+# What a skill or a client config says when fleet runs from a throwaway `uvx` environment
+# and is installed nowhere: the launcher itself, which builds that environment again.
+UVX = "uvx agent-fleet"
+
+
+def _ephemeral() -> bool:
+    """Whether we run from an environment `uvx` built in its cache, not an install.
+
+    `uvx agent-fleet mcp` is how the Gemini extension, the MCP registry and the one-click
+    buttons launch fleet. Writing that environment's path into a skill or a config would
+    point it at a directory uv may delete whenever its cache is cleaned.
+    """
+    return any(part.startswith("archive-v") for part in Path(sys.prefix).parts)
+
+
+def config_command() -> str:
+    """What to write into an MCP client's config: `fleet_executable`, unless fleet is
+    installed nowhere and runs from `uvx`, in which case the launcher (see `UVX`)."""
+    if not _fleet_on_path() and _ephemeral():
+        return UVX
+    return fleet_executable()
 
 
 def fleet_executable() -> str:

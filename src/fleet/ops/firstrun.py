@@ -67,12 +67,12 @@ def init_center():
 
 def teach_agents() -> list[str]:
     """`fleet setup` for every agent installed here. Returns the agents taught."""
-    from ..agents import (detect_mcp_clients, detect_targets, fleet_command,
-                          fleet_executable, install, install_mcp)
+    from ..agents import (config_command, detect_mcp_clients, detect_targets,
+                          fleet_command, install, install_mcp)
 
     root = Path.home()
     changes = (install(root, detect_targets(root), fleet_command())
-               + install_mcp(root, detect_mcp_clients(root), fleet_executable()))
+               + install_mcp(root, detect_mcp_clients(root), config_command()))
     return sorted({c.target for c in changes if c.action in ("created", "updated")})
 
 

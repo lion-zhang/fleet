@@ -1,0 +1,67 @@
+name: release
+
+# Publishing a GitHub release (tag vX.Y.Z) puts that version on PyPI as agent-fleet and
+# attaches the wheel, the sdist and the Claude Desktop bundle (fleet.mcpb) to it.
+#
+# PyPI is reached by Trusted Publishing: no token is stored anywhere. pypi.org must list
+# this repository, this file and the `pypi` environment as a publisher of agent-fleet.
+
+on:
+  release:
+    types: [published]
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+      - name: The tag is the version being released
+        run: |
+          v="$(uv version --short)"
+          test "v$v" = "$GITHUB_REF_NAME" || { echo "tag $GITHUB_REF_NAME, pyproject.toml $v"; exit 1; }
+      - name: The generated plugin, extension and registry files are current
+        run: |
+          uv run python scripts/build_dist.py
+          git diff --exit-code
+      - run: uv build
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Claude Desktop bundle
+        run: |
+          npx -y @anthropic-ai/mcpb validate mcpb/manifest.json
+          npx -y @anthropic-ai/mcpb pack mcpb dist/fleet.mcpb
+      - uses: actions/upload-artifact@v4
+        with:
+          name: dist
+          path: dist/
+
+  pypi:
+    needs: build
+    runs-on: ubuntu-latest
+    environment: pypi
+    permissions:
+      id-token: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: dist
+          path: dist/
+      # The bundle is for the release page, not for PyPI.
+      - run: rm dist/fleet.mcpb
+      - uses: pypa/gh-action-pypi-publish@release/v1
+
+  assets:
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: dist
+          path: dist/
+      - run: gh release upload "$GITHUB_REF_NAME" dist/* --clobber --repo "$GITHUB_REPOSITORY"
+        env:
+          GH_TOKEN: ${{ github.token }}

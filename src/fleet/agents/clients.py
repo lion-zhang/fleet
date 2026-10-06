@@ -15,11 +15,16 @@ import json
 import sys
 from pathlib import Path
 
-from .registry import MCP_CLIENTS, Change, fleet_executable
+from .registry import MCP_CLIENTS, UVX, Change, fleet_executable
 
 
 def mcp_entry(cmd: str) -> dict:
     """What we register. `fleet mcp` serves stdio, which is how clients launch a server."""
+    if cmd == UVX:
+        import shutil
+
+        # Absolute when we can: a desktop client's PATH is not a shell's.
+        return {"command": shutil.which("uvx") or "uvx", "args": ["agent-fleet", "mcp"]}
     return {"command": cmd, "args": ["mcp"]}
 
 

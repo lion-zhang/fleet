@@ -27,9 +27,9 @@ from rich.text import Text
 from . import config as _cfg
 from . import reconcile as rec
 from . import service
-from .agents import (MCP_CLIENTS, TARGETS, detect_mcp_clients, detect_targets,
-                     fleet_command, fleet_executable, install, install_mcp,
-                     installed_mcp_clients, installed_targets, package_version,
+from .agents import (MCP_CLIENTS, TARGETS, config_command, detect_mcp_clients,
+                     detect_targets, fleet_command, fleet_executable, install,
+                     install_mcp, installed_mcp_clients, installed_targets, package_version,
                      stale_mcp_clients, stale_targets, uninstall, uninstall_mcp)
 from .config import DEFAULT_PORT, INVENTORY_PATH, load_config
 from .edit import apply_edits
@@ -1812,7 +1812,7 @@ def _skills_note() -> str:
     try:
         root = Path.home()
         stale = stale_targets(root, fleet_command()) + stale_mcp_clients(
-            root, fleet_executable())
+            root, config_command())
     except Exception:
         return ""
     if not stale:
@@ -1943,7 +1943,7 @@ def cmd_setup(
                           "[/dim]")
             return
         changes = (install(root, targets, fleet_command(), dry_run=dry_run, project=project)
-                   + install_mcp(root, clients, fleet_executable(), dry_run=dry_run))
+                   + install_mcp(root, clients, config_command(), dry_run=dry_run))
         changed = [c for c in changes if c.action != "unchanged"]
         for c in changed:
             console.print(f"  [green]{c.action:<9}[/green] {c.path}")
@@ -1979,7 +1979,7 @@ def cmd_setup(
     else:
 
         changes = (install(root, targets, cmd, dry_run=dry_run, project=project)
-                   + install_mcp(root, clients, fleet_executable(), dry_run=dry_run))
+                   + install_mcp(root, clients, config_command(), dry_run=dry_run))
 
     for c in changes:
         colour = {"created": "green", "updated": "green",

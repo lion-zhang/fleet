@@ -1,3 +1,4 @@
+<!-- mcp-name: io.github.lion-zhang/fleet -->
 <div align="center">
 
 # fleet — GPU & machine inventory for coding agents
