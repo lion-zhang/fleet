@@ -149,9 +149,13 @@ def powershell_sync_command(fleet_id: str, from_id: str, *, user: str = "",
            "if($admin){$f=Join-Path $env:ProgramData 'ssh\\administrators_authorized_keys'}"
            "else{$f=Join-Path $env:USERPROFILE '.ssh\\authorized_keys'}\n")
         +
-        "$d=Split-Path $f; if(!(Test-Path $d)){New-Item -ItemType Directory -Path $d|Out-Null}\n"
-        "if(!(Test-Path $f)){New-Item -ItemType File -Path $f|Out-Null}\n"
+        # -Force: another edit may create the directory between the test and the create.
+        "$d=Split-Path $f; if(!(Test-Path $d)){New-Item -ItemType Directory -Path $d -Force|Out-Null}\n"
+        # The file is created inside the turn, not before it: found by CI, eight edits of a
+        # file that did not exist yet all tried to create it, and all but one died on
+        # "already exists".
         + _PS_TAKE_TURN +
+        "if(!(Test-Path $f)){New-Item -ItemType File -Path $f|Out-Null}\n"
         "$lines=@(Get-Content -LiteralPath $f -ErrorAction SilentlyContinue)\n"
         f"$b='{begin}'; $e='{end}'\n"
         "$keep=@(); $s=$false\n"
