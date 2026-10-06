@@ -490,6 +490,7 @@ def cmd_invite(name: str = typer.Argument(None, help="what the machine will be c
     [dim]Example:[/dim]  fleet invite gpu-box --ttl 30m
     """
     _first_run("invite")
+    from . import links
     from .state import invites as invites_mod
     from .ops.join import encode_code
 
@@ -558,8 +559,10 @@ def cmd_invite(name: str = typer.Argument(None, help="what the machine will be c
     code = encode_code(url, acc.center, invite.id, secret)
     serving = _listening(url)
     if _emit({"id": invite.id, "name": invite.name, "expires_at": invite.expires_at,
-              "code": code, "command": f"fleet join {code}", "center_url": url,
-              "listening": serving}, json_out):
+              "code": code, "command": f"fleet join {code}",
+              "install": links.install_line(code),
+              "install_windows": links.install_line_windows(code),
+              "center_url": url, "listening": serving}, json_out):
         return
     minutes = max(1, seconds // 60)
     console.print(f"[green]✓[/green] invite {invite.id}"
@@ -569,6 +572,12 @@ def cmd_invite(name: str = typer.Argument(None, help="what the machine will be c
     # print, not console.print: rich would wrap a long code across lines, and a code
     # that does not survive copy-paste is no code at all.
     print(f"    fleet join {code}\n")
+    # The machine may not have fleet yet. One line installs it *as a member*, so it
+    # never starts a fleet of its own first.
+    console.print("  [dim]no fleet there yet? this installs it and joins in one go:[/dim]\n")
+    print(f"    {links.install_line(code)}\n")
+    console.print("  [dim]Windows (PowerShell):[/dim]\n")
+    print(f"    {links.install_line_windows(code)}\n")
     console.print(f"  [dim]it will dial {url}; the center reaches it back over ssh, "
                   "so sshd must be running there[/dim]")
     if not serving:
@@ -1979,9 +1988,10 @@ def cmd_setup(
     if dry_run:
         console.print("\n[dim]--dry-run: nothing was written.[/dim]")
     elif not remove and cmd != "fleet":
-        err.print(f"\n[yellow]fleet is not on your PATH[/yellow], so the skill points at "
-                  f"{cmd}.\n  Install it properly and re-run setup: "
-                  "[bold]uv tool install --editable .[/bold]")
+        err.print(f"\n[dim]A new shell here does not find `fleet` by name, so the "
+                  f"skill calls it by its full path, {cmd}. To use the short name: "
+                  "[bold]uv tool update-shell[/bold], then [bold]fleet setup[/bold] in a "
+                  "new terminal.[/dim]")
 
 
 @app.command("service", hidden=True)

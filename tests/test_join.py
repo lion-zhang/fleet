@@ -509,6 +509,25 @@ def test_invite_prints_a_code_for_this_center(fleet_of_two, monkeypatch):
     parts = join_mod.decode_code(data["code"])
     assert parts["center"] == f["cfp"] and data["name"] == "gpu-1"
     assert data["command"] == f"fleet join {data['code']}"
+    # And the line for a machine that has no fleet yet: installs it as a member.
+    assert data["install"].endswith(f"install.sh | sh -s -- --join {data['code']}")
+    assert f"$env:FLEET_JOIN='{data['code']}'" in data["install_windows"]
+
+
+def test_invite_shows_the_install_line_whole(fleet_of_two, monkeypatch):
+    """Long lines, printed unwrapped: a code split across two lines does not paste."""
+    from typer.testing import CliRunner
+
+    from fleet import cli
+
+    monkeypatch.setattr(cli, "_listening", lambda url: True)
+    with being(fleet_of_two["c"]):
+        out = CliRunner().invoke(cli.app, ["invite"])
+    assert out.exit_code == 0, out.output
+    lines = [ln.strip() for ln in out.output.splitlines()]
+    code = next(ln for ln in lines if ln.startswith("fleet join "))[len("fleet join "):]
+    assert any(ln.startswith("curl -LsSf ") and ln.endswith(f"--join {code}") for ln in lines)
+    assert any(ln.startswith("$env:FLEET_JOIN=") and ln.endswith("| iex") for ln in lines)
 
 
 def test_invite_refuses_off_the_center(fleet_of_two):

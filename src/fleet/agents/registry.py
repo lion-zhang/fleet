@@ -39,7 +39,12 @@ def fleet_command() -> str:
     not inherit that activation -- cannot see. Skip venv directories and keep walking:
     a real install further down PATH still means the bare name works everywhere.
     """
-    return "fleet" if _fleet_on_path() and _found_by_a_fresh_shell() else str(_fallback_exe())
+    found = _fleet_on_path()
+    if found and _found_by_a_fresh_shell():
+        return "fleet"
+    # The one on PATH by preference: uv's shim in ~/.local/bin outlives a reinstall's
+    # rebuilt environment, and reads as what it is.
+    return str(found or _fallback_exe())
 
 
 @functools.lru_cache(maxsize=1)
