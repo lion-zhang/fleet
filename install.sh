@@ -254,9 +254,12 @@ main() {
         fi
     fi
     if [ "$setup" = 1 ] && [ "$role" = center ]; then
-        say "next:  fleet show          this machine, as your agents will see it"
-        say "       fleet invite NAME   prints one line to run on another machine to add it"
-        say "       fleet add \"ssh user@host\"   or have this machine reach it"
+        say "next: add your machines, then ask for what you need. Tell your agent, e.g.:"
+        say "        \"add my GPU server: ssh user@host\"     a machine you can SSH into"
+        say "        \"invite my laptop\"                     one line to paste on a machine"
+        say "        \"what's free right now?\"               every machine, and what is free"
+        say "        \"run train.py where a 24 GB card is free\""
+        say "      or yourself: fleet add \"ssh user@host\", fleet invite NAME, fleet ls"
     elif [ "$setup" = 1 ]; then
         say "next:  fleet ls            the machines in this fleet"
     else

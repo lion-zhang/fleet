@@ -35,39 +35,53 @@ Install fleet from https://github.com/lion-zhang/fleet
 That is the whole setup. fleet is installed once on this machine, and every
 [supported agent](docs/agents.md) you have here learns it — not only the one you asked.
 This machine becomes your fleet's **center**. From here on you say what you want in plain
-words, with no commands to remember. When something is missing, the agent asks
-(illustrative):
+words, with no commands to remember.
 
-> **You:** add my new GPU server
->
-> **Agent:** Sure — how do you usually connect to it? An SSH command like
-> `ssh -p 40001 root@1.2.3.4` is all I need.
->
-> **You:** `ssh ubuntu@10.0.0.7`
+### Then add your machines
+
+Tell the agent how you reach a machine — the SSH command you already use is enough:
+
+> **You:** add my GPU server, `ssh ubuntu@10.0.0.7`
 >
 > **Agent:** Added as `gpu-box`: 2× RTX 4090, both idle, 46 GB free. It's ready to use.
+
+Each one takes a sentence, whatever the machine is:
+
+| The machine | What you tell the agent |
+|---|---|
+| a server you can already SSH into | "add `ssh ubuntu@10.0.0.7`" — fleet uses the key you already have |
+| a new rental (vast.ai, RunPod, Lambda) | "add `ssh -p 40001 root@1.2.3.4`, it costs $1.89/hr" |
+| one that only takes a password | "add it" — then you type the password once yourself; it is stored nowhere |
+| one fleet cannot get into from here | "invite my laptop" — you get one line to paste there, and it joins by itself |
+| one that does not exist yet | "give me the key for a cloud-init template" — it joins with no password at all |
+
+Nothing is installed on the machines you add: they only need SSH, on Linux, macOS or
+Windows. fleet probes each one for its GPUs, memory and disks, and keeps that current.
+
+### Then let the agent pick
+
+You describe the work; the agent finds where it fits. It checks what each machine has
+*and* what is free on it right now, so it will not send a job to a busy card:
 
 > **You:** train `train.py` on whatever has a free 24 GB card
 >
 > **Agent:** `rtx4090` has 23.1 GB free and an idle GPU; `a100-spot` is free too but costs
 > $1.89/hr. Starting on `rtx4090`, logging to `train.log`.
 
-| You say | What happens |
+| You say | How the agent finds it |
 |---|---|
 | "what's free right now?" | every machine checked, the free ones listed |
-| "find me a box with a 24 GB card" | machines matched by what they have, not by name |
-| "run the tests on the Linux box" | run there, results brought back |
+| "find me a box with a 24 GB card" | matched by what machines have — NVIDIA, VRAM, cores, RAM — not by name |
+| "run the tests on the Linux box" | the machine that runs Linux, results brought back |
 | "what's costing me money?" | idle paid rentals flagged, with their hourly price |
 | "let the laptop reach the NAS" | access granted, applied at once |
-| "add a machine without typing its password" | a one-time line to paste there; it joins by itself |
 
 No hostnames, keys or passwords go into the conversation, and anything irreversible
 waits for your yes.
 
-Every machine besides the center is a **member**. A member needs nothing installed —
-just sshd. For a machine where you also want to *run* fleet, or that you would rather not
-type a password for, the agent gives you an invite line. Paste it there — into a terminal,
-or to the agent on that machine — and it installs fleet and joins by itself.
+Every machine besides the center is a **member**. To use fleet *from* a member too — its
+agents seeing the whole fleet — add it with an invite: the line installs fleet there and
+joins. Paste it into a terminal on that machine, or give it to the agent there.
 
 ### An app that cannot run commands?
 

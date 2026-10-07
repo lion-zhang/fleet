@@ -115,6 +115,11 @@ where to run them: report that to the user, nothing is queued.
 
 ## Rules
 
+- **Right after you install fleet for the user**, say in a few lines what they can do
+  next, in their words, not commands: add a machine by giving you the SSH command they
+  already use ("add `ssh user@host`"), or ask for an invite line to paste on a machine
+  you cannot get into; then ask for what they need ("what's free?", "run this where a
+  24 GB card is free") and you will pick the machine. Offer to add the first one.
 - Check `{cmd} ls --json` before assuming work must run locally. A free remote GPU is
   usually the better place for training, evaluation, or anything long-running.
 - Connect with `{cmd} ssh NAME`. Never hand-build an `ssh` invocation from inventory
