@@ -71,9 +71,43 @@ def _exec(args: list[str]):
     # where a machine name or a ✓ is mangled or cannot be written at all.
     env = {**os.environ, "NO_COLOR": "1", "TERM": "dumb", "COLUMNS": "200",
            "PYTHONUTF8": "1", "PYTHONIOENCODING": "utf-8"}
-    return subprocess.run([_fleet(), *args], capture_output=True, text=True,
-                          encoding="utf-8", errors="replace",
-                          timeout=TIMEOUT_S, stdin=subprocess.DEVNULL, env=env)
+    # In a process group of its own, so a timeout stops everything the command started
+    # and not only the command. On Windows fleet.exe is uv's launcher: killing it, which
+    # is all subprocess.run's timeout does, left the python it runs -- and that python's
+    # ssh -- running, holding our pipes open, and run() then waited on those pipes for
+    # as long as the remote command took. On POSIX the ssh outlived the timeout too.
+    kw: dict = ({"creationflags": subprocess.CREATE_NEW_PROCESS_GROUP}
+                if os.name == "nt" else {"start_new_session": True})
+    proc = subprocess.Popen([_fleet(), *args], stdout=subprocess.PIPE,
+                            stderr=subprocess.PIPE, stdin=subprocess.DEVNULL, text=True,
+                            encoding="utf-8", errors="replace", env=env, **kw)
+    try:
+        out, errout = proc.communicate(timeout=TIMEOUT_S)
+    except subprocess.TimeoutExpired:
+        _kill_tree(proc)
+        try:
+            proc.communicate(timeout=10)
+        except subprocess.TimeoutExpired:
+            pass                          # something escaped the tree; do not wait on it
+        raise
+    return subprocess.CompletedProcess(proc.args, proc.returncode, out, errout)
+
+
+def _kill_tree(proc) -> None:
+    """Stop a process and every process it started."""
+    import os
+    import signal
+    from contextlib import suppress
+
+    if os.name == "nt":
+        with suppress(OSError, subprocess.SubprocessError):
+            subprocess.run(["taskkill", "/F", "/T", "/PID", str(proc.pid)],
+                           capture_output=True, timeout=30)
+    else:
+        with suppress(OSError):
+            os.killpg(proc.pid, signal.SIGKILL)
+    with suppress(OSError):
+        proc.kill()
 
 
 def _run(args: list[str]) -> Any:

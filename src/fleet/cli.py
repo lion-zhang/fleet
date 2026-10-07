@@ -67,7 +67,7 @@ from .render.top import (Schedule, device_lines, disk_cell, gpu_cells_compact,
                          name_cell, render_device, render_fleet, render_ls)
 from .render.view import Detail, auth_of, device_view, fleet_view, matches_tag
 from .serve import serve as serve_center
-from .ssh.cmd import (build_argv, local_platform, local_shell_argv, remote_command,
+from .ssh.cmd import (WINDOWS, build_argv, local_platform, local_shell_argv, remote_command,
                       run as sshrun,
                       remote_platform, resolve_command)
 from .ssh.keys import (ensure_keypair, install_key, install_key_over_existing_access,
@@ -1063,7 +1063,11 @@ def cmd_update(name: str = typer.Argument(None, help="defaults to this machine")
     # This machine first and without ssh. The center is never an ssh target, so
     # connecting to ourselves would fail on exactly the machine most likely to be
     # running the command.
-    if not name or (targets and any(d.id == me for d in targets)):
+    here = not name or (targets and any(d.id == me for d in targets))
+    # On Windows this machine goes last, in the background, once this process has
+    # exited: a running fleet holds the very files the update replaces.
+    here_later = here and local_platform() == WINDOWS
+    if here and not here_later:
         console.print(f"[dim]updating this machine from {url} ({ref})[/dim]")
         # local_platform, not `sh -c`: on a Windows center that shell is git's, and the
         # POSIX script half-runs under it. This is the machine running the command, so
@@ -1088,7 +1092,7 @@ def cmd_update(name: str = typer.Argument(None, help="defaults to this machine")
             err.print(f"[red]✗[/red] this machine\n"
                       f"{said.decode(errors='replace')[-400:]}")
             failed += 1
-        targets = [d for d in targets if d.id != me]
+    targets = [d for d in targets if d.id != me]
 
     for dev in targets:
         eps = sorted(inv.endpoints_of(dev), key=lambda e: e.preference)
@@ -1118,6 +1122,18 @@ def cmd_update(name: str = typer.Argument(None, help="defaults to this machine")
             err.print(f"[red]✗[/red] {dev.name} (exit {code}) "
                       f"[dim]{output.strip()[-120:]}[/dim]")
             failed += 1
+
+    if here_later:
+        from .install import update_windows_in_background
+
+        log = update_windows_in_background(
+            install_script(url, ref=ref, platform=local_platform(), update_only=True,
+                           from_git=from_git))
+        console.print(f"[green]✓[/green] this machine: updating in the background, once "
+                      "this command has exited [dim](Windows cannot replace a program "
+                      f"while it runs). It takes a minute; the log is {log}, and "
+                      "[bold]fleet --version[/bold] shows the result.[/dim]")
+        ok += 1
 
     if ok + failed + skipped > 1 or failed:
         tail = f", {skipped} skipped" if skipped else ""

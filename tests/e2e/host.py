@@ -294,11 +294,15 @@ def main() -> int:
     expect("setup --uninstall --target claude", ["setup", "--uninstall", "--target", "claude"], r".")
     check("claude skill removed", not (home / ".claude/skills/fleet/SKILL.md").exists())
     mcp_checks(name)
+    mcp_timeout_check(name)
 
     # take the fleet down
     expect("center --dissolve --force", ["center", "--dissolve", "--force"], r".", rc=None)
     if listener:
         listener.terminate()
+
+    # Last, because it replaces the installed fleet and stops anything running from it.
+    local_update_check()
 
     report(a.report)
     return 1 if any(s == "FAIL" for s, _, _ in RESULTS) else 0
@@ -429,6 +433,59 @@ def mcp_checks(machine: str) -> None:
         asyncio.run(asyncio.wait_for(go(), 240))
     except Exception as exc:
         check("mcp: server runs", False, repr(exc))
+
+
+def mcp_timeout_check(machine: str) -> None:
+    """A tool call that runs out of time returns, and stops what it started.
+
+    On Windows fleet.exe is a launcher for python, which runs ssh. A timeout used to
+    kill only the launcher; the rest held the output pipes, and the call waited for
+    the remote command to finish however long it took.
+    """
+    from fleet import mcpserver
+
+    mcpserver._fleet = lambda: FLEET
+    mcpserver.TIMEOUT_S = 8
+    slow = "ping -n 120 127.0.0.1 >NUL" if WINDOWS else "sleep 120"
+    t0 = time.monotonic()
+    out = mcpserver._run(["ssh", machine, "--", slow])
+    took = time.monotonic() - t0
+    check("mcp: a command past the time limit returns, stopped",
+          took < 60 and out.get("ok") is False and "exceeded" in str(out.get("error")),
+          f"{took:.0f}s: {out}")
+
+
+def local_update_check() -> None:
+    """`fleet update` on the machine it runs on, through the installer's real path.
+
+    From git, so the installer stops fleet and reinstalls it. On Windows that is the
+    case that broke: the installer killed the `fleet update` that started it while its
+    python held the files being replaced. There it now runs once fleet has exited.
+    """
+    from fleet.install import UPDATE_EXIT_MARK
+
+    repo = Path(__file__).resolve().parents[2]
+    run(["git", "-C", str(repo), "branch", "-f", "e2e-update", "HEAD"])
+    code, out = fleet("update", "--repo", str(repo), "--ref", "e2e-update",
+                      env={"COLUMNS": "1000"}, timeout=600)
+    if not check("update this machine", code == 0, f"exit {code}: {out}"):
+        return
+    if WINDOWS:
+        found = re.search(r"the log is (.+?update\.log)", out)
+        if not check("update: runs in the background on Windows", bool(found), out):
+            return
+        log = Path(found.group(1).strip())
+        text = ""
+        deadline = time.monotonic() + 600
+        while time.monotonic() < deadline:
+            text = log.read_text(encoding="utf-8", errors="replace") if log.exists() else ""
+            if UPDATE_EXIT_MARK in text:
+                break
+            time.sleep(3)
+        check("update: the background install finished cleanly",
+              f"{UPDATE_EXIT_MARK} 0" in text, text[-3000:])
+    expect("fleet works after the update", ["--version"], r"^fleet \d")
+    expect("and reads its state", ["paths"], r".", rc=None)
 
 
 def report(path: str) -> None:

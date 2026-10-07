@@ -499,3 +499,78 @@ def install_source() -> Path | None:
                 return Path(req["directory"])
         return None
     return None
+
+
+UPDATE_EXIT_MARK = "fleet-update-exit:"
+
+
+def _windows_update_runner(inner: Path, pids: list[int]) -> str:
+    """The PowerShell that waits for this fleet to exit, then runs the installer.
+
+    A Windows program cannot be replaced while it runs, and `fleet update` *is* the
+    program being replaced: fleet.exe (uv's launcher) runs the tool's python.exe, which
+    runs this code. The installer used to run as our child, so its `taskkill fleet.exe`
+    killed the command that started it while python.exe went on holding the files uv
+    then failed to remove -- half an installation, and no fleet. Run after we are gone,
+    there is nothing of ours left holding anything.
+
+    The chain of fleet processes above us is resolved here, first, while they are still
+    alive to be asked about; the caller waits for that line before it exits.
+    """
+    inner_lit = str(inner).replace("'", "''")
+    start = ", ".join(str(p) for p in pids)
+    return f"""$ErrorActionPreference = 'Continue'
+$ids = @()
+foreach ($first in @({', '.join(str(p) for p in pids) or '0'})) {{
+  $id = $first
+  while ($id -and -not ($ids -contains $id)) {{
+    $p = Get-CimInstance Win32_Process -Filter "ProcessId=$id" -ErrorAction SilentlyContinue
+    if (-not $p -or $p.Name -notmatch '^(fleet|python|pythonw|uv)\\.exe$') {{ break }}
+    $ids += $id
+    $id = $p.ParentProcessId
+  }}
+}}
+"waiting for fleet to exit (started from {start}; waiting on $($ids -join ', '))"
+foreach ($i in $ids) {{ Wait-Process -Id $i -Timeout 1800 -ErrorAction SilentlyContinue }}
+Start-Sleep -Seconds 1
+& powershell -NoProfile -ExecutionPolicy Bypass -File '{inner_lit}' 2>&1 | ForEach-Object {{ "$_" }}
+"{UPDATE_EXIT_MARK} $LASTEXITCODE"
+"""
+
+
+def update_windows_in_background(script: str, *, wait_s: float = 20.0) -> Path:
+    """Start the installer for *this* Windows machine detached, to run once we exit.
+
+    Returns the log it writes; its last line is `fleet-update-exit: N`. Waits (briefly)
+    until the runner has found the processes it must outlive, so that returning -- and
+    exiting -- cannot race it.
+    """
+    import os
+    import subprocess
+    import time
+
+    state = config.STATE_DIR
+    state.mkdir(parents=True, exist_ok=True)
+    inner, runner, log = (state / "update.ps1", state / "update-run.ps1",
+                          state / "update.log")
+    # utf-8 with a BOM: Windows PowerShell 5 reads a .ps1 without one as the ANSI code
+    # page, and the installer is not all ASCII.
+    inner.write_text(script, encoding="utf-8-sig")
+    runner.write_text(_windows_update_runner(inner, [os.getpid(), os.getppid()]),
+                      encoding="utf-8-sig")
+    with open(log, "wb") as out:
+        flags = (getattr(subprocess, "DETACHED_PROCESS", 0)
+                 | getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0))
+        subprocess.Popen(["powershell", "-NoProfile", "-ExecutionPolicy", "Bypass",
+                          "-File", str(runner)],
+                         stdin=subprocess.DEVNULL, stdout=out, stderr=subprocess.STDOUT,
+                         creationflags=flags, close_fds=True)
+    deadline = time.monotonic() + wait_s
+    while time.monotonic() < deadline:
+        try:
+            if b"waiting for fleet" in log.read_bytes():
+                break
+        except OSError:
+            pass
+        time.sleep(0.2)
+    return log

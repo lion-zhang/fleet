@@ -172,3 +172,31 @@ def test_running_from_a_checkout_skips_this_machine_rather_than_failing(fleet_of
     r = runner.invoke(cli.app, ["update"])
     assert r.exit_code == 0
     assert "no installed fleet" in r.output
+
+
+# ---- Windows: this machine is updated after this process exits -------------------------
+# The installer used to run as fleet's own child, and its `taskkill fleet.exe` killed the
+# `fleet update` that started it while python.exe kept the files uv had to replace.
+
+def test_on_windows_this_machine_is_updated_last_and_in_the_background(fleet_of, monkeypatch):
+    runner, remote, local = fleet_of
+    monkeypatch.setattr(cli, "local_platform", lambda: "windows")
+    order = []
+    monkeypatch.setattr(cli, "run_installer",
+                        lambda ep, script, **kw: order.append(ep.target) or (0, "ok"))
+    monkeypatch.setattr(install, "update_windows_in_background",
+                        lambda script: order.append(("here", script)) or "C:/update.log")
+    r = runner.invoke(cli.app, ["update", "--all"])
+    assert r.exit_code == 0, r.output
+    assert not local, "never as our child"
+    assert order[0] == "1.2.3.4" and order[-1][0] == "here", "the others first"
+    assert "$ErrorActionPreference" in order[-1][1], "the PowerShell installer"
+    assert "in the background" in r.output and "2 updated" in r.output
+
+
+def test_the_windows_runner_waits_for_fleet_then_reports_how_it_ended(tmp_path):
+    text = install._windows_update_runner(tmp_path / "it's.ps1", [123, 456])
+    assert "@(123, 456)" in text
+    assert "Wait-Process" in text
+    assert "it''s.ps1" in text, "the path is quoted for PowerShell"
+    assert text.rstrip().endswith(f'"{install.UPDATE_EXIT_MARK} $LASTEXITCODE"')

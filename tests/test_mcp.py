@@ -251,3 +251,33 @@ def test_an_app_can_set_the_disks_to_watch(monkeypatch):
     asyncio.run(server.call_tool("edit_machine", {"name": "gpu", "autodetect_disks": True}))
     assert ran == [["edit", "gpu", "--json", "--disk-path", "/workspace"],
                    ["edit", "gpu", "--json", "--clear-disk-paths"]]
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="POSIX stand-in for fleet")
+def test_a_timeout_stops_everything_the_command_started(monkeypatch, tmp_path):
+    """A timed-out command used to lose only its first process: what it started (the
+    ssh behind `fleet ssh`) went on running and holding the output pipes, and the tool
+    call waited for it instead of returning."""
+    import os
+    import time
+
+    from fleet import mcpserver
+
+    pidfile = tmp_path / "child.pid"
+    # a grandchild that keeps stdout open, the way ssh does
+    fake = _fake_fleet(tmp_path, f'sleep 60 &\necho $! > {pidfile}\nwait\n')
+    monkeypatch.setattr(mcpserver, "_fleet", lambda: fake)
+    monkeypatch.setattr(mcpserver, "TIMEOUT_S", 1)
+    t0 = time.monotonic()
+    out = mcpserver._run(["ssh", "gpu", "--", "sleep 60"])
+    assert time.monotonic() - t0 < 15
+    assert out["ok"] is False and "exceeded" in out["error"]
+    child = int(pidfile.read_text())
+    for _ in range(50):
+        try:
+            os.kill(child, 0)
+        except ProcessLookupError:
+            break
+        time.sleep(0.1)
+    else:
+        pytest.fail("the grandchild outlived the timeout")
