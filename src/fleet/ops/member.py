@@ -83,18 +83,18 @@ def _authorized_keys_files() -> list[Path]:
 _BEGIN = re.compile(r"^# fleet:([0-9a-zA-Z_-]+):begin from=(\S+)")
 
 
+def _blocks_in(path: Path) -> list[tuple[str, str]]:
+    try:
+        text = path.read_text(encoding="utf-8", errors="replace")
+    except OSError:
+        return []
+    return [(m.group(1), m.group(2)) for line in text.splitlines()
+            if (m := _BEGIN.match(line.strip()))]
+
+
 def blocks_on_disk() -> list[tuple[str, str]]:
     """Every (fleet_id, from) block in this user's authorized_keys files."""
-    found = []
-    for path in _authorized_keys_files():
-        try:
-            text = path.read_text(encoding="utf-8", errors="replace")
-        except OSError:
-            continue
-        for line in text.splitlines():
-            if m := _BEGIN.match(line.strip()):
-                found.append((m.group(1), m.group(2)))
-    return found
+    return [b for path in _authorized_keys_files() for b in _blocks_in(path)]
 
 
 def fleet_id() -> str:
@@ -127,11 +127,18 @@ def leave() -> tuple[str, int]:
     see it as unreachable until told, which is the same as before.
     """
     fid = fleet_id()
-    sources = sorted({src for f, src in blocks_on_disk() if f == fid}) if fid else []
     shell = local_shell_argv()
-    for src in sources:
-        script = sync_command(fid, src, pubkey=None, platform=local_platform())
-        subprocess.run(shell, input=script.encode(), capture_output=True)
+    removed = set()
+    # Each file that holds blocks, by its own path. Windows has two and the edit with no
+    # path picks one by group membership -- so blocks in the other were counted as
+    # removed and left in place.
+    for path in _authorized_keys_files() if fid else []:
+        for src in sorted({s for f, s in _blocks_in(path) if f == fid}):
+            script = sync_command(fid, src, pubkey=None, path=str(path),
+                                  platform=local_platform())
+            subprocess.run(shell, input=script.encode(), capture_output=True)
+            removed.add(src)
+    sources = sorted(removed)
     for path in (acl.CACHE_PATH, acl.OUTBOX_PATH, acl.INBOX_PATH):
         path.unlink(missing_ok=True)
     return fid, len(sources)

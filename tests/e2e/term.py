@@ -19,6 +19,19 @@ WINDOWS = os.name == "nt"
 _ANSI = re.compile(r"\x1b\[[0-9;?]*[ -/]*[@-~]|\x1b\][^\x07]*\x07|\x1b[()][0-9A-Za-z]|\x1b[=>78]")
 
 
+def reporting_exit(argv: list[str]) -> list[str]:
+    """On Windows, run argv inside PowerShell, which prints its exit code as a marker.
+
+    pywinpty's exitstatus is not reliable (it read `cmd /c exit 5` as 1), so the code is
+    read from the terminal instead. Elsewhere argv is returned as it is.
+    """
+    if not WINDOWS:
+        return argv
+    call = " ".join("'" + a.replace("'", "''") + "'" for a in argv)
+    return ["powershell", "-NoProfile", "-Command",
+            f"& {call}; Write-Output ('FLEET-EXIT=' + $LASTEXITCODE)"]
+
+
 def clean(text: str) -> str:
     return _ANSI.sub("", text).replace("\r", "")
 
@@ -112,12 +125,17 @@ class Term:
         return self.proc.isalive() if WINDOWS else self.proc.poll() is None
 
     def wait(self, timeout: float = 20.0) -> int | None:
-        """The exit code, or None if it is still running after `timeout`."""
+        """The exit code, or None if it is still running after `timeout`.
+
+        On Windows it is the one `reporting_exit` printed, read off the terminal."""
         deadline = time.monotonic() + timeout
         while time.monotonic() < deadline:
             if not self.alive():
                 self._drain(0.3)
-                return self.proc.exitstatus if WINDOWS else self.proc.returncode
+                if WINDOWS:
+                    found = re.findall(r"FLEET-EXIT=(-?\d+)", clean(self.text))
+                    return int(found[-1]) if found else None
+                return self.proc.returncode
             self._drain(0.2)
         return None
 

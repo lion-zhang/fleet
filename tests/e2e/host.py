@@ -312,7 +312,7 @@ def interactive_checks(machine: str, user: str) -> None:
     module named 'termios'", and ssh shared the keyboard with the shell it returned to.
     """
     sys.path.insert(0, str(Path(__file__).parent))
-    from term import Term
+    from term import Term, reporting_exit
 
     env = {**os.environ, "TERM": "xterm-256color"}
     env.pop("NO_COLOR", None)
@@ -324,14 +324,14 @@ def interactive_checks(machine: str, user: str) -> None:
 
     if WINDOWS:
         # The harness first: an exit code it misreads would fail fleet for nothing.
-        h = Term(["cmd", "/c", "exit 5"], env=env)
+        h = Term(reporting_exit(["cmd", "/c", "exit 5"]), env=env)
         try:
             got = h.wait(20)
         finally:
             h.close()
         check("terminal harness reads exit codes", got == 5, f"cmd /c exit 5 -> {got}")
 
-    t = Term([FLEET, "top", "-i", "1"], env=env)
+    t = Term(reporting_exit([FLEET, "top", "-i", "1"]), env=env)
     try:
         drew = t.expect(re.escape(machine) + "|online", 30)
         check("top: draws in a terminal", drew, t.tail())
@@ -341,7 +341,7 @@ def interactive_checks(machine: str, user: str) -> None:
     finally:
         t.close()
 
-    t = Term([FLEET, "ssh", machine], env=env)
+    t = Term(reporting_exit([FLEET, "ssh", machine]), env=env)
     try:
         time.sleep(4)                                  # login and the first prompt
         check("ssh: an interactive session stays open", t.alive(), t.tail())
@@ -349,11 +349,12 @@ def interactive_checks(machine: str, user: str) -> None:
         t.send(sixty + "\r", per_key=0.03)
         check("ssh: what is typed runs there", t.expect(OUTPUT_42, 20, since=at), t.tail())
         at = t.mark()
-        typed = "echo the-quick-brown-fox-jumps-0123456789"
+        typed = "echo the-quick-brown-fox-jumps-0123456789.end"
         t.send(typed + "\r", per_key=0.02)
         # The far side's echo of it, alone on its line: a key lost, doubled or reordered
         # on the way would make it anything else.
-        whole = t.expect(r"(?<!echo )the-quick-brown-fox-jumps-0123456789(?![\w-])", 20,
+        # ".end" closes it: on Windows the next prompt follows with no line break
+        whole = t.expect(r"(?<!echo )the-quick-brown-fox-jumps-0123456789\.end(?!d)", 20,
                          since=at)
         check("ssh: every key arrives, in order, once", whole,
               clean_text(t.text[at:])[-800:])
@@ -373,8 +374,9 @@ def interactive_checks(machine: str, user: str) -> None:
     # What plain ssh returns for the same session is the bar: fleet must pass on exactly
     # that. On POSIX it is the shell's 7.
     from fleet.config import FLEET_KEY
-    plain = Term(["ssh", "-tt", "-i", str(FLEET_KEY), "-o", "StrictHostKeyChecking=accept-new",
-                  f"{user}@localhost"], env=env)
+    plain = Term(reporting_exit(["ssh", "-tt", "-i", str(FLEET_KEY), "-o",
+                                 "StrictHostKeyChecking=accept-new", f"{user}@localhost"]),
+                 env=env)
     try:
         time.sleep(4)
         plain.send("exit 7\r")

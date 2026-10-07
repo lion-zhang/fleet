@@ -595,12 +595,15 @@ def test_every_flag_is_either_listed_or_deliberately_excluded():
 
     text = skill_text("fleet")
     # The whole environment: Windows cannot start Python without SYSTEMROOT and friends.
-    env = {**os.environ, "COLUMNS": "200"}
+    env = {k: v for k, v in os.environ.items()
+           if k not in ("GITHUB_ACTIONS", "FORCE_COLOR", "CI")}     # CI makes Rich colour
+    env.update(COLUMNS="200", NO_COLOR="1", TERM="dumb", PYTHONUTF8="1")
     missing = []
     for name in sorted(c.name for c in app.registered_commands):
         if name in NOT_FOR_AGENTS:
             continue
         out = subprocess.run(["fleet", name, "--help"], capture_output=True, text=True,
+                             encoding="utf-8", errors="replace",
                              env=env).stdout
         for flag in sorted(set(re.findall(r"(--[a-z][a-z-]+)", out))):
             if flag in ("--help", "--json", "--refresh", "--no-refresh"):
@@ -622,10 +625,13 @@ def test_the_flag_exclusions_do_not_outlive_their_flags():
     from fleet.cli import app
 
     # The whole environment: Windows cannot start Python without SYSTEMROOT and friends.
-    env = {**os.environ, "COLUMNS": "200"}
+    env = {k: v for k, v in os.environ.items()
+           if k not in ("GITHUB_ACTIONS", "FORCE_COLOR", "CI")}     # CI makes Rich colour
+    env.update(COLUMNS="200", NO_COLOR="1", TERM="dumb", PYTHONUTF8="1")
     seen = set()
     for name in (c.name for c in app.registered_commands):
         out = subprocess.run(["fleet", name, "--help"], capture_output=True, text=True,
+                             encoding="utf-8", errors="replace",
                              env=env).stdout
         seen |= set(re.findall(r"(--[a-z][a-z-]+)", out))
     assert set(FLAGS_NOT_FOR_AGENTS) <= seen, f"stale: {set(FLAGS_NOT_FOR_AGENTS) - seen}"

@@ -28,6 +28,7 @@ def member(tmp_path, monkeypatch):
     home = tmp_path / "home"
     (home / ".ssh").mkdir(parents=True)
     monkeypatch.setenv("HOME", str(home))
+    monkeypatch.setenv("USERPROFILE", str(home))     # Path.home() on Windows
     return home
 
 
@@ -103,3 +104,25 @@ def test_a_member_cannot_remove_another_machine(member):
     r = CliRunner().invoke(cli.app, ["rm", "hub", "-y"])
     assert r.exit_code == 2 and "Only the center" in r.output
     assert "hub" in {d.name for d in inv.live(inv.load())}
+
+
+def test_leaving_edits_every_file_that_holds_blocks(member, monkeypatch, tmp_path):
+    """Windows has two authorized_keys files, and the edit with no path picks one by
+    group membership: blocks in the other were counted as removed and left in place."""
+    from fleet.ops import member as member_mod
+
+    mine = member / ".ssh" / "authorized_keys"
+    admin = tmp_path / "ProgramData" / "ssh" / "administrators_authorized_keys"
+    admin.parent.mkdir(parents=True)
+    for f in (mine, admin):
+        f.write_text("# fleet:4b6d36:begin from=SHA256:center user=root\nssh-ed25519 AAAA c\n"
+                     "# fleet:4b6d36:end from=SHA256:center\n", encoding="utf-8")
+    monkeypatch.setattr(member_mod, "_authorized_keys_files", lambda: [mine, admin])
+    edited = []
+    real = member_mod.sync_command
+    monkeypatch.setattr(member_mod, "sync_command",
+                        lambda *a, path="", **k: edited.append(path) or real(*a, path=path, **k))
+    fid, n = member_mod.leave()
+    assert set(edited) == {str(mine), str(admin)}, "each file by its own path"
+    for f in (mine, admin):
+        assert "AAAA c" not in f.read_text(encoding="utf-8")
