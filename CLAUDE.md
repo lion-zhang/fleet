@@ -24,7 +24,7 @@ Consequences:
   (`.github/workflows/e2e.yml`, also from the Actions tab). It drives `fleet top` and
   `fleet ssh` at a real terminal (`tests/e2e/term.py`: a pty, or ConPTY on Windows) —
   agents run fleet with no terminal, people with one, and both must be tested.
-- Generated files, never hand-edited: `skills/fleet/SKILL.md` and the plugin/extension
-  manifests (`uv run python scripts/build_dist.py`), the README screenshots
+- Generated files, never hand-edited: `skills/fleet/SKILL.md`, the plugin/extension
+  manifests and `docs/reference/cli.md` (`uv run python scripts/build_dist.py`), the README screenshots
   (`uv run python scripts/readme_screenshots.py`).
 - The two install modes are **center** and **member**; use those words.

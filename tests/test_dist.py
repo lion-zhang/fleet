@@ -93,4 +93,4 @@ def test_every_install_link_launches_the_published_package():
                     config = json.loads(base64.b64decode(value))
                 found += 1
                 assert config.get("args", [])[:1] == [PACKAGE], (doc.name, config)
-    assert found >= 4, "README and docs/agents.md carry install links"
+    assert found >= 4, "README and docs/guides/agents.md carry install links"

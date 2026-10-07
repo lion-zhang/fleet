@@ -37,7 +37,7 @@ Install fleet from https://github.com/lion-zhang/fleet
 ```
 
 That is the whole setup. fleet is installed once on this machine, and every
-[supported agent](docs/agents.md) you have here learns it — not only the one you asked.
+[supported agent](docs/guides/agents.md) you have here learns it — not only the one you asked.
 From here on you say what you want in plain words, with no commands to remember.
 
 ### Then add your machines
@@ -99,7 +99,7 @@ Desktop apps and editors get fleet in one click; it runs as an MCP server:
 
 Plus plugins for Claude Code, Codex, Copilot CLI and Gemini CLI, and OpenCode, Amp,
 Windsurf, Cline, Zed, Qwen Code, Goose, Kiro, Hermes — 35+ agents in all:
-**[every agent →](docs/agents.md)**
+**[every agent →](docs/guides/agents.md)**
 
 ## Built to be safe
 
@@ -138,7 +138,7 @@ fleet access nas --allow laptop     # let one machine reach another
 <img src="docs/assets/fleet-top.svg" alt="fleet top: a live view of GPU utilisation, free VRAM, CPU, RAM and disk across all machines" width="100%">
 
 Rentals from vast.ai, RunPod or Lambda show their price (`fleet edit a100 --cost 1.89`),
-the fleet's burn rate, and an alert when a paid machine sits idle. On Tailscale, ZeroTier
+the fleet's burn rate, and an alert when a rental sits idle. On Tailscale, ZeroTier
 or WireGuard? fleet just needs an address it can route to.
 
 ## How fleet compares
@@ -172,7 +172,7 @@ Agents with a shell (Claude Code, Codex, Gemini CLI, Copilot CLI, OpenCode, …)
 skill — text that tells them the `fleet` commands; it costs nothing until a task needs a
 machine. Apps that cannot run commands (Claude Desktop, Cursor, VS Code, …) get an MCP
 server that runs the same commands for them. The installer sets up the supported agents
-you have; [docs/agents.md](docs/agents.md) has the details for each.
+you have; [Agents](docs/guides/agents.md) has the details for each.
 </details>
 
 <details>
@@ -195,21 +195,24 @@ working; only changes wait for it. Move the role with `fleet center NAME`.
 
 Yes, both ways. A Windows machine works as a target with OpenSSH Server and nothing else,
 and fleet runs on Windows too, center included: interactive `fleet ssh`, `fleet top` and
-the background service all work there. See [Windows](docs/getting-started.md#windows).
+the background service all work there. See [Windows](docs/guides/windows.md).
 </details>
 
 ## Learn more
 
-- [Getting started](docs/getting-started.md) — the full walkthrough, every command
-- [Every agent](docs/agents.md) — install commands and config for 35+ agents
-- [Design](docs/design/layers.md) — one core per machine, a skill per agent, MCP for the rest; and [access](docs/design/access.md) — how access is granted, signed and revoked
+- [Getting started](docs/getting-started.md) — your first fleet, in ten minutes
+- [Guides](docs/README.md#guides) — adding machines, finding the right one, access, the center, Windows
+- [Every agent](docs/guides/agents.md) — install commands and config for 35+ agents
+- [Command reference](docs/reference/cli.md) — every command and option
+- [Design](docs/design/layers.md) — one core per machine, a skill per agent, MCP for the rest; [access](docs/design/access.md) and [sync](docs/design/sync.md)
+- [All documentation](docs/README.md)
 
 **Status:** v0.5. The test suite runs on Linux, macOS and Windows, and every command is
 run end to end on a real machine of each OS in CI — from a script, as an agent runs it,
 and at a real terminal, as you do. Multi-machine fleets (key, password, invite, handover)
 are tested on Linux machines built from scratch.
 
-Issues and pull requests are welcome — `uv run pytest -q` runs the tests. If fleet saved
+Issues and pull requests are welcome — see [CONTRIBUTING.md](CONTRIBUTING.md). If fleet saved
 you a GPU-hour, a ⭐ helps other people find it.
 
 [MIT](LICENSE)
