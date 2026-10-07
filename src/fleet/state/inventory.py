@@ -197,6 +197,8 @@ def _as_dict(d: Device) -> dict:
 
 def find(devices: list[Device], token: str) -> Device | None:
     """Exact name, alias or id, else a unique name prefix. For everyday commands."""
+    if not token:
+        return None                        # "" is a prefix of every name
     if exact := find_exact(devices, token):
         return exact
     matches = [d for d in live(devices) if d.name.startswith(token)]

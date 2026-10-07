@@ -9,6 +9,8 @@ points somewhere new, which is the entire reason machine-id is preferred at onbo
 
 from __future__ import annotations
 
+import re
+
 from dataclasses import dataclass, field
 
 from .state.inventory import touch
@@ -88,6 +90,22 @@ def _migrate_identity(dev: Device, ep: Endpoint, out: Edits) -> None:
     dev.id = new_id
 
 
+_NAME = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]{0,62}")
+
+
+def check_name(name: str, what: str = "name") -> str:
+    """A machine's name or alias: what people type and agents pass as an argument.
+
+    Letters, digits, `.`, `_` and `-`, starting with a letter or digit. An empty name was
+    accepted, and an empty argument then matched the only machine as a prefix of every
+    name; a name with spaces or a leading `-` is one an agent cannot pass back safely.
+    """
+    if not _NAME.fullmatch(name or ""):
+        raise ValueError(f"{name!r} is not a usable {what}: letters, digits, '.', '_' "
+                         "and '-', starting with a letter or digit")
+    return name
+
+
 def apply_edits(dev: Device, *, endpoint: Endpoint | None = None,
                 disk_paths: list[str] | None = None, role: str | None = None,
                 name: str | None = None, alias: str | None = None,
@@ -95,6 +113,7 @@ def apply_edits(dev: Device, *, endpoint: Endpoint | None = None,
                 taken: set[str] | None = None, usd_per_hour: float | None = None) -> Edits:
     out = Edits()
     if name is not None and name != dev.name:
+        check_name(name)
         # The name is a label, not an identity -- the id is what merge and the access
         # list key on -- so renaming is safe and needs no cascade. It is also the only
         # way to fix a bad one: `fleet add` restores a tombstoned record under its old
@@ -107,6 +126,8 @@ def apply_edits(dev: Device, *, endpoint: Endpoint | None = None,
         # Empty clears it. Checked against names as well as aliases: the whole point of
         # an alias is that you can type it where a name goes, so one that shadowed
         # another machine's name would be ambiguous exactly where it is most used.
+        if alias:
+            check_name(alias, "alias")
         if alias and alias in (taken or set()):
             raise ValueError(f"another machine already answers to {alias!r}")
         if alias and alias == dev.name:

@@ -58,6 +58,15 @@ class _Handler(BaseHTTPRequestHandler):
         """Silent by default. A center serving a fleet all day should not narrate it."""
 
     def _reply(self, code: int, body: str, kind: str = "text/plain") -> None:
+        if code >= 400 and self.command == "POST":
+            # Refusals are worth a line: a member re-imaged with a new key is refused
+            # here for good, and looked from its side like a center that was off.
+            import time as _t
+            from .ui import err
+
+            err.print(f"[dim]{_t.strftime('%Y-%m-%d %H:%M:%S')} {self.client_address[0]} "
+                      f"{self.path} -> {code} {body.strip()[:80]} "
+                      f"(signer {self.headers.get(SIGNER_HEADER, '?')})[/dim]")
         raw = body.encode()
         self.send_response(code)
         self.send_header("Content-Type", kind)
