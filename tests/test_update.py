@@ -34,6 +34,12 @@ def fleet_of(tmp_path, monkeypatch):
         Device(id="id:nas", name="ds720", kind=Kind.APPLIANCE),      # no endpoint
     ], inv.INVENTORY_PATH)
 
+    # POSIX unless a test says otherwise, on every OS the suite runs on: on a Windows
+    # runner the local update otherwise goes to the background runner, for real.
+    monkeypatch.setattr(cli, "local_platform", lambda: "posix")
+    monkeypatch.setattr(install, "local_platform", lambda: "posix")
+    monkeypatch.setattr(install, "update_windows_in_background",
+                        lambda script: pytest.fail("started a real background update"))
     remote, local = [], []
     monkeypatch.setattr(cli, "run_installer",
                         lambda ep, script, **kw: remote.append(ep.target) or (0, "ok"))
