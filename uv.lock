@@ -7,7 +7,7 @@ resolution-markers = [
 ]
 
 [[package]]
-name = "agent-fleet"
+name = "agents-fleet"
 version = "0.5.0"
 source = { editable = "." }
 dependencies = [

@@ -3,7 +3,7 @@ all name the same URLs."""
 
 from __future__ import annotations
 
-PACKAGE = "agent-fleet"
+PACKAGE = "agents-fleet"
 REPO = "https://github.com/lion-zhang/fleet"
 RAW = "https://raw.githubusercontent.com/lion-zhang/fleet/main"
 INSTALL_SH = f"{RAW}/install.sh"

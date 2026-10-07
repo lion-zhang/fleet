@@ -285,13 +285,13 @@ MCP_CLIENTS = (
 
 # What a skill or a client config says when fleet runs from a throwaway `uvx` environment
 # and is installed nowhere: the launcher itself, which builds that environment again.
-UVX = "uvx agent-fleet"
+UVX = "uvx agents-fleet"
 
 
 def _ephemeral() -> bool:
     """Whether we run from an environment `uvx` built in its cache, not an install.
 
-    `uvx agent-fleet mcp` is how the Gemini extension, the MCP registry and the one-click
+    `uvx agents-fleet mcp` is how the Gemini extension, the MCP registry and the one-click
     buttons launch fleet. Writing that environment's path into a skill or a config would
     point it at a directory uv may delete whenever its cache is cleaned.
     """
@@ -330,9 +330,9 @@ BY_NAME = {a.name: a for a in AGENTS}
 def package_version() -> str:
     """The installed version, never a hardcoded one, which would drift immediately."""
     from importlib.metadata import PackageNotFoundError, version
-    # The distribution was `fleet-broker` until 0.5; a machine mid-update can still have
-    # only that installed.
-    for dist in ("agent-fleet", "fleet-broker"):
+    # The distribution was `fleet-broker` until 0.5, then `agent-fleet`; a machine
+    # mid-update can still have only one of those installed.
+    for dist in ("agents-fleet", "agent-fleet", "fleet-broker"):
         try:
             return version(dist)
         except PackageNotFoundError:

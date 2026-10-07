@@ -76,10 +76,12 @@ PATH="$HOME/.local/bin:$PATH" fleet service stop >/dev/null 2>&1 || true
 # --reinstall-package, not --reinstall: the problem is uv reusing a cached build of
 # fleet when the version has not changed, and rebuilding every dependency to fix that
 # turns a deploy into a download of the world.
-# The package was `fleet-broker` until 0.5. Left installed, it and `agent-fleet` would
-# both claim the `fleet` command, and whichever installed last would win at random.
+# The package was `fleet-broker` until 0.5, then `agent-fleet` until PyPI refused that
+# name. Left installed, either and `agents-fleet` would both claim the `fleet` command,
+# and whichever installed last would win at random.
 uv tool uninstall fleet-broker >/dev/null 2>&1 || true
-uv tool install --force --reinstall-package agent-fleet --quiet "$DIR"
+uv tool uninstall agent-fleet >/dev/null 2>&1 || true
+uv tool install --force --reinstall-package agents-fleet --quiet "$DIR"
 
 # Put fleet on the PATH of a terminal the user opens later, not just this script's.
 # Without it fleet installs correctly and then is not there when they type its name --
@@ -319,9 +321,11 @@ while ((Get-Date) -lt $deadline) {{
 
 $fleet = Join-Path $env:USERPROFILE '.local\\bin\\fleet.exe'
 
-# The package was `fleet-broker` until 0.5; both would claim the `fleet` command.
+# The package was `fleet-broker` until 0.5, then `agent-fleet`; both would claim the
+# `fleet` command.
 try {{ uv tool uninstall fleet-broker 2>&1 | Out-Null }} catch {{ }}
-uv tool install --force --reinstall-package agent-fleet --quiet $dir
+try {{ uv tool uninstall agent-fleet 2>&1 | Out-Null }} catch {{ }}
+uv tool install --force --reinstall-package agents-fleet --quiet $dir
 
 # So `fleet` works in a terminal the user opens later, not just in this script. Without
 # it the shim lands in a directory nothing has ever added to PATH, and fleet installs

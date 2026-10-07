@@ -1,5 +1,5 @@
 [project]
-name = "agent-fleet"
+name = "agents-fleet"
 version = "0.5.0"
 description = "Give Claude Code, Codex and Gemini every machine you have: a live GPU, VRAM, RAM and disk inventory across your servers, SSH access between them, and an MCP server."
 readme = "README.md"
@@ -36,7 +36,7 @@ dependencies = [
     "platformdirs>=4.2",
     "filelock>=3.13",
     "psutil>=5.9",
-    # The MCP server is part of every install, so one launch line -- `uvx agent-fleet
+    # The MCP server is part of every install, so one launch line -- `uvx agents-fleet
     # mcp` -- works for every client and registry, with no extra to remember.
     "mcp>=2",
 ]
@@ -51,7 +51,7 @@ Issues = "https://github.com/lion-zhang/fleet/issues"
 # Deliberately not dropped in the same release that added the migration: that would
 # strand the data behind a dependency you can no longer install.
 migrate = ["pyrage>=1.1"]
-# Kept so `agent-fleet[mcp]` in older notes still resolves; mcp is a core dependency now.
+# Kept so `agents-fleet[mcp]` in older notes still resolves; mcp is a core dependency now.
 mcp = []
 
 [dependency-groups]
@@ -59,9 +59,9 @@ dev = ["pytest>=8"]
 
 [project.scripts]
 fleet = "fleet.cli:main"
-# The package's own name too, so `uvx agent-fleet ...` runs without `--from`: uv looks
+# The package's own name too, so `uvx agents-fleet ...` runs without `--from`: uv looks
 # for an executable named after the package it was given.
-agent-fleet = "fleet.cli:main"
+agents-fleet = "fleet.cli:main"
 
 [build-system]
 requires = ["hatchling"]

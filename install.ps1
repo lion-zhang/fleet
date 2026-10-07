@@ -30,20 +30,27 @@ function Get-FleetRole($fleet) {
     return @{ role = $role; fleet_id = "$($j.fleet_id)"; center = "$($j.center)" }
 }
 
-# Which core is here already: @{ kind; path }. kind is none, old (fleet-broker), uv
-# (agent-fleet as a uv tool: upgradable in place), source (a uv tool from a checkout),
-# pipx, or other (some other `fleet` first on PATH).
+# Which core is here already: @{ kind; path }. kind is none, old (a uv tool under an
+# earlier name: fleet-broker, or agent-fleet from git), uv (agents-fleet as a uv tool:
+# upgradable in place), source (a uv tool from a checkout), pipx, or other (some other
+# `fleet` first on PATH).
 function Find-FleetCore($uv, $exe) {
     $tools = (& $uv tool list 2>$null) -join "`n"
-    if ($tools -match '(?m)^agent-fleet ') {
+    # The package was agent-fleet until PyPI refused that name; it was never released
+    # under it, so an agent-fleet tool came from git or a checkout.
+    foreach ($name in @('agents-fleet', 'agent-fleet')) {
+        if ($tools -notmatch "(?m)^$name ") { continue }
         $bin = (& $uv tool dir --bin).Trim()
-        $receipt = Join-Path (& $uv tool dir).Trim() 'agent-fleet/uv-receipt.toml'
-        $kind = if ((Test-Path $receipt) -and ((Get-Content -Raw $receipt) -match '(editable|directory) = ')) { 'source' } else { 'uv' }
-        return @{ kind = $kind; path = (Join-Path $bin "fleet$exe") }
+        $receipt = Join-Path (& $uv tool dir).Trim() "$name/uv-receipt.toml"
+        if ((Test-Path $receipt) -and ((Get-Content -Raw $receipt) -match '(editable|directory) = ')) {
+            return @{ kind = 'source'; path = (Join-Path $bin "fleet$exe") }
+        }
+        if ($name -eq 'agents-fleet') { return @{ kind = 'uv'; path = (Join-Path $bin "fleet$exe") } }
+        return @{ kind = 'old'; path = '' }
     }
     if ($tools -match '(?m)^fleet-broker ') { return @{ kind = 'old'; path = '' } }
     $pipx = (Get-Command pipx -ErrorAction SilentlyContinue).Source
-    if ($pipx -and (((& $pipx list --short 2>$null) -join "`n") -match '(?m)^agent-fleet ')) {
+    if ($pipx -and (((& $pipx list --short 2>$null) -join "`n") -match '(?m)^agents?-fleet ')) {
         return @{ kind = 'pipx'; path = (Get-Command fleet -ErrorAction SilentlyContinue).Source }
     }
     $other = (Get-Command fleet -ErrorAction SilentlyContinue).Source
@@ -51,16 +58,16 @@ function Find-FleetCore($uv, $exe) {
     return @{ kind = 'none'; path = '' }
 }
 
-# Install or upgrade the core with uv. An agent-fleet uv tool is upgraded in place:
+# Install or upgrade the core with uv. An agents-fleet uv tool is upgraded in place:
 # `uv tool upgrade` never downgrades, and fleet's state is never touched.
 function Install-FleetCore($uv, $kind) {
     if ($kind -eq 'uv' -and -not $env:FLEET_SOURCE) {
         Write-Host 'core: fleet is installed with uv, upgrading if a newer one exists'
-        & $uv tool upgrade --quiet agent-fleet
+        & $uv tool upgrade --quiet agents-fleet
         if ($LASTEXITCODE -ne 0) { throw 'could not upgrade fleet' }
         return
     }
-    $source = if ($env:FLEET_SOURCE) { $env:FLEET_SOURCE } else { 'agent-fleet' }
+    $source = if ($env:FLEET_SOURCE) { $env:FLEET_SOURCE } else { 'agents-fleet' }
     # FLEET_FORCE_CORE asked for this copy to take over the `fleet` command from another.
     $force = if ($kind -eq 'force') { @('--force') } else { @() }
     Write-Host 'installing fleet ...'
@@ -131,14 +138,17 @@ function Install-Fleet {
     if ($kind -eq 'source') {
         Write-Host "core: $(& $fleet --version) -- your source install ($fleet), keeping it"
     } elseif ($kind -eq 'pipx') {
-        Write-Host "core: $(& $fleet --version) installed with pipx, keeping it (to upgrade: pipx upgrade agent-fleet)"
+        Write-Host "core: $(& $fleet --version) installed with pipx, keeping it (to upgrade: pipx upgrade agents-fleet)"
     } elseif ($kind -eq 'other') {
         Write-Host "core: $(& $fleet --version) at $fleet, keeping it"
     } else {
-        # Machines from before the rename carry it as `fleet-broker`; two tools must not
-        # both claim the `fleet` command. A running fleet.exe holds its own files open,
-        # so the background service is stopped first.
-        if ($kind -eq 'old') { & $uv tool uninstall fleet-broker 2>&1 | Out-Null }
+        # Machines from before a rename carry it as `fleet-broker` or `agent-fleet`; two
+        # tools must not both claim the `fleet` command. A running fleet.exe holds its
+        # own files open, so the background service is stopped first.
+        if ($kind -eq 'old') {
+            & $uv tool uninstall fleet-broker 2>&1 | Out-Null
+            & $uv tool uninstall agent-fleet 2>&1 | Out-Null
+        }
         if ($exe) {
             Get-Process fleet -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
         }

@@ -65,30 +65,35 @@ field_of() {
 
 # Which core is here already, as "kind|path". kind is one of:
 #   none    no fleet on this machine
-#   old     the uv tool from before the rename (fleet-broker)
-#   uv      agent-fleet as a uv tool, from PyPI, a wheel or git: upgradable in place
-#   source  agent-fleet as a uv tool from a checkout (editable or a directory)
-#   pipx    agent-fleet installed with pipx
+#   old     a uv tool under an earlier name (fleet-broker, or agent-fleet from git)
+#   uv      agents-fleet as a uv tool, from PyPI, a wheel or git: upgradable in place
+#   source  agents-fleet (or agent-fleet) as a uv tool from a checkout
+#   pipx    agents-fleet (or agent-fleet) installed with pipx
 #   other   some other `fleet` first on PATH (pip, a virtualenv, a package manager)
 detect_core() {
     uv=$1
     tools=$("$uv" tool list 2>/dev/null </dev/null || true)
     tooldir=$("$uv" tool dir 2>/dev/null </dev/null || true)
-    if printf '%s\n' "$tools" | grep -q '^agent-fleet '; then
-        receipt="$tooldir/agent-fleet/uv-receipt.toml"
+    # The package was agent-fleet until PyPI refused that name; it was never released
+    # under it, so an agent-fleet tool came from git or a checkout.
+    for name in agents-fleet agent-fleet; do
+        printf '%s\n' "$tools" | grep -q "^$name " || continue
+        receipt="$tooldir/$name/uv-receipt.toml"
         bin=$("$uv" tool dir --bin 2>/dev/null </dev/null)
         if grep -qE '(editable|directory) = ' "$receipt" 2>/dev/null; then
             echo "source|$bin/fleet"
-        else
+        elif [ "$name" = agents-fleet ]; then
             echo "uv|$bin/fleet"
+        else
+            echo "old|"
         fi
         return
-    fi
+    done
     if printf '%s\n' "$tools" | grep -q '^fleet-broker '; then
         echo "old|"
         return
     fi
-    if command -v pipx >/dev/null 2>&1 && pipx list --short 2>/dev/null </dev/null | grep -q '^agent-fleet '; then
+    if command -v pipx >/dev/null 2>&1 && pipx list --short 2>/dev/null </dev/null | grep -qE '^agents?-fleet '; then
         echo "pipx|$(command -v fleet 2>/dev/null || echo "$HOME/.local/bin/fleet")"
         return
     fi
@@ -101,14 +106,14 @@ detect_core() {
     echo "none|"
 }
 
-# Install or upgrade the core with uv. An agent-fleet uv tool is upgraded in place --
+# Install or upgrade the core with uv. An agents-fleet uv tool is upgraded in place --
 # `uv tool upgrade` never downgrades and leaves fleet's state alone.
 install_core() {
     uv=$1; kind=$2
-    source="${FLEET_SOURCE:-agent-fleet}"
+    source="${FLEET_SOURCE:-agents-fleet}"
     if [ "$kind" = uv ] && [ -z "${FLEET_SOURCE:-}" ]; then
         say "core: $("$("$uv" tool dir --bin)/fleet" --version </dev/null 2>/dev/null), upgrading if a newer one exists"
-        "$uv" tool upgrade --quiet agent-fleet </dev/null || die "could not upgrade fleet"
+        "$uv" tool upgrade --quiet agents-fleet </dev/null || die "could not upgrade fleet"
         return
     fi
     say "installing fleet ..."
@@ -193,14 +198,15 @@ main() {
         source)
             say "core: $("$found" --version </dev/null 2>/dev/null) -- your source install ($found), keeping it" ;;
         pipx)
-            say "core: $("$found" --version </dev/null 2>/dev/null) installed with pipx, keeping it (to upgrade: pipx upgrade agent-fleet)" ;;
+            say "core: $("$found" --version </dev/null 2>/dev/null) installed with pipx, keeping it (to upgrade: pipx upgrade agents-fleet)" ;;
         other)
             say "core: $("$found" --version </dev/null 2>/dev/null) at $found, keeping it" ;;
         *)
-            # Machines from before the rename carry it as `fleet-broker`; two tools must
-            # not both claim the `fleet` command.
+            # Machines from before a rename carry it as `fleet-broker` or `agent-fleet`;
+            # two tools must not both claim the `fleet` command.
             if [ "$kind" = old ]; then
                 "$uv" tool uninstall fleet-broker >/dev/null 2>&1 </dev/null || true
+                "$uv" tool uninstall agent-fleet >/dev/null 2>&1 </dev/null || true
             fi
             install_core "$uv" "$kind"
             found="" ;;

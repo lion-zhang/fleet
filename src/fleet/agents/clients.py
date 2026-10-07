@@ -25,7 +25,7 @@ def mcp_entry(cmd: str) -> dict:
         import shutil
 
         # Absolute when we can: a desktop client's PATH is not a shell's.
-        return {"command": shutil.which("uvx") or "uvx", "args": ["agent-fleet", "mcp"]}
+        return {"command": shutil.which("uvx") or "uvx", "args": ["agents-fleet", "mcp"]}
     return {"command": cmd, "args": ["mcp"]}
 
 

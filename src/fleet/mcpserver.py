@@ -117,7 +117,7 @@ def build_server():
         # Only an install from before 0.5, when mcp was an optional extra, gets here.
         raise McpUnavailable(
             "the MCP SDK is missing -- this fleet predates it being included; "
-            "`uv tool install --reinstall agent-fleet`") from exc
+            "`uv tool install --reinstall agents-fleet`") from exc
 
     from .agents import package_version
 
