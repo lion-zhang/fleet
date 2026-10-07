@@ -482,8 +482,10 @@ def local_update_check() -> None:
             if UPDATE_EXIT_MARK in text:
                 break
             time.sleep(3)
+        runner_log = log.with_name("update-run.log")
+        said = runner_log.read_text(encoding="utf-8", errors="replace") if runner_log.exists() else ""
         check("update: the background install finished cleanly",
-              f"{UPDATE_EXIT_MARK} 0" in text, text[-3000:])
+              f"{UPDATE_EXIT_MARK} 0" in text, f"{text[-3000:]}\n-- runner: {said[-2000:]}")
     expect("fleet works after the update", ["--version"], r"^fleet \d")
     expect("and reads its state", ["paths"], r".", rc=None)
 

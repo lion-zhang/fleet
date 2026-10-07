@@ -35,7 +35,7 @@ alone. `fleet paths` prints where the main files are on this machine.
 | `access-chain.yaml`, `access-handover-*.yaml` | handovers of the center role |
 | `center-service.log` | macOS only: the background service's output |
 | `clock.yaml` | on a member: how far this machine's clock is from the center's |
-| `update.log`, `update.ps1`, `update-run.ps1` | Windows only: the last `fleet update` of this machine, which runs after fleet exits |
+| `update.log`, `update.ps1`, `update-run.ps1`, `update-run.log` | Windows only: the last `fleet update` of this machine, which runs after fleet exits |
 
 Folders named `.NAME.queue` beside these files are the write queue; they come and go.
 

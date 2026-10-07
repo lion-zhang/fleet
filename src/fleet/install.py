@@ -504,7 +504,7 @@ def install_source() -> Path | None:
 UPDATE_EXIT_MARK = "fleet-update-exit:"
 
 
-def _windows_update_runner(inner: Path, pids: list[int]) -> str:
+def _windows_update_runner(inner: Path, pids: list[int], log: Path | None = None) -> str:
     """The PowerShell that waits for this fleet to exit, then runs the installer.
 
     A Windows program cannot be replaced while it runs, and `fleet update` *is* the
@@ -518,8 +518,13 @@ def _windows_update_runner(inner: Path, pids: list[int]) -> str:
     alive to be asked about; the caller waits for that line before it exits.
     """
     inner_lit = str(inner).replace("'", "''")
+    log_lit = str(log or inner.with_name("update.log")).replace("'", "''")
     start = ", ".join(str(p) for p in pids)
+    # Every line appended to the log as it happens. Written to stdout instead, it sat in
+    # PowerShell's buffer until the runner exited, so nobody could see it had started.
     return f"""$ErrorActionPreference = 'Continue'
+$log = '{log_lit}'
+function Say($text) {{ Add-Content -LiteralPath $log -Value $text -Encoding utf8 }}
 # Up from this fleet to the fleet.exe that started it, and no further: whatever ran
 # fleet.exe -- a shell, an agent, a test written in python -- is not ours to wait for,
 # and waiting for it while it waits for us would never end.
@@ -537,11 +542,11 @@ while ($id -and $chain.Count -lt 3 -and -not ($chain -contains $id)) {{
   $id = $p.ParentProcessId
 }}
 $ids = if ($found) {{ $chain }} else {{ @({pids[0] if pids else 0}) }}
-"waiting for fleet to exit (started from {start}; waiting on $($ids -join ', '))"
+Say "waiting for fleet to exit (started from {start}; waiting on $($ids -join ', '))"
 foreach ($i in $ids) {{ Wait-Process -Id $i -Timeout 1800 -ErrorAction SilentlyContinue }}
 Start-Sleep -Seconds 1
-& powershell -NoProfile -ExecutionPolicy Bypass -File '{inner_lit}' 2>&1 | ForEach-Object {{ "$_" }}
-"{UPDATE_EXIT_MARK} $LASTEXITCODE"
+& powershell -NoProfile -ExecutionPolicy Bypass -File '{inner_lit}' 2>&1 | ForEach-Object {{ Say "$_" }}
+Say "{UPDATE_EXIT_MARK} $LASTEXITCODE"
 """
 
 
@@ -563,9 +568,11 @@ def update_windows_in_background(script: str, *, wait_s: float = 20.0) -> Path:
     # utf-8 with a BOM: Windows PowerShell 5 reads a .ps1 without one as the ANSI code
     # page, and the installer is not all ASCII.
     inner.write_text(script, encoding="utf-8-sig")
-    runner.write_text(_windows_update_runner(inner, [os.getpid(), os.getppid()]),
+    runner.write_text(_windows_update_runner(inner, [os.getpid(), os.getppid()], log),
                       encoding="utf-8-sig")
-    with open(log, "wb") as out:
+    log.write_text("", encoding="utf-8")
+    # The runner's own output -- a parse error, say -- separately: the log is its to write.
+    with open(state / "update-run.log", "wb") as out:
         flags = (getattr(subprocess, "DETACHED_PROCESS", 0)
                  | getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0))
         subprocess.Popen(["powershell", "-NoProfile", "-ExecutionPolicy", "Bypass",
