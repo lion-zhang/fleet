@@ -27,9 +27,14 @@ def reporting_exit(argv: list[str]) -> list[str]:
     """
     if not WINDOWS:
         return argv
+    import base64
+
     call = " ".join("'" + a.replace("'", "''") + "'" for a in argv)
-    return ["powershell", "-NoProfile", "-Command",
-            f"& {call}; Write-Output ('FLEET-EXIT=' + $LASTEXITCODE)"]
+    script = f"& {call}; Write-Output ('FLEET-EXIT=' + $LASTEXITCODE)"
+    # Encoded: passed as text, the launcher expanded $LASTEXITCODE as an (unset)
+    # environment variable and PowerShell saw ('FLEET-EXIT=' + ).
+    return ["powershell", "-NoProfile", "-EncodedCommand",
+            base64.b64encode(script.encode("utf-16-le")).decode()]
 
 
 def clean(text: str) -> str:
@@ -101,10 +106,13 @@ class Term:
         """Type `keys`. per_key > 0 types them one at a time, as a person does."""
         chunks = list(keys) if per_key else [keys]
         for c in chunks:
-            if WINDOWS:
-                self.proc.write(c)
-            else:
-                os.write(self.master, c.encode())
+            try:
+                if WINDOWS:
+                    self.proc.write(c)
+                else:
+                    os.write(self.master, c.encode())
+            except (EOFError, OSError):
+                return          # it has exited; the check that follows says what it did
             if per_key:
                 time.sleep(per_key)
 
