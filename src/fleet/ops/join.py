@@ -40,6 +40,7 @@ import yaml
 
 from ..models import Device
 from ..state import access as acl
+from ..state import untrusted
 from ..state import invites as invites_mod
 from ..state import inventory as inv
 from ..ssh.cmd import Endpoint, classify_route, local_platform, local_shell_argv, \
@@ -95,7 +96,7 @@ def join_url(sync_url: str) -> str:
 # ------------------------------------------------------------------- the request
 
 def _request_body(invite_id: str, sealed: str, mac: str) -> str:
-    return yaml.safe_dump({"kind": "fleet-join", "protocol": JOIN_PROTOCOL,
+    return untrusted.dump({"kind": "fleet-join", "protocol": JOIN_PROTOCOL,
                            "invite": invite_id, "mac": mac, "sealed": sealed},
                           sort_keys=False)
 
@@ -193,7 +194,7 @@ def handle(raw: str, *, peer: str = "", center_url: str = "") -> tuple[int, str]
         return 503, "not the center\n"
 
     try:
-        req = yaml.safe_load(raw) or {}
+        req = untrusted.load(raw) or {}
     except yaml.YAMLError:
         return 400, "unreadable join request\n"
     if not isinstance(req, dict) or req.get("kind") != "fleet-join":

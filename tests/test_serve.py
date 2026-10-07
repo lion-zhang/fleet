@@ -147,6 +147,77 @@ def test_end_to_end_over_http(a_center):
         httpd.server_close()
 
 
+def _post(url, body: bytes, headers=None):
+    import urllib.error
+    import urllib.request
+
+    req = urllib.request.Request(url, data=body, headers=headers or {}, method="POST")
+    try:
+        with urllib.request.urlopen(req, timeout=10) as resp:
+            return resp.status, resp.read().decode()
+    except urllib.error.HTTPError as exc:
+        return exc.code, exc.read().decode()
+
+
+def test_a_stranger_is_refused_before_its_body_is_read(a_center, monkeypatch):
+    """Found in the final audit: the body was parsed before anyone was known, and parsing
+    is where the cost is. A signer the fleet has not pinned is now turned away on the
+    header alone."""
+    from fleet.state import untrusted
+
+    monkeypatch.setattr(untrusted, "load", lambda *a: pytest.fail("parsed a stranger's body"))
+    httpd, url = serve.serve_in_thread()
+    try:
+        code, _ = _post(url, b"x" * 1000, {serve.SIGNER_HEADER: "SHA256:nobody"})
+        assert code == 403
+    finally:
+        httpd.shutdown()
+        httpd.server_close()
+
+
+def test_a_member_says_who_it_is_and_is_answered(a_center):
+    fp = acl.fingerprint(acl.claimed_signer(_sealed(a_center["skey"])))
+    httpd, url = serve.serve_in_thread()
+    try:
+        code, body = _post(url, _sealed(a_center["skey"]).encode(), {serve.SIGNER_HEADER: fp})
+        assert code == 200, body
+        assert "hub" in acl.unseal(body, a_center["cpub"])["inventory"]
+    finally:
+        httpd.shutdown()
+        httpd.server_close()
+
+
+def test_yaml_aliases_from_the_network_are_refused():
+    """A few hundred bytes of nested aliases expand ninefold per level."""
+    import yaml
+
+    from fleet.state import untrusted
+
+    bomb = "a0: &a0 [x, x]\na1: &a1 [*a0, *a0]\nk: *a1\n"
+    with pytest.raises(yaml.YAMLError):
+        untrusted.load(bomb)
+    with pytest.raises(acl.AccessError):
+        acl.unseal("body: *a\n", "ssh-ed25519 AAAA")
+    assert untrusted.load(untrusted.dump({"x": [1, 2], "y": {"z": "w"}})) == {
+        "x": [1, 2], "y": {"z": "w"}}
+
+
+def test_a_busy_center_says_so_rather_than_queueing(a_center, monkeypatch):
+    import threading
+
+    sem = threading.BoundedSemaphore(1)
+    sem.acquire()                                   # every slot taken
+    monkeypatch.setattr(serve, "_IN_FLIGHT", sem)
+    httpd, url = serve.serve_in_thread()
+    try:
+        code, _ = _post(url, _sealed(a_center["skey"]).encode())
+        assert code == 503
+    finally:
+        sem.release()
+        httpd.shutdown()
+        httpd.server_close()
+
+
 def test_health_says_nothing_about_the_fleet():
     """An unauthenticated caller learns a center is here, which the open port already
     told them, and nothing else."""
@@ -396,6 +467,41 @@ def test_a_member_cannot_make_itself_the_center(a_center):
     serve.exchange(_sealed(a_center["skey"], [me]))
     now = {d.id: d for d in inv.load(inv.INVENTORY_PATH)}
     assert now["id:box"].role != "center" and now["id:hub"].role == "center"
+
+
+def test_a_member_cannot_point_its_own_record_at_another_host(a_center):
+    """Found in the final audit: a member's own record was taken whole, addresses
+    included -- and the first address by preference is where the center dials to place
+    keys. A route of preference 0 to another host the center can log into would have
+    had the next grant to this member written into that host's authorized_keys."""
+    from fleet.models import Device, Kind
+
+    before = {d.id: d for d in inv.load(inv.INVENTORY_PATH)}["id:box"].endpoints
+    me = Device(id="id:box", name="box", kind=Kind.PERMANENT, updated_at=4_000_000_000,
+                tags=["mine"],
+                endpoints=[{"target": "192.0.2.77", "user": "root", "port": 22,
+                            "preference": 0}])
+    assert serve.exchange(_sealed(a_center["skey"], [me]))[0] == 200
+    now = {d.id: d for d in inv.load(inv.INVENTORY_PATH)}["id:box"]
+    assert now.endpoints == before
+    assert now.tags == ["mine"], "everything else about itself is still its own"
+
+
+def test_what_the_center_refused_does_not_stay_on_the_member():
+    """A member renamed another machine; the center kept only the labels. Stamped equal,
+    the member's next pull tied and kept its rejected name for good."""
+    from fleet.models import Device, Kind
+
+    center = [Device(id="id:nas", name="nas", kind=Kind.PERMANENT, updated_at=1_000)]
+    member = [Device(id="id:nas", name="renamed", kind=Kind.PERMANENT, updated_at=2_000,
+                     tags=["x"])]
+    sent = [Device(id="id:nas", name="renamed", kind=Kind.PERMANENT, updated_at=2_000,
+                   tags=["x"])]
+    taken = inv.from_member(center, sent, "id:box")
+    merged_center, _ = inv.merge(center, taken)
+    assert merged_center[0].name == "nas" and merged_center[0].tags == ["x"]
+    on_member, _ = inv.merge_from_center(member, merged_center, sent_at=3_000)
+    assert on_member[0].name == "nas", "the member takes the center's record"
 
 
 def test_a_member_may_still_add_a_machine(a_center):

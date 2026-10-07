@@ -113,8 +113,14 @@ def post(url: str, payload: str, timeout: float = 8.0, *, errors: bool = False):
     import urllib.error
     import urllib.request
 
-    req = urllib.request.Request(url, data=payload.encode(),
-                                 headers={"Content-Type": "text/yaml"}, method="POST")
+    headers = {"Content-Type": "text/yaml"}
+    # Say who signed it up front, so the center can refuse a stranger without reading
+    # the body (serve.SIGNER_HEADER).
+    try:
+        headers["X-Fleet-Signer"] = acl.fingerprint(acl.claimed_signer(payload))
+    except Exception:
+        pass
+    req = urllib.request.Request(url, data=payload.encode(), headers=headers, method="POST")
     try:
         with urllib.request.urlopen(req, timeout=timeout) as resp:
             return resp.read().decode(errors="replace")

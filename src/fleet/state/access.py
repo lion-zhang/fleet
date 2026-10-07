@@ -33,6 +33,8 @@ from pathlib import Path
 
 import yaml
 
+from . import untrusted
+
 from .. import config
 from ..config import CONFIG_DIR, STATE_DIR
 from .writes import atomic_write, turn
@@ -480,7 +482,7 @@ def seal(inventory_yaml: str, *, key_path: Path | None = None,
         # center's key in its own authorized_keys. Signed like everything else, and
         # only ever about the signer: a machine is the authority on its own files.
         inner["claims"] = dict(claims)
-    body = yaml.safe_dump(inner, sort_keys=False)
+    body = untrusted.dump(inner, sort_keys=False)
     env = {
         "protocol": PROTOCOL,
         # named for the common case; it is simply whoever signed, and a listening center
@@ -500,7 +502,7 @@ def seal(inventory_yaml: str, *, key_path: Path | None = None,
         # so it vouches for itself, and a peer that has never heard of handovers reads
         # the envelope exactly as before.
         env["handovers"] = chain
-    return yaml.safe_dump(env, sort_keys=False)
+    return untrusted.dump(env, sort_keys=False)
 
 
 def unseal(payload: str, signer_pubkey: str) -> dict:
@@ -511,7 +513,7 @@ def unseal(payload: str, signer_pubkey: str) -> dict:
     not be given the benefit of the doubt.
     """
     try:
-        env = yaml.safe_load(payload) or {}
+        env = untrusted.load(payload) or {}
     except yaml.YAMLError as exc:
         raise AccessError(f"unreadable sync payload: {exc}") from exc
     if not isinstance(env, dict) or "body" not in env:
@@ -529,7 +531,7 @@ def unseal(payload: str, signer_pubkey: str) -> dict:
             raise AccessError("sync payload is not signed by the key we trust")
     elif not verify(env["body"], env.get("signature") or "", signer_pubkey):
         raise AccessError("sync payload is not signed by the key we trust")
-    inner = yaml.safe_load(env["body"]) or {}
+    inner = untrusted.load(env["body"]) or {}
     return {"inventory": inner.get("inventory", ""),
             "telemetry": list(inner.get("telemetry") or []),
             "center_url": str(inner.get("center_url") or ""),
@@ -554,7 +556,7 @@ def claimed_signer(payload: str) -> str:
     it is not there, before unsealing anything.
     """
     try:
-        env = yaml.safe_load(payload) or {}
+        env = untrusted.load(payload) or {}
     except yaml.YAMLError:
         return ""
     return str((env or {}).get("center_pubkey") or "").strip() if isinstance(env, dict) else ""
@@ -638,7 +640,7 @@ def unseal_first_contact(payload: str) -> str:
     chance and only before the real center has ever called.
     """
     try:
-        env = yaml.safe_load(payload) or {}
+        env = untrusted.load(payload) or {}
     except yaml.YAMLError as exc:
         raise AccessError(f"unreadable sync payload: {exc}") from exc
     if not isinstance(env, dict) or "body" not in env:
@@ -841,7 +843,7 @@ def follow_chain(chain: list, trusted_pubkey: str) -> str:
     for entry in chain or []:
         record = str(entry.get("record") or "")
         try:
-            rec = yaml.safe_load(record) or {}
+            rec = untrusted.load(record) or {}
         except yaml.YAMLError:
             continue
         if not isinstance(rec, dict) or rec.get("kind") != "fleet-handover":
@@ -871,7 +873,7 @@ def unseal_trusting(payload: str, pinned: str) -> tuple[dict, str]:
         return unseal(payload, pinned), pinned
     except AccessError as first:
         try:
-            env = yaml.safe_load(payload) or {}
+            env = untrusted.load(payload) or {}
         except yaml.YAMLError:
             raise first
         if not isinstance(env, dict) or not env.get("handovers"):

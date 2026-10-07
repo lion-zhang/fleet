@@ -14,7 +14,7 @@ from pathlib import Path
 
 import yaml
 
-from . import clock
+from . import clock, untrusted
 from .writes import QueueTimeout, atomic_write, turn
 
 from ..config import INVENTORY_PATH, ensure_dirs
@@ -131,14 +131,14 @@ def _device_from(d) -> Device:
 def loads(text: str) -> list[Device]:
     """Parse the same format the file holds. Sync ships inventories over a pipe, and
     two formats that can drift would be one format too many."""
-    raw = yaml.safe_load(text)
+    raw = untrusted.load(text)
     if not isinstance(raw, dict):
         raise InventoryError("not an inventory document")
     return _devices_from(raw)
 
 
 def dumps(devices: list[Device]) -> str:
-    return yaml.safe_dump(_payload(devices), sort_keys=False, allow_unicode=True, width=100)
+    return untrusted.dump(_payload(devices), sort_keys=False, allow_unicode=True, width=100)
 
 
 def _payload(devices: list[Device]) -> dict:
@@ -359,12 +359,23 @@ def from_member(current: list[Device], incoming: list[Device], sender_id: str) -
         d.updated_at = min(int(d.updated_at or 0), cap)
         if d.id == sender_id or mine is None:
             d.role = mine.role if mine is not None else "none"
+            if mine is not None:
+                # Never its addresses. They are where the center dials to place and
+                # remove keys, so a member that could rewrite its own -- a route of
+                # preference 0 to some other host the center can log into -- would
+                # have the next grant written into that host's authorized_keys. Where a
+                # machine the center knows is reached is the center's to say (`fleet
+                # edit --ssh` there); a machine it does not know yet arrives whole.
+                d.endpoints = [dict(e) for e in mine.endpoints]
             out.append(d)
             continue
         if d.updated_at <= mine.updated_at:
             continue
+        # One second newer than what the member sent, so its next pull takes the
+        # center's record whole. Stamped equal, the tie kept the member's own copy --
+        # with the rename or the kind the center had just refused -- for good.
         out.append(dataclasses.replace(
-            mine, updated_at=d.updated_at,
+            mine, updated_at=min(cap + 1, d.updated_at + 1),
             **{f: getattr(d, f) for f in MEMBER_MAY_EDIT}))
     return out
 
