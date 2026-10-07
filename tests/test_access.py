@@ -32,7 +32,7 @@ def _keypair(tmp_path, name="k"):
     path = tmp_path / name
     subprocess.run(["ssh-keygen", "-t", "ed25519", "-N", "", "-q", "-f", str(path)],
                    check=True)
-    return path, path.with_suffix(".pub").read_text()
+    return path, path.with_suffix(".pub").read_text(encoding="utf-8")
 
 
 # ------------------------------------------------------------------- fingerprints
@@ -253,7 +253,7 @@ def test_a_quiet_center_is_a_note_not_a_refusal(tmp_path):
 
     import yaml as _y
     _y.safe_dump  # noqa: B018
-    data = _y.safe_load(p.read_text())
+    data = _y.safe_load(p.read_text(encoding="utf-8"))
     data["seen_at"] = int(_t.time()) - 30 * 86400
     p.write_text(_y.safe_dump(data))
     note = staleness_note(p)
@@ -281,7 +281,7 @@ def test_ssh_keygen_is_never_handed_a_pipe():
     import ast
     import pathlib
 
-    src = pathlib.Path(access.__file__).read_text()
+    src = pathlib.Path(access.__file__).read_text(encoding="utf-8")
     for node in ast.walk(ast.parse(src)):
         if not isinstance(node, ast.Call):
             continue
@@ -298,7 +298,7 @@ def test_signing_and_verifying_cannot_hang_forever():
     import ast
     import pathlib
 
-    src = pathlib.Path(access.__file__).read_text()
+    src = pathlib.Path(access.__file__).read_text(encoding="utf-8")
     runs = [n for n in ast.walk(ast.parse(src))
             if isinstance(n, ast.Call) and ast.unparse(n.func) == "subprocess.run"]
     assert runs, "expected ssh-keygen to be run from here"
@@ -322,7 +322,7 @@ def test_a_large_envelope_still_signs_and_verifies():
         key = Path(d) / "id_ed25519"
         subprocess.run(["ssh-keygen", "-t", "ed25519", "-N", "", "-q", "-f", str(key)],
                        check=True)
-        pub = key.with_suffix(".pub").read_text()
+        pub = key.with_suffix(".pub").read_text(encoding="utf-8")
         body = "machines:\n" + ("  - name: filler-machine-with-a-longish-line\n" * 600)
         assert len(body) > 20_000, "the point is a payload past the stdin ceiling"
 
@@ -340,7 +340,7 @@ def a_key(tmp_path):
     key = tmp_path / "id_ed25519"
     subprocess.run(["ssh-keygen", "-t", "ed25519", "-N", "", "-q", "-f", str(key)],
                    check=True)
-    return key, key.with_suffix(".pub").read_text()
+    return key, key.with_suffix(".pub").read_text(encoding="utf-8")
 
 
 def _big_inventory() -> str:

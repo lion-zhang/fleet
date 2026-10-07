@@ -14,7 +14,7 @@ N = 12
 def _key(tmp: Path, i: int) -> str:
     k = tmp / f"k{i}"
     subprocess.run(["ssh-keygen", "-q", "-t", "ed25519", "-N", "", "-f", str(k)], check=True)
-    return k.with_suffix(".pub").read_text().strip()
+    return k.with_suffix(".pub").read_text(encoding="utf-8").strip()
 
 
 def _fleet(tmp: Path):
@@ -165,7 +165,7 @@ def test_two_agents_starting_fleet_at_once_make_one_fleet(tmp_path):
         p.join(120)
         assert p.exitcode == 0
     assert sorted([out.get(), out.get()]) == [False, True], "one started it, one found it"
-    access = yaml.safe_load((cfg / "access.yaml").read_text())
-    pub = (cfg / "id_ed25519.pub").read_text().strip()
+    access = yaml.safe_load((cfg / "access.yaml").read_text(encoding="utf-8"))
+    pub = (cfg / "id_ed25519.pub").read_text(encoding="utf-8").strip()
     pinned = [k["pubkey"] for k in access["keys"].values()]
     assert pinned == [pub], "the key on disk is the key the fleet pinned"

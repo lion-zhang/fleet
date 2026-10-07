@@ -32,7 +32,7 @@ def _keypair(where, name):
     key = where / name
     subprocess.run(["ssh-keygen", "-t", "ed25519", "-N", "", "-q", "-f", str(key)],
                    check=True)
-    return key, key.with_suffix(".pub").read_text().strip()
+    return key, key.with_suffix(".pub").read_text(encoding="utf-8").strip()
 
 
 def _paths(root):
@@ -138,7 +138,7 @@ def test_the_join_address_sits_beside_the_sync_one():
 def test_the_secret_is_not_written_down(tmp_path):
     path = tmp_path / "invites.yaml"
     _, secret = invites.create(path=path)
-    assert secret not in path.read_text()
+    assert secret not in path.read_text(encoding="utf-8")
 
 
 def test_an_invite_is_good_once_and_for_one_key(tmp_path):
@@ -394,7 +394,7 @@ def test_joining_leaves_a_machine_the_center_can_manage(joining):
     # the fleet arrived
     assert {d.name for d in inv.live(inv.load())} >= {"hub", "box", "newbox"}
     # the center's key is in our own authorized_keys, as the block the reconciler writes
-    keys = (f["home"] / ".ssh" / "authorized_keys").read_text()
+    keys = (f["home"] / ".ssh" / "authorized_keys").read_text(encoding="utf-8")
     assert f"# fleet:{f['fleet_id']}:begin from={f['cfp']} user=alice" in keys
     assert f["cpub"] in keys
 
@@ -404,7 +404,7 @@ def test_joining_twice_keeps_one_block(joining):
     code = _code(f)
     join_mod.join(code)
     join_mod.join(code)
-    keys = (f["home"] / ".ssh" / "authorized_keys").read_text()
+    keys = (f["home"] / ".ssh" / "authorized_keys").read_text(encoding="utf-8")
     assert keys.count(f["cpub"]) == 1
 
 
@@ -625,3 +625,22 @@ def test_the_same_machine_rebuilt_is_still_refused(fleet_of_two):
     request = join_mod.build_request(_me("box", "id:box"), invite_id=invite.id,
                                      secret=secret, key_path=f["jkey"], hostname="box")
     assert _ask(f, request)[0] == 409
+
+
+def test_a_name_that_will_not_resolve_does_not_stall_the_invite(monkeypatch):
+    """urlopen's timeout covers the connection, not the name lookup: on a real macOS
+    runner the center's `.local` name took 35s to resolve and every invite sat silent."""
+    import threading
+    import time
+    import urllib.request
+
+    from fleet import cli
+
+    release = threading.Event()
+    monkeypatch.setattr(urllib.request, "urlopen", lambda *a, **k: release.wait(30))
+    started = time.monotonic()
+    try:
+        assert cli._listening("http://slow.local:7373/sync", limit_s=0.3) is None
+        assert time.monotonic() - started < 2
+    finally:
+        release.set()

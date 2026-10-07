@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import pytest
+
 from typer.testing import CliRunner
 
 from fleet import cli
@@ -60,10 +62,32 @@ def test_a_failure_keeps_the_file(tmp_path, monkeypatch):
     monkeypatch.setattr(cli, "install_key", lambda *a, **k: (False, "Permission denied"),
                         raising=False)
     import fleet.ssh.keys as keys
+    from fleet.ops import migrate
     monkeypatch.setattr(keys, "install_key", lambda *a, **k: (False, "Permission denied"))
+    # migrate holds its own reference: patching keys alone ran a real ssh (and on
+    # Windows died importing pty before it could say anything)
+    monkeypatch.setattr(migrate, "install_key", lambda *a, **k: (False, "Permission denied"))
+    monkeypatch.setattr(migrate, "pty_available", lambda: True)
     r = runner.invoke(cli.app, ["access", "--migrate"])
     assert r.exit_code == 1
     assert "Keeping" in r.output
+
+
+def test_a_machine_without_a_pty_keeps_the_file_and_says_why(tmp_path, monkeypatch):
+    """Windows has no pty, so it cannot type the stored passwords. It used to die there
+    on "No module named 'termios'"; now it says so and keeps the file."""
+    from fleet import secrets as sec
+    from fleet.ops import migrate
+
+    runner = _env(tmp_path, monkeypatch)
+    monkeypatch.setattr(sec, "read_secrets", lambda *a, **k: {"box": "hunter2"})
+    monkeypatch.setattr(sec, "load_identity", lambda *a, **k: object())
+    monkeypatch.setattr(migrate, "pty_available", lambda: False)
+    monkeypatch.setattr(migrate, "install_key",
+                        lambda *a, **k: pytest.fail("no password can be typed here"))
+    r = runner.invoke(cli.app, ["access", "--migrate"])
+    assert r.exit_code == 1
+    assert "Keeping" in r.output and "cannot type a password" in r.output
 
 
 def test_the_wording_does_not_claim_the_bytes_are_destroyed():

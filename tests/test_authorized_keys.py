@@ -33,7 +33,7 @@ def run(home, cmd):
     p = subprocess.run(["sh", "-c", cmd], env={"HOME": str(home), "PATH": "/usr/bin:/bin"},
                        capture_output=True, text=True)
     assert p.returncode == 0, p.stderr
-    return (home / ".ssh" / "authorized_keys").read_text()
+    return (home / ".ssh" / "authorized_keys").read_text(encoding="utf-8")
 
 
 def grant(**kw):
@@ -137,7 +137,7 @@ def test_an_explicit_path_is_honoured(tmp_path):
     cmd = posix_sync_command(FID, SRC, user="root", pubkey=KEY, path=str(target))
     p = subprocess.run(["sh", "-c", cmd], capture_output=True, text=True)
     assert p.returncode == 0, p.stderr
-    assert KEY in target.read_text()
+    assert KEY in target.read_text(encoding="utf-8")
 
 
 # ----------------------------------------------------------------- the Windows twin
@@ -221,7 +221,7 @@ def test_simultaneous_edits_of_one_file_all_land(tmp_path):
     procs = [subprocess.Popen(["sh", "-c", c], env={"HOME": str(home), "PATH": "/usr/bin:/bin"})
              for c in cmds]
     assert all(p.wait(60) == 0 for p in procs)
-    text = (home / ".ssh" / "authorized_keys").read_text()
+    text = (home / ".ssh" / "authorized_keys").read_text(encoding="utf-8")
     assert all(k in text for k in keys), "every edit kept"
     assert not list((home / ".ssh").glob("*.fleet.lock")), "and the turn released"
 
@@ -242,6 +242,6 @@ def test_the_windows_twin_keeps_simultaneous_edits_too(tmp_path):
         p.stdin.close()
         procs.append(p)
     assert all(p.wait(120) == 0 for p in procs)
-    text = f.read_text()
+    text = f.read_text(encoding="utf-8")
     assert all(k in text for k in keys)
     assert not (tmp_path / "authorized_keys.fleet.lock").exists()

@@ -21,7 +21,7 @@ def _modules():
     for path in sorted(SRC.rglob("*.py")):
         if "__pycache__" in path.parts:
             continue
-        yield path, ast.parse(path.read_text())
+        yield path, ast.parse(path.read_text(encoding="utf-8"))
 
 
 def _fleet_imports(tree, path):
@@ -89,7 +89,7 @@ def test_operations_do_not_import_typer():
 def test_ui_is_a_leaf():
     """Operations print as they go, so almost everything imports ui. It may import
     nothing from fleet in return, or that convenience becomes a cycle."""
-    tree = ast.parse((SRC / "ui.py").read_text())
+    tree = ast.parse((SRC / "ui.py").read_text(encoding="utf-8"))
     assert not _fleet_imports(tree, SRC / "ui.py")
 
 

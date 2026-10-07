@@ -190,7 +190,7 @@ def test_no_operation_raises_typer_exit():
            "_enrol_unpinned", "_broadcast", "_apply_now", "_install_key",
            "_register_identity", "_enrol_after_add", "ensure_fresh", "run_sync"}
     tree = ast.parse((pathlib.Path(__file__).resolve().parent.parent
-                      / "src" / "fleet" / "cli.py").read_text())
+                      / "src" / "fleet" / "cli.py").read_text(encoding="utf-8"))
     offenders = []
     for node in tree.body:
         if not isinstance(node, ast.FunctionDef) or node.name not in ops:
@@ -209,7 +209,7 @@ def test_the_consoles_live_in_a_leaf():
     import pathlib
 
     tree = ast.parse((pathlib.Path(__file__).resolve().parent.parent
-                      / "src" / "fleet" / "ui.py").read_text())
+                      / "src" / "fleet" / "ui.py").read_text(encoding="utf-8"))
     for node in ast.walk(tree):
         if isinstance(node, ast.ImportFrom):
             assert not (node.level or (node.module or "").startswith("fleet")), \
@@ -231,7 +231,7 @@ def test_nothing_but_the_cli_imports_the_cli():
         # same exemption in test_layering.py.
         if path.name in ("cli.py", "__main__.py"):
             continue
-        tree = ast.parse(path.read_text())
+        tree = ast.parse(path.read_text(encoding="utf-8"))
         for node in ast.walk(tree):
             if isinstance(node, ast.ImportFrom) and (node.module or "").endswith("cli"):
                 offenders.append(f"{path.relative_to(root)}:{node.lineno}")
@@ -252,7 +252,7 @@ def test_operations_do_not_import_a_surface():
     surfaces = {"cli", "serve", "mcpserver"}
     offenders = []
     for path in ops.rglob("*.py"):
-        for node in ast.walk(ast.parse(path.read_text())):
+        for node in ast.walk(ast.parse(path.read_text(encoding="utf-8"))):
             if isinstance(node, ast.ImportFrom):
                 tail = (node.module or "").rsplit(".", 1)[-1]
                 if tail in surfaces:
@@ -385,3 +385,26 @@ def test_a_listener_started_by_hand_counts_as_serving(monkeypatch):
     monkeypatch.setattr(service, "_impl", lambda: (None, None, lambda: service.UNAVAILABLE))
     monkeypatch.setattr(service, "_answers", lambda port, **k: True)
     assert service.status(7373) == service.RUNNING
+
+
+def test_install_says_running_only_once_the_port_answers(monkeypatch):
+    """On a real macOS runner launchd took the agent, the install said "running", and
+    nothing listened on the port for as long as anyone looked."""
+    monkeypatch.setattr(service, "_impl", lambda: (lambda cmd, port: "running, and again "
+                                                   "at login (x.plist)",))
+    monkeypatch.setattr(service.time, "sleep", lambda s: None)
+    clock = iter(range(0, 1000))
+    monkeypatch.setattr(service.time, "monotonic", lambda: next(clock))
+    monkeypatch.setattr(service, "_answers", lambda port, **k: False)
+    said = service.install("fleet", 7373)
+    assert said.startswith("installed, but nothing answers on port 7373")
+    assert "fleet center --listen" in said
+
+    monkeypatch.setattr(service, "_answers", lambda port, **k: True)
+    assert service.install("fleet", 7373).startswith("running")
+
+
+def test_the_launchd_job_keeps_its_output_somewhere_a_person_can_read(tmp_path, monkeypatch):
+    monkeypatch.setattr(service, "LOG_PATH", lambda: tmp_path / "center-service.log")
+    plist = service._plist("/usr/local/bin/fleet", 7373)
+    assert f"<key>StandardErrorPath</key><string>{tmp_path / 'center-service.log'}" in plist

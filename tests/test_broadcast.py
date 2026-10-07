@@ -20,7 +20,7 @@ def sandbox(tmp_path, monkeypatch):
     key = tmp_path / "id_ed25519"
     subprocess.run(["ssh-keygen", "-t", "ed25519", "-N", "", "-q", "-f", str(key)],
                    check=True)
-    return tmp_path, key, key.with_suffix(".pub").read_text()
+    return tmp_path, key, key.with_suffix(".pub").read_text(encoding="utf-8")
 
 
 def test_telemetry_rides_the_sealed_envelope(sandbox):

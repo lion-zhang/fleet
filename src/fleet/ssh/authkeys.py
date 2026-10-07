@@ -178,9 +178,11 @@ def powershell_sync_command(fleet_id: str, from_id: str, *, user: str = "",
         # silenced, and a release must never turn a good edit into a failure.
         "if(Test-Path -LiteralPath $lk){Remove-Item -LiteralPath $lk -Force "
         "-ErrorAction SilentlyContinue}\n"
-        # inheritance:r first, or inherited ACEs survive and sshd still refuses the file
-        + ("" if path else
-           "icacls $f /inheritance:r /grant 'SYSTEM:F' 'Administrators:F' | Out-Null\n")
+        # inheritance:r first, or inherited ACEs survive and sshd still refuses the file.
+        # Also when the administrators file is named outright: the edit replaces it with
+        # a new file, which would otherwise inherit an ACL sshd rejects.
+        + ("icacls $f /inheritance:r /grant 'SYSTEM:F' 'Administrators:F' | Out-Null\n"
+           if not path or path.lower().endswith("administrators_authorized_keys") else "")
     )
 
 

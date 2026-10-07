@@ -11,7 +11,7 @@ from __future__ import annotations
 from contextlib import suppress
 
 from ..state import inventory as inv
-from ..ssh.keys import ensure_keypair, install_key
+from ..ssh.keys import ensure_keypair, install_key, pty_available
 from ..ui import console, err
 from .errors import FleetError
 
@@ -40,6 +40,15 @@ def run() -> None:
     if not data:
         console.print("[dim]nothing stored -- nothing to migrate[/dim]")
         return
+    if not pty_available():
+        # Typing a stored password needs a pty, and Windows has none: this died there on
+        # "No module named 'termios'" with the file intact but nothing said.
+        err.print(f"[yellow]Keeping {sec.SECRETS_PATH.name}[/yellow] -- this machine "
+                  "cannot type a password (no pty here; Windows has none). Run "
+                  "[bold]fleet access --migrate[/bold] on a Linux or macOS machine "
+                  "holding a copy, or put [bold]fleet center --pubkey[/bold] on each "
+                  "host and delete the file.")
+        raise FleetError("this machine cannot type a password", code=1)
 
     _, pub = ensure_keypair()
     devices = inv.load()

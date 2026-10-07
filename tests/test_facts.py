@@ -29,7 +29,7 @@ FIXTURES = pathlib.Path(__file__).parent / "fixtures" / "probe"
 
 
 def _snap(name: str) -> dict:
-    return parse_payload((FIXTURES / f"{name}.txt").read_text()).to_dict()
+    return parse_payload((FIXTURES / f"{name}.txt").read_text(encoding="utf-8")).to_dict()
 
 
 def _dev(**kw) -> Device:
@@ -499,7 +499,7 @@ def test_reinitialising_does_not_rename_the_center(tmp_path, monkeypatch):
     key = tmp_path / "k"
     import subprocess
     subprocess.run(["ssh-keygen", "-t", "ed25519", "-N", "", "-q", "-f", str(key)], check=True)
-    pub = key.with_suffix(".pub").read_text().strip()
+    pub = key.with_suffix(".pub").read_text(encoding="utf-8").strip()
     monkeypatch.setattr(enrol, "ensure_keypair", lambda *a, **k: (key, pub))
     monkeypatch.setattr(__import__("fleet.ssh.keys").ssh.keys, "ensure_keypair", lambda *a, **k: (key, pub))
     monkeypatch.setattr(__import__("fleet.onboard").onboard, "onboard_self", lambda **k: (
@@ -530,13 +530,20 @@ def test_a_probe_payload_keeps_its_newlines():
     class FakeProc:
         returncode = 0
 
+        def __init__(self, *a, **k):
+            self.stdin = k.get("stdin")
+
         def communicate(self, payload=None, timeout=None):
             seen["payload"] = payload
             return b"", b""
 
+        def wait(self, timeout=None):            # Windows: the payload goes as a file
+            seen["payload"] = self.stdin.read()
+            return 0
+
         def kill(self): pass
 
-    with mock.patch.object(runner.subprocess, "Popen", lambda *a, **k: FakeProc()):
+    with mock.patch.object(runner.subprocess, "Popen", FakeProc):
         runner._run_probe_once(Endpoint(target="h"), timeout=1)
     assert isinstance(seen["payload"], bytes)
     assert b"\r\n" not in seen["payload"], "CRLF would break the remote shell"
@@ -584,7 +591,7 @@ def test_init_marks_the_center_in_the_inventory_too(tmp_path, monkeypatch):
     key = tmp_path / "k"
     subprocess.run(["ssh-keygen", "-t", "ed25519", "-N", "", "-q", "-f", str(key)], check=True)
     monkeypatch.setattr(enrol, "ensure_keypair",
-                        lambda *a, **k: (key, key.with_suffix(".pub").read_text().strip()))
+                        lambda *a, **k: (key, key.with_suffix(".pub").read_text(encoding="utf-8").strip()))
     monkeypatch.setattr(__import__("fleet.onboard").onboard, "onboard_self", lambda **k: (
         Device(id="id:me", name="hub", kind=Kind.PERMANENT), ProbeResult(status=Status.OK)))
 
@@ -622,7 +629,7 @@ def test_no_remote_script_goes_through_text_mode():
     src = pathlib.Path(__file__).resolve().parent.parent / "src" / "fleet"
     offenders = []
     for path in src.rglob("*.py"):
-        tree = ast.parse(path.read_text())
+        tree = ast.parse(path.read_text(encoding="utf-8"))
         # A parameter already declared `bytes` and forwarded onward is bytes by
         # construction -- that is the one ssh runner every caller goes through, and its
         # callers are still checked normally.
@@ -765,7 +772,7 @@ def test_no_ssh_is_spawned_with_a_pipe_for_stdout():
     for path in src.rglob("*.py"):
         if path.name in allowed:
             continue
-        tree = ast.parse(path.read_text())
+        tree = ast.parse(path.read_text(encoding="utf-8"))
         for fn in ast.walk(tree):
             if not isinstance(fn, ast.FunctionDef):
                 continue

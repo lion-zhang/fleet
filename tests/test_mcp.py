@@ -98,13 +98,13 @@ def test_install_and_uninstall_round_trip(tmp_path):
     changes = st.install_mcp(tmp_path, ["claude-desktop"], "/bin/fleet", platform="darwin")
     assert [c.action for c in changes] == ["created"]
     written = cfg / "claude_desktop_config.json"
-    assert json.loads(written.read_text())["mcpServers"]["fleet"]["args"] == ["mcp"]
+    assert json.loads(written.read_text(encoding="utf-8"))["mcpServers"]["fleet"]["args"] == ["mcp"]
 
     assert [c.action for c in st.install_mcp(tmp_path, ["claude-desktop"], "/bin/fleet",
                                              platform="darwin")] == ["unchanged"]
     assert [c.action for c in st.uninstall_mcp(tmp_path, ["claude-desktop"],
                                                platform="darwin")] == ["removed"]
-    assert "fleet" not in json.loads(written.read_text()).get("mcpServers", {})
+    assert "fleet" not in json.loads(written.read_text(encoding="utf-8")).get("mcpServers", {})
 
 
 def test_a_client_that_has_never_run_is_not_created(tmp_path):
@@ -156,7 +156,7 @@ def test_vscode_uses_its_own_key_name(tmp_path):
     cfg = tmp_path / "Library" / "Application Support" / "Code" / "User"
     cfg.mkdir(parents=True)
     st.install_mcp(tmp_path, ["vscode"], "/bin/fleet", platform="darwin")
-    doc = json.loads((cfg / "mcp.json").read_text())
+    doc = json.loads((cfg / "mcp.json").read_text(encoding="utf-8"))
     assert doc["servers"]["fleet"]["args"] == ["mcp"]
     assert "mcpServers" not in doc
 
@@ -190,7 +190,7 @@ def test_an_empty_config_is_still_written(tmp_path):
     (cfg / "mcp.json").write_text("")
     changes = st.install_mcp(tmp_path, ["vscode"], "/bin/fleet", platform="darwin")
     assert [c.action for c in changes] == ["created"]
-    assert json.loads((cfg / "mcp.json").read_text())["servers"]["fleet"]
+    assert json.loads((cfg / "mcp.json").read_text(encoding="utf-8"))["servers"]["fleet"]
 
 
 def _fake_fleet(tmp_path, script: str):

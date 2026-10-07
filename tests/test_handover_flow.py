@@ -32,7 +32,7 @@ from fleet.state import inventory as inv
 def _key(where, name):
     k = where / name
     subprocess.run(["ssh-keygen", "-t", "ed25519", "-N", "", "-q", "-f", str(k)], check=True)
-    return k, k.with_suffix(".pub").read_text().strip()
+    return k, k.with_suffix(".pub").read_text(encoding="utf-8").strip()
 
 
 @pytest.fixture
@@ -115,7 +115,7 @@ def successor(keys, monkeypatch):
 def test_the_successor_stores_a_handover_its_center_signed(successor):
     assert handover.receive(_bundle(successor)) == "f1"
     assert acl.load().center == acl.fingerprint(successor["old"][1])
-    assert "fleet-handover" in acl.INBOX_PATH.read_text()
+    assert "fleet-handover" in acl.INBOX_PATH.read_text(encoding="utf-8")
 
 
 def test_a_handover_signed_by_anyone_else_is_refused(successor):

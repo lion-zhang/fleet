@@ -72,11 +72,19 @@ def dissolve(acc, *, force: bool) -> None:
     acc, _ = acl.update(lambda current: setattr(current, "allow", []))
 
     devices = {d.id: d for d in inv.live(inv.load())}
-    left, gone = [], 0
+    left, gone = [], set()
+    # The center's own key last on each machine: it is the key every removal logs in
+    # with. Taken off first, every other block on that machine was refused, and a machine
+    # left clean was reported as still holding keys (found on a real five-machine fleet).
+    edges = sorted(ledger.items(), key=lambda kv: kv[0].split(">")[0] == acc.center)
     conn = store.connect()
     try:
-        for key, st in ledger.items():
+        for key, st in edges:
             src, dst, user = key.split(">")
+            if dst not in acc.keys:
+                # Removed with `fleet rm`, which took its keys off it then and said so if
+                # it could not. Listed here it was a bare fingerprint, as if still held.
+                continue
             dev = devices.get(st.dst_device or (acc.keys.get(dst) or {}).get("device_id", ""))
             if dev is None or not inv.endpoints_of(dev):
                 left.append(((acc.keys.get(dst) or {}).get("name", dst[:18]),
@@ -89,8 +97,9 @@ def dissolve(acc, *, force: bool) -> None:
             st.attempts += 1
             if ok:
                 st.observed = "absent"
-                gone += 1
-                console.print(f"[green]✓[/green] keys removed from {dev.name}")
+                if dev.name not in gone:
+                    console.print(f"[green]✓[/green] keys removed from {dev.name}")
+                gone.add(dev.name)
             else:
                 st.last_error = out
                 left.append((dev.name, out[:60]))
@@ -118,7 +127,7 @@ def dissolve(acc, *, force: bool) -> None:
         with suppress(OSError):
             path.unlink()
     console.print(f"\n[green]✓[/green] fleet {acc.fleet_id} dissolved; "
-                  f"keys removed from {gone} machine(s).")
+                  f"keys removed from {len(gone)} machine(s).")
     if left:
         err.print(f"[yellow]![/yellow] {len(left)} machine(s) kept their keys and there "
                   "is no longer any record of them. Remove them by hand:")

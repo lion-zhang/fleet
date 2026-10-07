@@ -20,6 +20,15 @@ from fleet.state import store
 from fleet.models import Device, Kind
 
 
+@pytest.fixture(autouse=True)
+def _posix_handoff(monkeypatch):
+    """These describe the POSIX handoff (exec into ssh); the Windows one -- wait for ssh,
+    pass its code on -- has its own tests below, which set the platform themselves."""
+    import sys
+
+    monkeypatch.setattr(sys, "platform", "linux")
+
+
 @pytest.fixture
 def box(tmp_path, monkeypatch):
     monkeypatch.setattr(inv, "INVENTORY_PATH", tmp_path / "inventory.yaml")
@@ -121,3 +130,38 @@ def test_fleet_ssh_never_falls_back_to_a_password(box, monkeypatch):
     CliRunner().invoke(cli.app, ["ssh", "lin-xps"])
     argv = box[-1][1]
     assert "PasswordAuthentication=no" in argv and "KbdInteractiveAuthentication=no" in argv
+
+
+def test_on_windows_the_remote_exit_code_is_passed_on(box, monkeypatch):
+    """Windows has no exec: os.execvp there starts ssh and exits at once with 0, so every
+    `fleet ssh NAME -- cmd` reported success whatever cmd did (found on a real Windows
+    runner). There it waits for ssh and exits with its code."""
+    import subprocess
+    import sys
+
+    monkeypatch.setattr(sys, "platform", "win32")
+    monkeypatch.setattr(subprocess, "call", lambda argv: 3)
+    r = CliRunner().invoke(cli.app, ["ssh", "lin-xps", "--", "exit", "3"])
+    assert r.exit_code == 3
+    assert not box, "never execvp on Windows"
+
+
+def test_on_windows_ctrl_c_is_left_to_ssh(box, monkeypatch):
+    """Windows has no exec, so fleet waits for ssh -- and a Ctrl+C meant for the remote
+    command reached fleet too, which made subprocess kill ssh and drop the session."""
+    import signal
+    import subprocess
+    import sys
+
+    seen = {}
+    monkeypatch.setattr(sys, "platform", "win32")
+
+    def call(argv):
+        seen["handler"] = signal.getsignal(signal.SIGINT)
+        return 0
+    monkeypatch.setattr(subprocess, "call", call)
+    before = signal.getsignal(signal.SIGINT)
+    r = CliRunner().invoke(cli.app, ["ssh", "lin-xps"])
+    assert r.exit_code == 0
+    assert seen["handler"] is signal.SIG_IGN, "ignored while ssh runs"
+    assert signal.getsignal(signal.SIGINT) == before, "and restored after"

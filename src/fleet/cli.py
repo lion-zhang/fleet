@@ -361,6 +361,13 @@ def cmd_add(ssh_command: str = typer.Argument(None, help='e.g. "ssh -p 58418 roo
         return current, action
 
     devices, action = inv.update(_record)
+    # A machine already known keeps its own name: the record that survived is the one to
+    # report. Reporting the requested name sent agents after a machine that did not exist
+    # ("No device named 'loop'") on the very next command.
+    asked = dev.name
+    if action in ("endpoint_added", "unchanged") and (
+            survivor := inv.find_exact(devices, dev.id)):
+        dev.name = survivor.name
     for t in tags:
         if view_mod.is_fact_name(t):
             console.print(f"  [dim]note: {t!r} is also derived from telemetry — "
@@ -378,6 +385,9 @@ def cmd_add(ssh_command: str = typer.Argument(None, help='e.g. "ssh -p 58418 roo
                           "(same machine-id, so this is one device, not two).")
         elif action == "unchanged":
             console.print(f"[dim]· {dev.name} already recorded with this endpoint.[/dim]")
+        if action in ("endpoint_added", "unchanged") and name and name != dev.name:
+            console.print(f"  [dim]it keeps its name; to rename it: [bold]fleet edit "
+                          f"{dev.name} --name {asked}[/bold][/dim]")
         else:
             # A key refused on first contact is the normal start of enrolling, not a
             # fault: printed as "auth_failed: credentials rejected" it read as the add
@@ -456,24 +466,37 @@ def _duration_s(text: str) -> int:
     return int(m.group(1)) * {"s": 1, "m": 60, "h": 3600, "d": 86400, "": 60}[m.group(2)]
 
 
-def _listening(sync_url: str) -> bool:
+def _listening(sync_url: str, limit_s: float = 5.0) -> bool | None:
     """Whether a listener answers where the invite will send the machine.
 
     Asked of the address itself, not of the service manager: a listener started by hand
     with `--listen` is not a service, and a service can report running while its port is
     closed -- either way the question the person needs answered is whether a join would
     get through.
+
+    None when the answer did not come within `limit_s`. urlopen's timeout covers the
+    connection, not the name lookup, and on a real macOS runner the center's own
+    `.local` name took 35 seconds to resolve -- every `fleet invite` sat silent that long.
     """
+    import threading
     import urllib.request
 
     from .ops.join import join_url
 
     health = join_url(sync_url)[: -len("/join")] + "/health"
-    try:
-        with urllib.request.urlopen(health, timeout=3) as resp:
-            return resp.status == 200
-    except Exception:
-        return False
+    answer: list[bool] = []
+
+    def ask() -> None:
+        try:
+            with urllib.request.urlopen(health, timeout=3) as resp:
+                answer.append(resp.status == 200)
+        except Exception:
+            answer.append(False)
+
+    t = threading.Thread(target=ask, daemon=True)
+    t.start()
+    t.join(limit_s)
+    return answer[0] if answer else None
 
 
 @app.command("invite")
@@ -587,7 +610,15 @@ def cmd_invite(name: str = typer.Argument(None, help="what the machine will be c
     print(f"    {links.install_line_windows(code)}\n")
     console.print(f"  [dim]it will dial {url}; the center reaches it back over ssh, "
                   "so sshd must be running there[/dim]")
-    if not serving:
+    if serving is None:
+        from urllib.parse import urlsplit
+
+        host = urlsplit(url).hostname or url
+        console.print(f"[yellow]![/yellow] {host} did not even resolve here within 5s, so "
+                      "the machine may not reach it either -- if it cannot, give it an "
+                      "address it can: [bold]fleet invite --url http://ADDRESS:7373/sync"
+                      "[/bold]")
+    elif not serving:
         console.print("[yellow]![/yellow] the center is not listening, so nothing can "
                       "join yet -- start it with [bold]fleet service install[/bold] or "
                       "[bold]fleet center --listen[/bold]")
@@ -1291,8 +1322,12 @@ def cmd_top(name: str = typer.Argument(None, help="one device, instead of the wh
 @contextmanager
 def _raw_stdin():
     """cbreak mode so single keys arrive without Enter. Restored no matter how we
-    leave, or the user's shell is left unusable."""
-    if not sys.stdin.isatty():
+    leave, or the user's shell is left unusable.
+
+    Not on Windows, which has no termios (`fleet top` died there on "No module named
+    'termios'"): its console hands single keys to msvcrt without any mode change.
+    """
+    if not sys.stdin.isatty() or sys.platform == "win32":
         yield
         return
     import termios
@@ -1310,6 +1345,16 @@ def _key_pressed(timeout: float) -> str | None:
     """Doubles as the frame delay: waits for a key, or returns when the interval is up."""
     import select as _select
     if not sys.stdin.isatty():
+        return None
+    if sys.platform == "win32":
+        # select() takes only sockets on Windows; the console is polled instead.
+        import msvcrt
+
+        deadline = time.monotonic() + timeout
+        while time.monotonic() < deadline:
+            if msvcrt.kbhit():
+                return msvcrt.getwch()
+            time.sleep(0.05)
         return None
     if _select.select([sys.stdin], [], [], timeout)[0]:
         return sys.stdin.read(1)
@@ -1495,6 +1540,20 @@ def cmd_ssh(ctx: typer.Context, name: str):
     if extra:
         argv.append(remote_command(extra, windows=platform == "windows"))
 
+    if sys.platform == "win32":
+        # Windows has no exec: os.execvp starts ssh and exits this process at once with
+        # 0, so every `fleet ssh NAME -- cmd` reported success whatever cmd did (found on
+        # a real Windows runner), and an interactive shell fought the prompt for input.
+        # Ctrl+C belongs to ssh and the remote command. Reaching this process too, it
+        # made subprocess kill ssh -- dropping the session to stop one remote command.
+        import signal
+
+        before = signal.signal(signal.SIGINT, signal.SIG_IGN)
+        try:
+            code = subprocess.call(argv)
+        finally:
+            signal.signal(signal.SIGINT, before)
+        raise typer.Exit(code)
     os.execvp("ssh", argv)      # replace this process; ssh owns the tty from here
 
 
@@ -1891,7 +1950,7 @@ def _refuse_while_handing_over(acc) -> None:
     if not acl.HANDING_PATH.exists() or _stepped_down(acc):
         return
     try:
-        to = (yaml.safe_load(acl.HANDING_PATH.read_text()) or {}).get("to_name", "the successor")
+        to = (yaml.safe_load(acl.HANDING_PATH.read_text(encoding="utf-8")) or {}).get("to_name", "the successor")
     except (OSError, yaml.YAMLError):
         to = "the successor"
     err.print(f"[red]The role is being handed to {to},[/red] so this machine makes no "
@@ -2027,8 +2086,12 @@ def cmd_setup(
                   f"({' | '.join((*TARGETS, *mcp_names))} | all | auto)")
         raise typer.Exit(2)
     if not targets and not clients:
+        from .agents import registry as agent_registry
+
+        # Each agent's own folder: "~/.opencode" was named for one that lives in ~/.config.
+        looked = sorted({"~/" + a.marker for a in agent_registry.AGENTS})
         err.print("[yellow]No coding agent found.[/yellow]  Looked for "
-                  f"{', '.join('~/.' + t for t in TARGETS)} and the desktop clients.  "
+                  f"{', '.join(looked)} and the desktop clients.  "
                   "Force one with [bold]--target claude[/bold].")
         raise typer.Exit(1)
 

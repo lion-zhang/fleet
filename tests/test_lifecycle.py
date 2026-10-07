@@ -30,7 +30,7 @@ def a_fleet(tmp_path, monkeypatch):
     key = tmp_path / "id_ed25519"
     subprocess.run(["ssh-keygen", "-t", "ed25519", "-N", "", "-q", "-f", str(key)],
                    check=True)
-    pub = key.with_suffix(".pub").read_text()
+    pub = key.with_suffix(".pub").read_text(encoding="utf-8")
     import fleet.config
     import fleet.ssh.keys
     monkeypatch.setattr(fleet.config, "FLEET_KEY", key)
@@ -84,6 +84,50 @@ def test_force_dissolves_anyway_and_names_what_was_stranded(a_fleet, monkeypatch
     assert r.exit_code == 0, r.output
     assert not acl.ACCESS_PATH.exists()
     assert "kept their keys" in r.output and "lin-xps" in r.output
+
+
+def test_the_centers_own_key_comes_off_each_machine_last(a_fleet, monkeypatch):
+    """Every removal logs in with the center's key. Taking it off a machine first made
+    every other block there refused -- a clean machine reported as still holding keys
+    (found on a real five-machine fleet)."""
+    runner, me = a_fleet
+    acc = acl.load(acl.ACCESS_PATH)
+    acc.keys["SHA256:other"] = {"name": "worker", "pubkey": "ssh-ed25519 AAAA w",
+                                "device_id": "id:w"}
+    inv.save(inv.load(inv.INVENTORY_PATH) + [Device(
+        id="id:w", name="worker", kind=Kind.PERMANENT,
+        endpoints=[{"target": "192.0.2.9", "user": "root", "port": 22}])], inv.INVENTORY_PATH)
+    acl.grant(acc, "SHA256:other", "SHA256:xps", user="lin")
+    acl.save(acc, acl.ACCESS_PATH)
+    locked_out: set[str] = set()
+
+    def apply_edge(acc, edge, ep, **kw):
+        src, dst, _ = edge
+        if dst in locked_out:
+            return False, "Permission denied (publickey)"
+        if src == me:
+            locked_out.add(dst)
+        return True, ""
+    monkeypatch.setattr(rec, "apply_edge", apply_edge)
+
+    r = runner.invoke(cli.app, ["center", "--dissolve"], input="y\n")
+    assert r.exit_code == 0, r.output
+    assert "still hold keys" not in r.output
+    assert r.output.count("keys removed from lin-xps") == 1, "one line per machine"
+
+
+def test_a_machine_already_removed_is_not_reported_as_holding_keys(a_fleet, monkeypatch):
+    """`fleet rm` took its keys off and dropped it from the list; its old edges in the
+    ledger were listed by bare fingerprint as if still held."""
+    runner, me = a_fleet
+    ledger = rec.load_ledger()
+    ledger[f"{me}>SHA256:gone>root"] = rec.EdgeState(desired="present", observed="absent")
+    rec.save_ledger(ledger)
+    monkeypatch.setattr(rec, "apply_edge", lambda *a, **k: (True, ""))
+
+    r = runner.invoke(cli.app, ["center", "--dissolve", "--force"])
+    assert r.exit_code == 0, r.output
+    assert "SHA256:gone" not in r.output and "kept their keys" not in r.output
 
 
 def test_declining_the_prompt_changes_nothing(a_fleet, monkeypatch):
@@ -184,3 +228,34 @@ def test_an_existing_open_directory_is_tightened(tmp_path, monkeypatch):
     monkeypatch.setattr(config, "STATE_DIR", d)
     config.ensure_dirs()
     assert d.stat().st_mode & 0o777 == 0o700
+
+
+def test_rm_takes_the_centers_key_off_last(a_fleet, monkeypatch):
+    """`fleet rm` logs in with the center's key for every removal. In fingerprint order
+    that key came off first on about half of real fleets, and the other blocks on the
+    machine being removed were refused and left behind (found on a five-machine fleet).
+    '~' sorts after every base64 character, so the old order put the center first."""
+    from fleet.ops import sweep
+
+    runner, me = a_fleet
+    acc = acl.load(acl.ACCESS_PATH)
+    acc.keys["SHA256:~worker"] = {"name": "worker", "pubkey": "ssh-ed25519 AAAA w",
+                                  "device_id": "id:w"}
+    acl.grant(acc, me, "SHA256:xps", user="lin")
+    acl.grant(acc, "SHA256:~worker", "SHA256:xps", user="lin")
+    acl.save(acc, acl.ACCESS_PATH)
+    locked_out: set[tuple[str, str]] = set()
+
+    def apply_edge(acc, edge, ep, **kw):      # one authorized_keys per (machine, user)
+        src, dst, user = edge
+        if (dst, user) in locked_out:
+            return False, "Permission denied (publickey)"
+        if src == me:
+            locked_out.add((dst, user))
+        return True, ""
+    monkeypatch.setattr(rec, "apply_edge", apply_edge)
+
+    dev = next(d for d in inv.load(inv.INVENTORY_PATH) if d.id == "id:xps")
+    removed, unreached = sweep.remove_now(acl.load(acl.ACCESS_PATH), dev)
+    assert unreached == [], unreached
+    assert removed == 3, "the worker's block, and the center's as lin and as root"

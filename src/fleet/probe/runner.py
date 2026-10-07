@@ -140,7 +140,7 @@ def run_probe_local(*, mode: str = "full", disk_paths: list[str] | None = None,
     # one identity that is not stable.
     windows = local_platform() == WINDOWS
     argv = local_shell_argv()
-    payload = (PAYLOAD_PS1 if windows else PAYLOAD).read_text()
+    payload = (PAYLOAD_PS1 if windows else PAYLOAD).read_text(encoding="utf-8")
     try:
         proc = subprocess.run(argv, input=payload.encode(), env=env,
                               capture_output=True, timeout=timeout)
@@ -295,11 +295,11 @@ def _run_probe_once(ep: Endpoint, *, mode: str = "full", timeout: float = 20.0,
         # so the retry failed exactly like the attempt it was retrying. Set it inside the
         # script instead, where PowerShell understands it.
         prelude = "".join(f"$env:{k}='{v}'\n" for k, v in env.items())
-        payload = prelude + PAYLOAD_PS1.read_text()
+        payload = prelude + PAYLOAD_PS1.read_text(encoding="utf-8")
         argv = build_argv(ep, connect_timeout=connect_timeout, multiplex=multiplex,
                           remote="powershell -NoProfile -Command -", env=None)
     else:
-        payload = PAYLOAD.read_text()
+        payload = PAYLOAD.read_text(encoding="utf-8")
         argv = build_argv(ep, connect_timeout=connect_timeout, multiplex=multiplex,
                           remote=_posix_remote(env), env=None)
     started = time.monotonic()

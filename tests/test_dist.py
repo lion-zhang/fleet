@@ -24,7 +24,7 @@ def _build():
 
 @pytest.mark.parametrize("rel", sorted(_build().outputs()))
 def test_the_committed_copy_is_what_the_source_generates(rel):
-    assert (REPO / rel).read_text() == _build().outputs()[rel], \
+    assert (REPO / rel).read_text(encoding="utf-8") == _build().outputs()[rel], \
         f"{rel} is stale -- run: uv run python scripts/build_dist.py"
 
 
@@ -33,16 +33,16 @@ def test_every_manifest_names_the_package_and_its_version():
     v = b.version()
     for rel in (".claude-plugin/plugin.json", "gemini-extension.json", "server.json",
                 "mcpb/manifest.json"):
-        assert json.loads((REPO / rel).read_text())["version"] == v, rel
-    server = json.loads((REPO / "server.json").read_text())
+        assert json.loads((REPO / rel).read_text(encoding="utf-8"))["version"] == v, rel
+    server = json.loads((REPO / "server.json").read_text(encoding="utf-8"))
     assert server["packages"][0]["identifier"] == "agent-fleet"
     assert len(server["description"]) <= 100, "the MCP Registry's limit"
     # The registry proves we own the PyPI package by finding this in its README.
-    assert f"<!-- mcp-name: {server['name']} -->" in (REPO / "README.md").read_text()
+    assert f"<!-- mcp-name: {server['name']} -->" in (REPO / "README.md").read_text(encoding="utf-8")
 
 
 def _hook_says(path_dirs: list[str], home: Path) -> str:
-    hook = json.loads((REPO / "hooks/hooks.json").read_text())
+    hook = json.loads((REPO / "hooks/hooks.json").read_text(encoding="utf-8"))
     cmd = hook["hooks"]["SessionStart"][0]["hooks"][0]["command"]
     env = {"PATH": os.pathsep.join(path_dirs), "HOME": str(home)}
     r = subprocess.run(["/bin/sh", "-c", cmd], env=env, capture_output=True, text=True)
@@ -67,6 +67,6 @@ def test_the_plugin_hook_speaks_only_when_fleet_is_missing(tmp_path):
 
 
 def test_the_shipped_skill_says_what_to_do_without_fleet():
-    text = (REPO / "skills/fleet/SKILL.md").read_text()
+    text = (REPO / "skills/fleet/SKILL.md").read_text(encoding="utf-8")
     assert text.startswith("---\nname: fleet\ndescription: ")
     assert "uv tool install agent-fleet" in text and "`fleet ls --json`" in text

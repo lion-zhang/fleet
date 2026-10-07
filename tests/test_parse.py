@@ -13,7 +13,7 @@ FIX = pathlib.Path(__file__).parent / "fixtures" / "probe"
 
 
 def load(name: str) -> str:
-    return (FIX / f"{name}.txt").read_text()
+    return (FIX / f"{name}.txt").read_text(encoding="utf-8")
 
 
 # --------------------------------------------------------------- sentinel contract
@@ -175,7 +175,7 @@ def test_the_powershell_payload_speaks_the_same_protocol():
     import pathlib
 
     ps1 = (pathlib.Path(__file__).parent.parent / "src" / "fleet" / "probe"
-           / "payload.ps1").read_text()
+           / "payload.ps1").read_text(encoding="utf-8")
     for marker in ('"#FLEET v1"', '"#DISK mount|', '"#END rc=0"'):
         assert marker in ps1, f"the Windows payload does not emit {marker}"
     for key in ("host.hostname", "host.machine_id", "cpu.cores", "mem.total_kb"):

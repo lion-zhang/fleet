@@ -14,7 +14,7 @@ FIX = pathlib.Path(__file__).parent / "fixtures" / "probe"
 
 
 def snap_of(name: str) -> dict:
-    return parse_payload((FIX / f"{name}.txt").read_text()).to_dict()
+    return parse_payload((FIX / f"{name}.txt").read_text(encoding="utf-8")).to_dict()
 
 
 def make(name="gpu-box", kind=Kind.PERMANENT, **kw) -> Device:

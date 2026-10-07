@@ -20,7 +20,7 @@ def _append(path: str, who: int, n: int, start) -> None:
     start.wait()
     for i in range(n):
         with writes.turn(Path(path)):
-            items = json.loads(Path(path).read_text()) if Path(path).exists() else []
+            items = json.loads(Path(path).read_text(encoding="utf-8")) if Path(path).exists() else []
             items.append(f"{who}-{i}")
             writes.atomic_write(Path(path), json.dumps(items))
 
@@ -49,7 +49,7 @@ def test_every_write_lands_when_many_processes_write_at_once(tmp_path):
     for p in procs:
         p.join(120)
         assert p.exitcode == 0, "a writer crashed"
-    items = json.loads(path.read_text())
+    items = json.loads(path.read_text(encoding="utf-8"))
     assert len(items) == N * 25 and len(set(items)) == N * 25
 
 
@@ -58,7 +58,7 @@ def test_a_turn_inside_a_turn_does_not_wait_for_itself(tmp_path):
     with writes.turn(path):
         with writes.turn(path):             # a helper that saves, called inside a turn
             writes.atomic_write(path, "x")
-    assert path.read_text() == "x"
+    assert path.read_text(encoding="utf-8") == "x"
 
 
 def test_a_dead_writer_does_not_wedge_the_queue(tmp_path):
@@ -79,7 +79,7 @@ def test_atomic_write_is_owner_only_and_leaves_no_temp_behind(tmp_path):
     path = tmp_path / "access.yaml"
     writes.atomic_write(path, "a: 1\n")
     writes.atomic_write(path, "a: 2\n")
-    assert path.read_text() == "a: 2\n"
+    assert path.read_text(encoding="utf-8") == "a: 2\n"
     assert sorted(os.listdir(tmp_path)) == ["access.yaml"]
     if os.name != "nt":
         assert path.stat().st_mode & 0o077 == 0
@@ -96,7 +96,7 @@ def test_a_reader_never_sees_a_partial_file(tmp_path):
     start.set()
     seen = 0
     while p.is_alive():
-        json.loads(path.read_text())        # raises on a torn file
+        json.loads(path.read_text(encoding="utf-8"))        # raises on a torn file
         seen += 1
     p.join()
     assert p.exitcode == 0 and seen > 0

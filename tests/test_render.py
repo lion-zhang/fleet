@@ -44,7 +44,7 @@ def seeded(tmp_path, monkeypatch):
 
     conn = store.connect(tmp_path / "cache.db")
     for dev in devices:
-        snap = parse_payload((FIX / f"{dev.name}.txt").read_text())
+        snap = parse_payload((FIX / f"{dev.name}.txt").read_text(encoding="utf-8"))
         store.record(conn, dev.id, ProbeResult(status=Status.OK, snapshot=snap))
     conn.close()
     return CliRunner()

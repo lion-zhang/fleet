@@ -39,7 +39,7 @@ def load_identity(path: Path | None = None):
     pyrage = _pyrage()
     path = path or IDENTITY_PATH
     try:
-        return pyrage.x25519.Identity.from_str((path).read_text().strip())
+        return pyrage.x25519.Identity.from_str((path).read_text(encoding="utf-8").strip())
     except OSError as exc:
         raise SecretsError(f"no identity at {path} -- run `fleet identity`") from exc
 

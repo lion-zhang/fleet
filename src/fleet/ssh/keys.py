@@ -45,7 +45,7 @@ def ensure_keypair(path: Path | None = None) -> tuple[Path, str]:
     path = path or config.FLEET_KEY     # at call time: a redirected key must be the one made
     pub = path.with_suffix(".pub")
     if path.exists() and pub.exists():
-        return path, pub.read_text().strip()
+        return path, pub.read_text(encoding="utf-8").strip()
 
     from ..state.writes import turn
 
@@ -56,7 +56,7 @@ def ensure_keypair(path: Path | None = None) -> tuple[Path, str]:
     # first pinned a public key whose private half was gone.
     with turn(path):
         if path.exists() and pub.exists():
-            return path, pub.read_text().strip()
+            return path, pub.read_text(encoding="utf-8").strip()
         return _make_keypair(path, pub)
 
 
@@ -81,7 +81,7 @@ def _make_keypair(path: Path, pub: Path) -> tuple[Path, str]:
     except subprocess.CalledProcessError as exc:
         raise KeyError(f"ssh-keygen failed: {(exc.stderr or '').strip()[:200]}") from exc
     os.chmod(path, 0o600)
-    return path, pub.read_text().strip()
+    return path, pub.read_text(encoding="utf-8").strip()
 
 
 _KEY_PREFERENCE = ("id_ed25519.pub", "id_ecdsa.pub", "id_rsa.pub")
@@ -93,11 +93,11 @@ def public_key(ssh_dir: Path | None = None) -> tuple[Path, str] | None:
     for name in _KEY_PREFERENCE:
         candidate = d / name
         if candidate.is_file():
-            text = candidate.read_text().strip()
+            text = candidate.read_text(encoding="utf-8").strip()
             if text:
                 return candidate, text
     for candidate in sorted(d.glob("*.pub")) if d.is_dir() else []:
-        text = candidate.read_text().strip()
+        text = candidate.read_text(encoding="utf-8").strip()
         if text:
             return candidate, text
     return None

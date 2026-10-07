@@ -52,6 +52,12 @@ The installer fetches [uv](https://docs.astral.sh/uv) if it is missing, installs
 becomes the center of a new fleet (§2), and every supported agent installed here learns to
 use it (§4). Run it again any time to upgrade; it leaves the fleet alone.
 
+**Installing for another agent never replaces fleet.** fleet is installed once per machine
+and shared by every agent on it. When the installer finds fleet already there — a uv tool,
+a pipx install, a checkout you work on — it keeps it (an older uv install is upgraded in
+place), teaches the agents, and says which copy it kept. `--force-core` installs a fresh
+copy on purpose. Your fleet itself — keys, access list, inventory — is never touched.
+
 Two options: `--join CODE` installs a member of an existing fleet instead (§3), and
 `--no-setup` installs the command only. Pass them after `sh -s --`, e.g.
 `curl -LsSf …/install.sh | sh -s -- --no-setup`. On Windows, set `$env:FLEET_JOIN` or
@@ -99,6 +105,11 @@ and there you keep `fleet center --listen` running yourself: tmux, `nohup fleet 
 --listen &`, or the container's entrypoint. `fleet center` tells you whether it is
 serving either way.
 
+The installer reports the service as running only once its port actually answers. If it
+says `installed, but nothing answers on port 7373 yet`, the service started and is not
+serving: on macOS its output is in `center-service.log` in fleet's state folder
+(`fleet paths`), and meanwhile `fleet center --listen` in a terminal does the same job.
+
 **The center stays the center.** There is no self-promotion and no election — the role
 moves only when the current center hands it over:
 
@@ -139,6 +150,10 @@ is that the short form is never ambiguous.
 
 Adding is enrolling. In one step fleet probes the machine, puts its key there, reads back
 a key of the machine's own and pins it, and records the lot. There is no second command.
+
+Adding a machine fleet already knows — the same box at a second address — records the new
+address on the existing machine and keeps its name; `fleet add --json` reports that name,
+and `fleet edit NAME --name NEW` renames it if you meant to.
 
 **The machine has to answer.** One that does not is not recorded at all, and fleet says
 why. That is deliberate: a machine the center cannot reach cannot be granted or revoked
@@ -184,6 +199,11 @@ when it is not). And it still manages the machine over ssh afterwards, so sshd m
 running there and reachable from the center; if the address the center sees is not
 that, say which one is with `fleet join CODE --ssh "ssh me@10.0.0.5"`.
 
+The invite tells the machine where to dial: the center's own address in the fleet, or
+its hostname. If that name does not resolve even on the center, `fleet invite` says so;
+give an address the new machine can reach with `fleet invite --url
+http://ADDRESS:7373/sync` — a Tailscale name, a LAN IP.
+
 `fleet add` is **not** center-only. Run it anywhere, and on a machine that is not the
 center it records the machine and says so — the center picks it up and enrols it on its
 next `fleet sync`, because only the center can write the access list.
@@ -218,8 +238,14 @@ every install.
 **Installing from inside an agent instead** — a plugin, an extension, an `mcp add`
 command, a one-click button — is covered agent by agent in [agents.md](agents.md).
 
-Supporting another agent is one entry in `AGENTS` (or `MCP_CLIENTS`) in `setup.py`. The
-paths are a table, not code.
+**Several agents on one machine** is the normal case. They all run the same `fleet`, read
+the same inventory and keys, and can work at the same moment: changes are queued and
+applied one at a time to the state as it is then, so two agents never undo each other,
+and reading never waits. Installed a new agent later? Run `fleet setup` again, or ask an
+agent that already has fleet to do it.
+
+Supporting another agent is one entry in `AGENTS` (or `MCP_CLIENTS`) in
+`src/fleet/agents/registry.py`. The paths are a table, not code.
 
 ---
 
@@ -233,7 +259,7 @@ This is the point the setup hands over. You ask in words; the agent picks the co
 | "find me a box with a 24G card" | `fleet ls --tag cuda --tag vram-24g --json` |
 | "train this on whatever has a spare GPU" | `fleet ls --json`, then `fleet ssh NAME -- ...` |
 | "add my new rental, ssh -p 40001 root@1.2.3.4" | `fleet add "ssh -p 40001 root@1.2.3.4"` |
-| "let machine_B reach machine_A" | `fleet access machine_A --allow machine_B`, then `fleet sync` |
+| "let machine_B reach machine_A" | `fleet access machine_A --allow machine_B` |
 | "is machine_A usable yet?" | `fleet access` — reads the pending rows rather than guessing |
 | "what's costing me money?" | `fleet ls --json` and reads the alerts |
 
@@ -305,8 +331,7 @@ see, tagging it `gpu` by hand is the right move, and nothing will overwrite you.
 By default machines cannot reach each other; only the center can reach everything.
 
 ```bash
-fleet access machine_A --allow machine_B   # let machine_B reach machine_A
-fleet sync                                 # apply it
+fleet access machine_A --allow machine_B   # let machine_B reach machine_A, now
 fleet access                               # who may reach what, and what is pending
 ```
 
@@ -394,18 +419,28 @@ fleet.
 | `this invite has already been used` | Each invite admits one machine. `fleet invite` for another. |
 | `this invite has expired` | Invites last 15 minutes by default. Issue a new one, with `--ttl` if needed. |
 | `no answer from .../join` | The center is not listening. `fleet service install` on it. |
+| `service: installed, but nothing answers on port 7373 yet` | The service started but is not serving. Read `center-service.log` (macOS; `fleet paths` shows where); run `fleet center --listen` meanwhile. |
+| `<host> did not even resolve here within 5s` | The invite's address may not work for the new machine either. `fleet invite NAME --url http://ADDRESS:7373/sync`. |
+| `<name> keeps its name; to rename it: fleet edit ...` | That machine was already known; the new address was added to it. |
 
 ## Windows
 
-Windows machines work as targets with nothing to configure. They are probed and keyed
-over PowerShell, and `fleet ssh machine_A -- cmd` passes the command through rather than
-wrapping it in a shell that does not exist there. fleet works this out from the last
-probe; you never declare it.
+Windows is a first-class platform: every command is run end to end on a real Windows
+machine in CI, at a real terminal as well as from scripts.
 
-Install OpenSSH Server yourself first — fleet does not set it up.
+**As a target**, Windows machines need nothing configured beyond OpenSSH Server, which you
+install yourself (Settings → Optional features, or `Add-WindowsCapability -Online -Name
+OpenSSH.Server~~~~0.0.1.0`). They are probed and keyed over PowerShell — including the
+`administrators_authorized_keys` file Windows uses for administrator accounts — and
+`fleet ssh machine_A -- cmd` passes the command through rather than wrapping it in a shell
+that does not exist there. fleet works this out from the last probe; you never declare it.
 
-fleet also runs *on* Windows, center included: `fleet install` and `fleet update` use a
-PowerShell installer there, and `fleet center --listen` serves without a console window.
+**As the machine you work from**, center included: `fleet ssh NAME` gives an interactive
+session that owns the keyboard until you exit, Ctrl+C goes to the remote command, and
+`fleet ssh NAME -- cmd` exits with the remote command's exit code. `fleet top` runs in
+Windows Terminal or the console, and `q` quits it. `fleet install` and `fleet update` use
+a PowerShell installer, and the center's service is a scheduled task that serves without
+a console window.
 One thing it cannot do is type a password, because Windows has no pty. A Windows center
 therefore enrols only machines that already accept a key it holds — put `fleet center
 --pubkey` on the host first, and `fleet add` needs no password at all.
@@ -426,7 +461,7 @@ fleet ls machine_A -r          # just this one, freshly probed -- also how to as
                                # machine that was off: a bare `ls` retries those less
                                # often, so being off never makes `ls` slow
 fleet show                     # this machine in detail; `fleet show NAME` for another
-fleet top                      # live view; needs a terminal
+fleet top                      # live view; needs a terminal. q quits, r refreshes
 ```
 
 **Connecting**

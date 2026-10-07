@@ -114,7 +114,7 @@ def give_away(acc, name: str, *, force: bool) -> None:
         # The inventory too: a successor sweeping from its own older copy tried to enrol
         # a machine removed since, and reported renamed machines by their old names.
         "inventory": inv.dumps(inv.load()),
-        "ledger": acl.LEDGER_PATH.read_text() if acl.LEDGER_PATH.exists() else "",
+        "ledger": acl.LEDGER_PATH.read_text(encoding="utf-8") if acl.LEDGER_PATH.exists() else "",
     }, sort_keys=False)
     bundle = yaml.safe_dump({"kind": BUNDLE_KIND, "body": body,
                              "signature": acl.sign(body)}, sort_keys=False)
@@ -210,7 +210,7 @@ def accept(acc) -> None:
         raise FleetError("this machine is not in the access list", code=2)
     inbox = {}
     if acl.INBOX_PATH.exists():
-        inbox = yaml.safe_load(acl.INBOX_PATH.read_text()) or {}
+        inbox = yaml.safe_load(acl.INBOX_PATH.read_text(encoding="utf-8")) or {}
 
     devices = {d.id: d for d in inv.live(inv.load())}
     # Not the outgoing center: it is being retired, it has no route by design, and
@@ -331,7 +331,7 @@ def settle(acc) -> bool:
     if not acl.HANDING_PATH.exists() or not acl.is_center(acc):
         return False
     try:
-        pending = yaml.safe_load(acl.HANDING_PATH.read_text()) or {}
+        pending = yaml.safe_load(acl.HANDING_PATH.read_text(encoding="utf-8")) or {}
     except (OSError, yaml.YAMLError):
         return False
     url, to_pub = pending.get("url", ""), pending.get("to_pubkey", "")

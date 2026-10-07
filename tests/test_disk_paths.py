@@ -335,7 +335,7 @@ def test_gitattributes_pins_the_payload_line_endings():
     root = pathlib.Path(__file__).resolve().parent.parent
     attrs = (root / ".gitattributes")
     assert attrs.exists(), "nothing stops the next Windows clone reintroducing CRLF"
-    text = attrs.read_text()
+    text = attrs.read_text(encoding="utf-8")
     assert "eol=lf" in text and ".sh" in text
 
 

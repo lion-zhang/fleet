@@ -48,13 +48,13 @@ def test_distinct_machines_stay_distinct():
 
 # ------------------------------------------------------------------ identity derivation
 def test_machine_id_is_preferred_over_address():
-    snap = parse_payload((FIX / "gpu-box.txt").read_text())
+    snap = parse_payload((FIX / "gpu-box.txt").read_text(encoding="utf-8"))
     ep = Endpoint(target="gpu-box.example.ts.net", user="lin")
     assert derive_id(snap, ep) == "linux:machine-id:11111111111111111111111111111111"
 
 
 def test_macos_uses_hardware_uuid_namespace():
-    snap = parse_payload((FIX / "macos-laptop.txt").read_text())
+    snap = parse_payload((FIX / "macos-laptop.txt").read_text(encoding="utf-8"))
     assert derive_id(snap, Endpoint(target="mac")).startswith("darwin:hwuuid:")
 
 
@@ -66,19 +66,19 @@ def test_unfingerprintable_host_falls_back_to_address():
 
 # ------------------------------------------------------------------ classification
 def test_slurm_host_is_classified_shared():
-    snap = parse_payload((FIX / "gpu-box.txt").read_text())
+    snap = parse_payload((FIX / "gpu-box.txt").read_text(encoding="utf-8"))
     snap.slurm = True
     assert classify_kind(snap, Endpoint(target="koa04.seas.upenn.edu")) is Kind.SHARED
 
 
 def test_many_logged_in_users_implies_shared():
-    snap = parse_payload((FIX / "gpu-box.txt").read_text())
+    snap = parse_payload((FIX / "gpu-box.txt").read_text(encoding="utf-8"))
     snap.users = 9
     assert classify_kind(snap, Endpoint(target="cluster")) is Kind.SHARED
 
 
 def test_vast_label_implies_rental():
-    snap = parse_payload((FIX / "gpu-box.txt").read_text())
+    snap = parse_payload((FIX / "gpu-box.txt").read_text(encoding="utf-8"))
     snap.vast_label = "C.12345678"
     assert classify_kind(snap, Endpoint(target="1.2.3.4")) is Kind.RENTAL
 
@@ -88,7 +88,7 @@ def test_rental_recognised_from_hostname_when_unreachable():
 
 
 def test_plain_box_is_permanent():
-    snap = parse_payload((FIX / "gpu-box.txt").read_text())
+    snap = parse_payload((FIX / "gpu-box.txt").read_text(encoding="utf-8"))
     assert classify_kind(snap, Endpoint(target="gpu-box")) is Kind.PERMANENT
 
 
@@ -164,7 +164,7 @@ def test_trailing_remote_command_is_not_the_host():
 
 
 def test_suggest_name_prefers_hostname_and_uniquifies():
-    snap = parse_payload((FIX / "gpu-box.txt").read_text())
+    snap = parse_payload((FIX / "gpu-box.txt").read_text(encoding="utf-8"))
     assert suggest_name(snap, Endpoint(target="1.2.3.4"), set()) == "gpu-box"
     assert suggest_name(snap, Endpoint(target="1.2.3.4"), {"gpu-box"}) == "gpu-box-2"
 

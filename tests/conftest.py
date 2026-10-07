@@ -139,3 +139,33 @@ def _no_network(monkeypatch, request):
 
     monkeypatch.setattr(subprocess, "run", guarded_run)
     monkeypatch.setattr(subprocess, "Popen", GuardedPopen)
+
+
+@pytest.fixture(autouse=True)
+def _windows_authorized_keys_stay_in_the_test(monkeypatch):
+    """On Windows, an authorized_keys edit with no explicit path resolves the real file
+    -- %USERPROFILE%\\.ssh, or ProgramData's administrators_authorized_keys for an admin
+    -- and the joining and leaving tests were editing the CI runner's own. The same
+    PowerShell edit, pointed at the test's home instead."""
+    import os
+    import sys
+
+    if sys.platform != "win32":
+        return
+    from pathlib import Path
+
+    from fleet.ssh import authkeys
+
+    real = authkeys.sync_command
+
+    def in_the_test_home(*a, path: str = "", platform: str = "posix", **k):
+        if platform == "windows" and not path:
+            home = os.environ.get("HOME") or os.environ.get("USERPROFILE") or "."
+            path = str(Path(home) / ".ssh" / "authorized_keys")
+        return real(*a, path=path, platform=platform, **k)
+    from fleet import reconcile
+    from fleet.ops import handover, lifecycle, member
+
+    # every module that took its own reference at import
+    for mod in (authkeys, reconcile, handover, lifecycle, member):
+        monkeypatch.setattr(mod, "sync_command", in_the_test_home)

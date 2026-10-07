@@ -90,7 +90,7 @@ def _lock(path: Path):
 
 def _read(path: Path) -> list[Invite]:
     try:
-        raw = yaml.safe_load(path.read_text()) or {}
+        raw = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
     except FileNotFoundError:
         return []
     except (OSError, yaml.YAMLError) as exc:

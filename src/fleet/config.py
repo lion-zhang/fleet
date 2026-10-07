@@ -86,7 +86,7 @@ def load_config() -> Config:
     data = dict(DEFAULTS)
     if CONFIG_PATH.exists():
         try:
-            loaded = yaml.safe_load(CONFIG_PATH.read_text()) or {}
+            loaded = yaml.safe_load(CONFIG_PATH.read_text(encoding="utf-8")) or {}
             if isinstance(loaded, dict):
                 data.update(loaded)
         except yaml.YAMLError:

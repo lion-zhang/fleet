@@ -115,7 +115,8 @@ def resolve(parsed: ParsedSsh, *, timeout: float = 10.0) -> Endpoint:
         argv += ["-o", opt]
     argv.append(f"{parsed.user}@{parsed.target}" if parsed.user else parsed.target)
 
-    proc = subprocess.run(argv, capture_output=True, text=True, timeout=timeout)
+    proc = subprocess.run(argv, capture_output=True, text=True, encoding="utf-8",
+                          errors="replace", timeout=timeout)
     if proc.returncode != 0:
         raise ValueError(f"ssh -G failed for {parsed.target!r}: {proc.stderr.strip()[:200]}")
 

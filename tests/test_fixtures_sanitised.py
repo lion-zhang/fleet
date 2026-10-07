@@ -32,7 +32,7 @@ def test_there_are_fixtures():
 def test_machine_id_is_synthetic(f):
     """/etc/machine-id is documented as confidential: it uniquely and stably identifies
     a host. A real one must never reach the repo."""
-    for line in f.read_text().splitlines():
+    for line in f.read_text(encoding="utf-8").splitlines():
         if line.startswith("host.machine_id="):
             value = line.split("=", 1)[1].strip()
             assert value in SYNTHETIC_MACHINE_IDS, (
@@ -42,7 +42,7 @@ def test_machine_id_is_synthetic(f):
 @pytest.mark.parametrize("f", FIXTURES, ids=lambda p: p.name)
 def test_no_real_tailnet_name(f):
     """Tailscale names look like <host>.tailXXXXXX.ts.net; only 'example.ts.net' is ours."""
-    bad = [m for m in re.findall(r"[\w.-]*\.ts\.net", f.read_text())
+    bad = [m for m in re.findall(r"[\w.-]*\.ts\.net", f.read_text(encoding="utf-8"))
            if not m.endswith("example.ts.net")]
     assert not bad, f"{f.name} leaks a real tailnet name: {sorted(set(bad))}"
 
@@ -50,21 +50,21 @@ def test_no_real_tailnet_name(f):
 @pytest.mark.parametrize("f", FIXTURES, ids=lambda p: p.name)
 def test_tailscale_ips_are_from_the_documentation_slice(f):
     """Tailnet v4 addresses live in 100.64.0.0/10; keep fixtures inside 100.64.0.x."""
-    bad = [ip for ip in re.findall(r"\b100\.\d{1,3}\.\d{1,3}\.\d{1,3}\b", f.read_text())
+    bad = [ip for ip in re.findall(r"\b100\.\d{1,3}\.\d{1,3}\.\d{1,3}\b", f.read_text(encoding="utf-8"))
            if not ip.startswith("100.64.0.")]
     assert not bad, f"{f.name} leaks real tailnet IPs: {sorted(set(bad))}"
 
 
 @pytest.mark.parametrize("f", FIXTURES, ids=lambda p: p.name)
 def test_no_home_directory_paths(f):
-    text = f.read_text()
+    text = f.read_text(encoding="utf-8")
     for pattern in (r"/Users/(?!u\b)[a-z]", r"/home/(?!u\b|user\b)[a-z]"):
         assert not re.search(pattern, text), f"{f.name} leaks a real home directory"
 
 
 @pytest.mark.parametrize("f", FIXTURES, ids=lambda p: p.name)
 def test_no_credential_material(f):
-    text = f.read_text()
+    text = f.read_text(encoding="utf-8")
     for pattern in (r"BEGIN [A-Z ]*PRIVATE KEY", r"ssh-(rsa|ed25519) AAAA",
                     r"\bsk-[A-Za-z0-9]{20}", r"Bearer [A-Za-z0-9]"):
         assert not re.search(pattern, text), f"{f.name} contains credential material"
@@ -73,7 +73,7 @@ def test_no_credential_material(f):
 def test_fixtures_still_carry_the_numbers_the_parser_tests_rely_on():
     """Sanitising must not hollow out the fixtures: the display-vs-compute case is the
     whole reason the GPU fixture exists."""
-    gpu = (FIX / "gpu-box.txt").read_text()
+    gpu = (FIX / "gpu-box.txt").read_text(encoding="utf-8")
     assert "24564|853|23197" in gpu          # total|used|free
     assert gpu.count("#GPUPROC") == 1
     assert "msedge" in gpu and "code" in gpu  # display-class processes must survive
@@ -104,7 +104,7 @@ def test_no_real_address_in_the_source(f):
     A public resolver counts too. It is not ours to leak, but a test that ever really
     dialled it would reach a stranger's service.
     """
-    bad = sorted({ip for ip in _IP.findall(f.read_text()) if not _ALLOWED.match(ip)})
+    bad = sorted({ip for ip in _IP.findall(f.read_text(encoding="utf-8")) if not _ALLOWED.match(ip)})
     assert not bad, f"{f.name} carries a real address: {bad}. Use 1.2.3.4 or 5.6.7.8."
 
 
@@ -119,6 +119,6 @@ def test_no_real_tailnet_name_in_the_source(f):
     # A real one is <host>.<tailnet>.ts.net -- four labels. The bare ".ts.net" suffix
     # appears in source as a literal, and short fakes like "oracle.ts.net" name no real
     # tailnet; matching either would make the guard noise, and a noisy guard gets muted.
-    bad = sorted({m for m in re.findall(r"\b[\w-]+\.[\w-]+\.ts\.net\b", f.read_text())
+    bad = sorted({m for m in re.findall(r"\b[\w-]+\.[\w-]+\.ts\.net\b", f.read_text(encoding="utf-8"))
                   if not m.endswith("example.ts.net") and "tailXXXXXX" not in m})
     assert not bad, f"{f.name} leaks a real tailnet name: {bad}"

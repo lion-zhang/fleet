@@ -39,7 +39,7 @@ def test_refresh_rewrites_a_stale_skill(tmp_path, monkeypatch):
     assert stale_targets(home, "fleet") == ["claude"]
     r = CliRunner().invoke(cli.app, ["setup", "--refresh"])
     assert r.exit_code == 0, r.output
-    assert skill.read_text() == skill_text("fleet")
+    assert skill.read_text(encoding="utf-8") == skill_text("fleet")
     assert stale_targets(home, "fleet") == []
 
 
@@ -63,7 +63,7 @@ def test_refresh_touches_only_our_region_in_a_shared_file(tmp_path, monkeypatch)
     agents_md.parent.mkdir(parents=True)
     agents_md.write_text(f"my own notes\n\n{BEGIN}\nSTALE-FLEET-TEXT\n{END}\n\nmore of mine\n")
     CliRunner().invoke(cli.app, ["setup", "--refresh"])
-    text = agents_md.read_text()
+    text = agents_md.read_text(encoding="utf-8")
     assert text.startswith("my own notes") and text.rstrip().endswith("more of mine")
     # Gemini now reads the shared skill; the region it used to get is taken back out by
     # the refresh an update runs, and the user's own text around it stays.
@@ -82,7 +82,7 @@ def test_refresh_updates_an_mcp_entry_only_where_fleet_is_registered(tmp_path, m
                                                        "args": ["mcp"]},
                                              "other": {"command": "x"}}}))
     CliRunner().invoke(cli.app, ["setup", "--refresh"])
-    doc = json.loads(path.read_text())
+    doc = json.loads(path.read_text(encoding="utf-8"))
     assert doc[client.key]["fleet"]["command"] == "/new/fleet"
     assert doc[client.key]["other"] == {"command": "x"}
 
