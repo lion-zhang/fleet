@@ -26,7 +26,11 @@ say so:
   `C:\ProgramData\ssh\administrators_authorized_keys`, with the strict permissions sshd
   insists on (it silently ignores the file otherwise); for other accounts it is
   `~\.ssh\authorized_keys`. `fleet rm` on the center removes the fleet's keys from the
-file it placed them in; `fleet center --leave` on the machine itself cleans both.
+  file it placed them in; `fleet center --leave` on the machine itself cleans both.
+- Every administrator account on a Windows machine shares that one file, so sshd lets a
+  key in it log in as any of them: a grant to one administrator account is in effect a
+  grant to all of them, and revoking one revokes it for all. Grant a non-administrator
+  account when that difference matters.
 - `fleet ssh box -- dir` passes the command to the remote shell as it is, rather than
   wrapping it for a shell that is not there. The remote command's exit code comes back.
 
@@ -44,7 +48,8 @@ Open a new terminal afterwards so `fleet` is on your PATH.
   Ctrl+C goes to the remote program, not to fleet.
 - `fleet top` runs in Windows Terminal and the classic console; `q` quits.
 - The center's background service is a scheduled task that runs without a console
-  window.
+  window, with no time limit, on battery too, and restarted if it stops. What it does
+  goes to `center-service.log` in fleet's state folder.
 - `fleet update` updates this machine in the background, once the command has exited:
   Windows cannot replace a program while it runs. It takes a minute; `fleet --version`
   shows the result, and `update.log` in fleet's state folder says how it went.

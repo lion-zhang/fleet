@@ -42,12 +42,21 @@ fleet access            # every grant, and anything still pending
 fleet access nas        # just this machine
 ```
 
-A change the center could not apply yet — the target is switched off — is shown as
-**pending** (a grant) or **revoking** (a revoke), with how long it has waited, and never
-reported as done. A revoke still shown as revoking means the key is *still there*. The
+Each row's state is one of three words:
+
+| State | Means |
+|---|---|
+| **present** | the key is on the machine, as the list says |
+| **pending** | a grant the center could not place yet — the machine was off |
+| **revoking** | a revoke the center could not apply yet: the key is *still there* |
+
+A pending or revoking row shows how long it has waited and how many attempts it took,
+and is never reported as done. The
 listening center tries again by itself, every five minutes or so (less often while the
 machine stays off), so a revoke lands soon after the machine is back. `fleet sync` on the
-center tries at once.
+center tries at once. A row whose error stays the same attempt after attempt — an account
+that does not exist there, a wrong `--user` — will not land by waiting: fix the cause, or
+revoke it.
 
 On a member, `fleet access` names the center; changes have to be made there.
 

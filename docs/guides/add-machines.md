@@ -118,7 +118,7 @@ terminal there, or give it to the agent on that machine. The machine installs fl
 `authorized_keys`. No password, and nothing to approve afterwards: the invite *was* the
 approval.
 
-- **Single use, 15 minutes** by default (`--ttl 2h` for longer). `fleet invite --list`
+- **Single use, 15 minutes** by default (`--ttl 2h` for longer, 7 days at most). `fleet invite --list`
   shows what became of recent ones; `--revoke ID` withdraws one.
 - **Safe to paste into a provisioning script**: a used code is worth nothing, and the
   secret in it never crosses the network.

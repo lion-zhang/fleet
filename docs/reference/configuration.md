@@ -33,7 +33,7 @@ alone. `fleet paths` prints where the main files are on this machine.
 | `access-cache.yaml` | on a member: the center's key, its address, and when it was last heard from |
 | `access-invites.yaml` | on the center: open invites, stored as hashes |
 | `access-chain.yaml`, `access-handover-*.yaml` | handovers of the center role |
-| `center-service.log` | macOS only: the background service's output |
+| `center-service.log`, `.log.1` | the listener's output when no terminal is attached (the background service, on every OS): what it retried, and every request it refused. Kept to about a megabyte. |
 | `clock.yaml` | on a member: how far this machine's clock is from the center's |
 | `update.log`, `update.ps1`, `update-run.ps1`, `update-run.log` | Windows only: the last `fleet update` of this machine, which runs after fleet exits |
 

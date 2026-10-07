@@ -31,10 +31,14 @@ word could only steer work. This is lazy on purpose: a
 machine nobody is using needs no fresh data, and the moment someone uses it, it gets
 some. Only one process per machine asks at a time; the others carry on with what they
 have rather than wait. A center that does not answer is asked less often — a minute,
-doubling per miss, up to `offline_backoff_max_s`.
+doubling per miss, up to `offline_backoff_max_s`. A center that answers and *refuses* —
+a machine removed, or whose key changed — is recorded as a refusal, with the reason, and
+`fleet ls` says so: it is not the same as a center that is off.
 
 A machine the center cannot reach can still pull, once it knows where the center is:
-`fleet sync --from URL` (or joining with an invite, which records it).
+`fleet sync --from HOST` (or joining with an invite, which records it). There is no
+other way: a member never syncs with its center over ssh, because nothing would sign
+that answer.
 
 ## Merging
 
@@ -53,7 +57,9 @@ two machines may have named the same box differently, and its address may have c
    wrong route can be removed by editing it on the center.
 
 **What the center takes from a member.** A member's upload is filtered before it is
-merged. About itself, a member may change anything but its role. About any other
+merged. About itself, a member may change anything but its role and its addresses — the
+addresses are where the center dials to place keys, so a member that could move its own
+could have the next grant written onto another host. About any other
 machine it may change only the tags, cost, disk paths and notes; its name, addresses,
 kind and role stay as the center has them, and a machine the center does not know yet
 comes in with no role. A member's timestamps are capped at the center's clock, so a
@@ -90,8 +96,12 @@ an unsigned inventory would let anyone who could reach a machine add a route tha
 everywhere.
 
 The listener accepts only machines the fleet has already pinned — never a stranger on
-first contact — and a member accepts answers only from the center's pinned key, or from a
-successor reached through a signed [handover](access.md#who-decides). The only way in for
+first contact. A member names its signer in an `X-Fleet-Signer` header, so a
+fingerprint the fleet has not pinned is refused before the body is read; bodies are
+capped (4 MB for a sync), read within a deadline, at most 16 at a time, and parsed with
+a YAML reader that refuses anchors and aliases. Nothing fleet writes uses them, and
+they are how a few hundred bytes become gigabytes. A member accepts answers only from
+the center's pinned key, or from a successor reached through a signed [handover](access.md#who-decides). The only way in for
 a new machine is enrolment by the center, or an [invite](access.md#invites).
 
 ## The center is expected to be offline
