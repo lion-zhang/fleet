@@ -171,8 +171,9 @@ working; only changes wait for it. Move the role with `fleet center NAME`.
 <details>
 <summary><b>Windows?</b></summary>
 
-Windows machines work as targets with nothing to configure, and fleet runs on Windows,
-center included.
+Yes, both ways. A Windows machine works as a target with OpenSSH Server and nothing else,
+and fleet runs on Windows too, center included: interactive `fleet ssh`, `fleet top` and
+the background service all work there. See [Windows](docs/getting-started.md#windows).
 </details>
 
 ## Learn more
@@ -181,9 +182,10 @@ center included.
 - [Every agent](docs/agents.md) — install commands and config for 35+ agents
 - [Design](docs/design/layers.md) — one core per machine, a skill per agent, MCP for the rest; and [access](docs/design/access.md) — how access is granted, signed and revoked
 
-**Status:** v0.5. Every command has been run end to end on fleets of Linux machines built
-from scratch; the test suite runs on Linux and macOS. Windows works as a target and a
-center, and is less tested.
+**Status:** v0.5. The test suite runs on Linux, macOS and Windows, and every command is
+run end to end on a real machine of each OS in CI — from a script, as an agent runs it,
+and at a real terminal, as you do. Multi-machine fleets (key, password, invite, handover)
+are tested on Linux machines built from scratch.
 
 Issues and pull requests are welcome — `uv run pytest -q` runs the tests. If fleet saved
 you a GPU-hour, a ⭐ helps other people find it.

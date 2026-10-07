@@ -54,13 +54,16 @@ Anywhere. A name may be omitted where the obvious subject is the machine you are
   `{cmd} setup --refresh` does just that part
 - Windows hosts work as targets: they are probed and keyed over PowerShell, and
   `{cmd} ssh box -- cmd` passes the command through rather than wrapping it in a
-  POSIX shell. Nothing to configure -- it is read from the last probe
+  POSIX shell. Nothing to configure -- it is read from the last probe, and the remote
+  command's exit code comes back on every OS
 - `{cmd} add "ssh user@host"` -- add a machine to the fleet. It must answer, or it is
   not recorded at all: a machine the center cannot reach cannot be managed. Run on the
   center this also enrols it; run anywhere else it is recorded and the center enrols it
   on the next `{cmd} sync`, and it can be granted nothing until then. `--name` and
   `--kind` override what is guessed, `--alias SHORT` gives it a short handle you can
-  type anywhere a name goes, and `--tag NAME` (repeatable) labels it
+  type anywhere a name goes, and `--tag NAME` (repeatable) labels it. Use the `name`
+  in its `--json` reply from then on: a machine already known (one box at a second
+  address) keeps its own name, whatever `--name` asked for
 - `{cmd} add --self` -- record the machine you are on, without ssh
 - `{cmd} join CODE` -- join a fleet with an invite the center issued. The machine dials
   the center, so no password is typed and a machine the center cannot reach can still

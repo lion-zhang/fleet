@@ -19,7 +19,11 @@ Consequences:
 
 ## Working here
 
-- Tests: `uv run pytest -q`.
+- Tests: `uv run pytest -q`; CI runs them on Linux, macOS and Windows.
+- End to end: `tests/e2e/host.py` runs every command against a real install, on each OS
+  (`.github/workflows/e2e.yml`, also from the Actions tab). It drives `fleet top` and
+  `fleet ssh` at a real terminal (`tests/e2e/term.py`: a pty, or ConPTY on Windows) —
+  agents run fleet with no terminal, people with one, and both must be tested.
 - Generated files, never hand-edited: `skills/fleet/SKILL.md` and the plugin/extension
   manifests (`uv run python scripts/build_dist.py`), the README screenshots
   (`uv run python scripts/readme_screenshots.py`).
