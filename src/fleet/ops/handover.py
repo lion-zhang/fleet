@@ -416,4 +416,11 @@ def settle(acc) -> bool:
                   f"the role; this machine is a member of {acc.fleet_id} now.")
     console.print(f"  [dim]the list it held is kept at {retired}, for reference "
                   f"only[/dim]")
+    # Its listener has no fleet to serve now. Left installed, the service manager
+    # restarted it every few seconds, for good, each time refused.
+    from contextlib import suppress
+    from .. import service
+
+    with suppress(Exception):
+        service.remove()
     return True

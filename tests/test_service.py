@@ -74,10 +74,37 @@ def test_windows_registers_for_this_user_not_the_system(monkeypatch):
     monkeypatch.setattr(service, "_run",
                         lambda argv, **k: calls.append(argv) or _ok())
     service._windows_install("C:\\fleet.exe", 7373)
+    reg = _registration(calls)
+    assert "-AtLogOn -User $who" in reg and "$env:USERNAME" in reg
+    assert "SYSTEM" not in reg
+
+
+def test_the_windows_task_runs_for_good(monkeypatch):
+    """schtasks' defaults stop a task after three days, never on battery, and never
+    restart it (final audit). The listener is meant to run as long as the user is in."""
+    calls = []
+    monkeypatch.setattr(service, "_run", lambda argv, **k: calls.append(argv) or _ok())
+    service._windows_install("C:\\fleet.exe", 7373)
+    reg = _registration(calls)
+    for setting in ("-ExecutionTimeLimit ([TimeSpan]::Zero)", "-AllowStartIfOnBatteries",
+                    "-DontStopIfGoingOnBatteries", "-RestartCount"):
+        assert setting in reg
+
+
+def test_without_the_scheduledtasks_module_it_falls_back_to_schtasks(monkeypatch):
+    calls = []
+
+    def run(argv, **k):
+        calls.append(argv)
+        return _ok(returncode=1) if argv[0] == "powershell" and "Register-ScheduledTask" in argv[-1] else _ok()
+    monkeypatch.setattr(service, "_run", run)
+    service._windows_install("C:\\fleet.exe", 7373)
     create = next(c for c in calls if "/create" in c)
-    assert "/sc" in create and create[create.index("/sc") + 1] == "onlogon"
-    assert "/ru" not in create, "no /ru means the invoking user, which is the point"
-    assert "SYSTEM" not in " ".join(create)
+    assert create[create.index("/sc") + 1] == "onlogon" and "/ru" not in create
+
+
+def _registration(calls) -> str:
+    return next(c[-1] for c in calls if c[0] == "powershell" and "Register-ScheduledTask" in c[-1])
 
 
 def test_stopping_on_windows_also_kills_the_process(monkeypatch):
@@ -88,7 +115,9 @@ def test_stopping_on_windows_also_kills_the_process(monkeypatch):
     service._windows_stop()
     flat = [" ".join(c) for c in calls]
     assert any("/end" in f for f in flat)
-    assert any("taskkill" in f for f in flat)
+    assert any("Stop-Process" in f and "--listen" in f for f in flat)
+    # Never every fleet.exe: that killed the `fleet` running this, too (final audit).
+    assert not any("taskkill" in f and "fleet.exe" in f for f in flat)
 
 
 def test_starting_does_nothing_when_nothing_is_installed(monkeypatch, tmp_path):
@@ -133,7 +162,10 @@ def test_the_installer_stops_the_service_before_replacing_it():
     from fleet.install import install_script
 
     sc = install_script("git@example.com:x/y.git")
-    assert sc.index("service stop") < sc.index("uv tool install") < sc.index("service start")
+    assert sc.index("service stop") < sc.index("uv tool install")
+    # started again on the way out, whatever happens in between (a trap on EXIT)
+    assert "trap '" in sc and "service start" in sc[sc.index("trap '"):]
+    assert sc.index("service stop") < sc.index("trap '") < sc.index("uv tool install")
     # --force alone reuses a cached wheel and ships stale code; --reinstall rebuilds
     # every dependency, which turns a deploy into a download of the world
     assert "--reinstall-package agents-fleet" in sc
@@ -278,8 +310,7 @@ def test_the_center_serves_without_a_console_window(monkeypatch, tmp_path):
     monkeypatch.setattr(service, "_run", lambda argv, **k: calls.append(argv) or _ok())
     service._windows_install("C:\\fleet.exe", 7373)
 
-    create = next(c for c in calls if "/create" in c)
-    action = create[create.index("/tr") + 1]
+    action = _registration(calls)
     assert str(quiet) in action and "-m fleet" in action, action
     assert "fleet.exe" not in action, "the console launcher is what opened the window"
 
@@ -292,14 +323,13 @@ def test_it_falls_back_to_the_launcher_when_there_is_no_windowless_python(monkey
     monkeypatch.setattr(service, "_run", lambda argv, **k: calls.append(argv) or _ok())
     service._windows_install("C:\\fleet.exe", 7373)
 
-    create = next(c for c in calls if "/create" in c)
-    assert "C:\\fleet.exe" in create[create.index("/tr") + 1]
+    assert "C:\\fleet.exe" in _registration(calls)
 
 
 def test_stopping_never_kills_every_pythonw_on_the_machine(monkeypatch, tmp_path):
     """pythonw.exe is whatever the user happens to be running. `taskkill /im pythonw.exe`
     would end all of it, so the center is matched on its command line and killed by pid.
-    fleet.exe stays matched by name: nothing else is called that."""
+    So is fleet.exe: by name, it also ended the `fleet` doing the stopping."""
     calls = []
     monkeypatch.setattr(service, "_run", lambda argv, **k: calls.append(argv) or _ok())
     service._windows_stop()
@@ -308,7 +338,7 @@ def test_stopping_never_kills_every_pythonw_on_the_machine(monkeypatch, tmp_path
     assert not any("/im" in f and "pythonw" in f for f in flat), \
         "an image-name kill would take out unrelated programs"
     kills = [f for f in flat if "Stop-Process" in f or "taskkill" in f]
-    targeted = [f for f in kills if "pythonw.exe" in f]
+    targeted = [f for f in kills if "pythonw" in f]
     assert targeted, "the windowless center must still be stopped"
     assert all("CommandLine" in f and "ProcessId" in f for f in targeted), \
         "a kill that names pythonw must select it by command line, then by pid"

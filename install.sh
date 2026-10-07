@@ -121,11 +121,22 @@ install_core() {
     force=""; [ "$kind" = force ] && force="--force"
     if [ -n "${FLEET_SOURCE:-}" ]; then
         "$uv" tool install --upgrade $force --quiet "$source" </dev/null || die "could not install $source"
-    elif ! "$uv" tool install --upgrade $force --quiet "$source" </dev/null 2>/dev/null; then
-        # Not on PyPI yet, or PyPI is unreachable from here: straight from the repo.
-        say "  (not on PyPI from here; installing from GitHub)"
-        "$uv" tool install --force --quiet "git+https://github.com/lion-zhang/fleet" </dev/null \
-            || die "could not install fleet"
+    else
+        errs=$(mktemp)
+        if ! "$uv" tool install --upgrade $force --quiet "$source" </dev/null 2>"$errs"; then
+            # Only when the package is not there to install. Any other failure -- a
+            # download that broke, another program already called `fleet` -- used to
+            # become a forced install of the repository's main branch over it.
+            if grep -qiE 'not found in the (package )?registry|no solution found|404' "$errs"; then
+                say "  (not on PyPI from here; installing from GitHub)"
+                "$uv" tool install $force --quiet "git+https://github.com/lion-zhang/fleet" </dev/null \
+                    || { rm -f "$errs"; die "could not install fleet"; }
+            else
+                cat "$errs" >&2; rm -f "$errs"
+                die "could not install fleet"
+            fi
+        fi
+        rm -f "$errs"
     fi
 }
 
@@ -207,6 +218,14 @@ main() {
             if [ "$kind" = old ]; then
                 "$uv" tool uninstall fleet-broker >/dev/null 2>&1 </dev/null || true
                 "$uv" tool uninstall agent-fleet >/dev/null 2>&1 </dev/null || true
+            fi
+            # A center's listener runs from the files being replaced: stopped first, and
+            # started again however this ends -- or it went on running the old version,
+            # loading the new one's modules into it as it went.
+            if [ -n "$found" ] && [ -x "$found" ]; then
+                "$found" service stop </dev/null >/dev/null 2>&1 || true
+                restart_with=$found
+                trap '"$restart_with" service start </dev/null >/dev/null 2>&1 || true' EXIT
             fi
             install_core "$uv" "$kind"
             found="" ;;

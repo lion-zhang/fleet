@@ -76,11 +76,17 @@ function Install-FleetCore($uv, $kind) {
         if ($LASTEXITCODE -ne 0) { throw "could not install $source" }
         return
     }
-    & $uv tool install --upgrade @force --quiet $source 2>$null
+    $said = (& $uv tool install --upgrade @force --quiet $source 2>&1 | Out-String)
     if ($LASTEXITCODE -ne 0) {
-        # Not on PyPI yet, or PyPI is unreachable from here: straight from the repo.
+        # Only when the package is not there to install. Any other failure -- a download
+        # that broke, another program already called `fleet` -- used to become a forced
+        # install of the repository's main branch over it.
+        if ($said -notmatch '(?i)not found in the (package )?registry|no solution found|404') {
+            Write-Host $said
+            throw 'could not install fleet'
+        }
         Write-Host '  (not on PyPI from here; installing from GitHub)'
-        & $uv tool install --force --quiet 'git+https://github.com/lion-zhang/fleet'
+        & $uv tool install @force --quiet 'git+https://github.com/lion-zhang/fleet'
         if ($LASTEXITCODE -ne 0) { throw 'could not install fleet' }
     }
 }
@@ -149,10 +155,26 @@ function Install-Fleet {
             & $uv tool uninstall fleet-broker 2>&1 | Out-Null
             & $uv tool uninstall agent-fleet 2>&1 | Out-Null
         }
-        if ($exe) {
-            Get-Process fleet -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
+        # A center's listener is pythonw.exe running from the tool's own folder, not a
+        # `fleet` process: stopping only fleet.exe left it holding the files uv replaces,
+        # and the upgrade failed half way with "Access is denied". The task is ended, the
+        # listener matched by what it runs, and waited for; started again however this
+        # ends.
+        $restart = $null
+        if ($exe -and $fleet -and (Test-Path $fleet)) {
+            $restart = $fleet
+            try { schtasks /end /tn fleet-center 2>&1 | Out-Null } catch { }
+            $listeners = { Get-CimInstance Win32_Process | Where-Object {
+                $_.Name -match '^(fleet|pythonw?)\.exe$' -and $_.CommandLine -like '*center*--listen*' } }
+            & $listeners | ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }
+            $until = (Get-Date).AddSeconds(15)
+            while ((Get-Date) -lt $until -and @(& $listeners).Count -gt 0) { Start-Sleep -Milliseconds 400 }
         }
-        Install-FleetCore $uv $kind
+        try {
+            Install-FleetCore $uv $kind
+        } finally {
+            if ($restart) { try { & $restart service start 2>&1 | Out-Null } catch { } }
+        }
         & $uv tool update-shell 2>&1 | Out-Null
         $bin = (& $uv tool dir --bin).Trim()
         $fleet = Join-Path $bin "fleet$exe"

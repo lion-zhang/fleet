@@ -142,6 +142,8 @@ After=network-online.target
 ExecStart="{cmd}" center --listen --port {port}
 Restart=always
 RestartSec=5
+# 2 is "this machine is not the center": restarting cannot change that.
+RestartPreventExitStatus=2
 
 [Install]
 WantedBy=default.target
@@ -228,11 +230,29 @@ def _windows_install(cmd: str, port: int) -> str:
     # per-user directory, so a task running as SYSTEM would look somewhere else, find no
     # fleet, and serve nothing while looking perfectly healthy.
     quiet = _windowless()
-    task = (f'"{quiet}" -m fleet center --listen --port {port}' if quiet
-            else f'"{cmd}" center --listen --port {port}')
+    exe, args = ((quiet, f"-m fleet center --listen --port {port}") if quiet
+                 else (cmd, f"center --listen --port {port}"))
     _run(["schtasks", "/delete", "/tn", TASK, "/f"])
-    p = _run(["schtasks", "/create", "/tn", TASK, "/tr", task,
-              "/sc", "onlogon", "/rl", "highest", "/f"])
+    # Registered with its settings spelled out. schtasks' defaults stop a task after
+    # three days, never start it on battery and stop it when the laptop is unplugged,
+    # and never restart it after a crash: a Windows center went quiet on its own.
+    lit = lambda v: str(v).replace("'", "''")  # noqa: E731
+    p = _run(["powershell", "-NoProfile", "-Command",
+              f"$a = New-ScheduledTaskAction -Execute '{lit(exe)}' -Argument '{lit(args)}'; "
+              "$who = \"$env:USERDOMAIN\\$env:USERNAME\"; "
+              "$t = New-ScheduledTaskTrigger -AtLogOn -User $who; "
+              "$s = New-ScheduledTaskSettingsSet -ExecutionTimeLimit ([TimeSpan]::Zero) "
+              "-AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -RestartCount 999 "
+              "-RestartInterval (New-TimeSpan -Minutes 1) -MultipleInstances IgnoreNew; "
+              "$p = New-ScheduledTaskPrincipal -UserId $who -LogonType Interactive "
+              "-RunLevel Highest; "
+              f"Register-ScheduledTask -TaskName '{TASK}' -Action $a -Trigger $t "
+              "-Settings $s -Principal $p -Force | Out-Null"])
+    if p.returncode != 0:
+        # Older Windows without the ScheduledTasks module: the plain registration.
+        task = f'"{exe}" {args}'
+        p = _run(["schtasks", "/create", "/tn", TASK, "/tr", task,
+                  "/sc", "onlogon", "/rl", "highest", "/f"])
     if p.returncode != 0:
         return f"could not register it: {(p.stderr or p.stdout).strip()[:160]}"
     _run(["schtasks", "/run", "/tn", TASK])
@@ -303,8 +323,9 @@ def _windows_unblock(exe: str) -> int:
 
 
 def _windows_remove() -> str:
-    _windows_stop()
+    # The task first, so nothing restarts the listener while it is being stopped.
     _run(["schtasks", "/delete", "/tn", TASK, "/f"])
+    _windows_stop()
     for name in (FIREWALL_RULE, f"{FIREWALL_RULE} app"):
         _run(["netsh", "advfirewall", "firewall", "delete", "rule", f"name={name}"])
     return "removed, and the firewall rules with it"
@@ -323,16 +344,22 @@ def _windows_stop() -> None:
     # running fleet holds its own installation open, so the next update fails against it
     # with an error that mentions nothing about why.
     #
-    # By image name for the launcher, because `fleet.exe` is ours and nothing else is
-    # called that. Never by image name for the interpreter: `pythonw.exe` is whatever the
-    # user happens to be running, and `taskkill /im pythonw.exe` would end all of it. So
-    # the windowless center is matched on its command line and killed by pid.
-    _run(["taskkill", "/f", "/im", "fleet.exe"])
+    # The listener and nothing else, matched on its command line and killed by pid. Not
+    # `taskkill /im fleet.exe`: that ended every fleet on the machine -- an agent's MCP
+    # server, someone's `fleet top` -- and first of all the very `fleet` running this,
+    # which is uv's fleet.exe too. `fleet service remove` died before removing the task,
+    # and `--dissolve` died after forgetting the fleet, with its task left behind.
     _run(["powershell", "-NoProfile", "-Command",
-          "Get-CimInstance Win32_Process -Filter \"Name='pythonw.exe'\" | "
-          "Where-Object { $_.CommandLine -like '*-m*fleet*center*--listen*' } | "
-          "ForEach-Object { Stop-Process -Id $_.ProcessId -Force }"])
+          f"{_LISTENERS_PS} | ForEach-Object {{ Stop-Process -Id $_.ProcessId -Force }}"])
     _windows_await_exit()
+
+
+# Processes serving the fleet: the windowless interpreter the task starts, or fleet.exe
+# when there is no pythonw -- by what they run, never by image name alone, since
+# `pythonw.exe` is whatever else the user runs too.
+_LISTENERS_PS = ("Get-CimInstance Win32_Process | Where-Object { "
+                 "$_.Name -match '^(fleet|pythonw?)\\.exe$' -and "
+                 "$_.CommandLine -like '*center*--listen*' }")
 
 
 def _windows_await_exit(timeout_s: float = 10.0) -> bool:
@@ -347,10 +374,7 @@ def _windows_await_exit(timeout_s: float = 10.0) -> bool:
     deadline = time.monotonic() + timeout_s
     while time.monotonic() < deadline:
         p = _run(["powershell", "-NoProfile", "-Command",
-                  "@(Get-Process fleet -ErrorAction SilentlyContinue) + "
-                  "@(Get-CimInstance Win32_Process -Filter \"Name='pythonw.exe'\" | "
-                  "Where-Object { $_.CommandLine -like '*-m*fleet*center*--listen*' }) "
-                  "| Measure-Object | ForEach-Object { $_.Count }"])
+                  f"@({_LISTENERS_PS}) | Measure-Object | ForEach-Object {{ $_.Count }}"])
         if (p.stdout or "").strip() in ("0", ""):
             return True
         time.sleep(0.5)

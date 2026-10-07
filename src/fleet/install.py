@@ -85,6 +85,10 @@ fi
 # fails against it with an error that mentions nothing about why. Quiet and best-effort,
 # because a machine that is not a center has nothing to stop.
 PATH="$HOME/.local/bin:$PATH" fleet service stop >/dev/null 2>&1 || true
+# And started again however this ends -- set -e stops at the first failure, and an
+# upgrade that failed on a network blip left the center not listening until a reboot.
+# `service start` does nothing on a machine that never had one.
+trap 'PATH="$HOME/.local/bin:$PATH" fleet service start >/dev/null 2>&1 || true' EXIT
 
 # --reinstall-package, not --reinstall: the problem is uv reusing a cached build of
 # fleet when the version has not changed, and rebuilding every dependency to fix that
@@ -113,10 +117,6 @@ uv tool update-shell >/dev/null 2>&1 || true
 PATH="$HOME/.local/bin:$PATH" fleet setup --refresh >/dev/null 2>&1 || true
 
 PATH="$HOME/.local/bin:$PATH" fleet --version
-
-# Back up if it was there. `install` is idempotent, so this must not start a service on a
-# machine that never had one -- `service start` does nothing when none is installed.
-PATH="$HOME/.local/bin:$PATH" fleet service start >/dev/null 2>&1 || true
 {_drop_timer_block()}"""
 
 
@@ -386,6 +386,9 @@ $fleet = Join-Path $env:USERPROFILE '.local\\bin\\fleet.exe'
 
 # The package was `fleet-broker` until 0.5, then `agent-fleet`; both would claim the
 # `fleet` command.
+# In try/finally: an install that fails -- a network blip, a locked file -- must still
+# start the center's service again, or it stays down until the next logon.
+try {{
 if ($mode -eq 'uv') {{
   uv tool upgrade --quiet agents-fleet
 }} elseif ($mode -eq 'pipx') {{
@@ -394,6 +397,11 @@ if ($mode -eq 'uv') {{
   try {{ uv tool uninstall fleet-broker 2>&1 | Out-Null }} catch {{ }}
   try {{ uv tool uninstall agent-fleet 2>&1 | Out-Null }} catch {{ }}
   uv tool install --force --reinstall-package agents-fleet --quiet $dir
+}}
+}} finally {{
+  if (Test-Path $fleet) {{
+    try {{ & $fleet service start 2>&1 | Out-Null }} catch {{ }}
+  }}
 }}
 
 # So `fleet` works in a terminal the user opens later, not just in this script. Without
@@ -407,9 +415,6 @@ if (Test-Path $fleet) {{
 }}
 
 & $fleet --version
-if (Test-Path $fleet) {{
-  try {{ & $fleet service start 2>&1 | Out-Null }} catch {{ }}
-}}
 """
 
 

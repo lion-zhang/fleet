@@ -110,3 +110,14 @@ def test_a_tag_works_on_a_machine_that_already_has_a_clone(tmp_path):
     p = subprocess.run(["sh", "-c", tagged], env=env, capture_output=True, text=True)
     assert p.returncode == 0, p.stderr
     assert (tmp_path / ".local/share/fleet/marker.txt").read_text() == "v1\n"
+
+
+def test_a_failed_upgrade_still_starts_the_service_again(tmp_path):
+    """Found in the final audit: set -e stopped at the failed upgrade, after the service
+    was stopped and before it was started -- a network blip left the center deaf."""
+    b, _ = _sandbox(tmp_path, receipt='[tool]\nrequirements = [{ name = "agents-fleet" }]\n')
+    uv = (b / "uv").read_text().replace('case "$1 $2"', '[ "$1 $2" = "tool upgrade" ] && exit 2\ncase "$1 $2"')
+    (b / "uv").write_text(uv)
+    p, calls = _run(tmp_path, b)
+    assert p.returncode != 0, "the failure is still reported"
+    assert "fleet service stop" in calls and "fleet service start" in calls
