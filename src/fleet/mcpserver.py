@@ -264,18 +264,22 @@ def build_server():
     def center_status() -> Any:
         return _run(["center", "--json"])
 
-    @server.tool(description="Let one machine reach another over ssh. Applied on the "
-                             "spot; a machine that is off stays pending and is retried. "
+    @server.tool(description="Let one machine reach another over ssh, as the account the "
+                             "machine is reached as unless `user` names another. Applied on "
+                             "the spot; a machine that is off stays pending until sync_fleet "
+                             "on the center. "
                              "Only the center can do this. Ask before calling it: access "
                              "is the user's decision.")
-    def grant_access(machine: str, may_be_reached_by: str, user: str = "root") -> Any:
+    def grant_access(machine: str, may_be_reached_by: str, user: str | None = None) -> Any:
         return _run(["access", machine, "--allow", may_be_reached_by,
-                     "--user", user, "--json"])
+                     *(["--user", user] if user else []), "--json"])
 
-    @server.tool(description="Take that access away again, applied on the spot. Ask "
-                             "before calling it: the other machine loses its way in.")
-    def revoke_access(machine: str, reached_by: str, user: str = "root") -> Any:
-        return _run(["access", machine, "--deny", reached_by, "--user", user, "--json"])
+    @server.tool(description="Take that access away again, for every account unless "
+                             "`user` names one, applied on the spot. Ask before calling it: "
+                             "the other machine loses its way in.")
+    def revoke_access(machine: str, reached_by: str, user: str | None = None) -> Any:
+        return _run(["access", machine, "--deny", reached_by,
+                     *(["--user", user] if user else []), "--json"])
 
     @server.tool(description="Bring this machine up to date. On the center: apply "
                              "pending access changes and share the inventory. On a member: "

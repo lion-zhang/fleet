@@ -24,6 +24,7 @@ command accepts `--help`. For what to use when, start with the
 | [`fleet access`](#fleet-access) | Who may reach what, and change it. |
 | [`fleet center`](#fleet-center) | Who decides, and handing that over. |
 | [`fleet setup`](#fleet-setup) | Teach your coding agents to use fleet. |
+| [`fleet service`](#fleet-service) | The background service that keeps the center listening on port 7373. |
 | [`fleet paths`](#fleet-paths) | Show where fleet keeps its state. |
 
 ## fleet ls
@@ -353,7 +354,7 @@ fleet access machine_A --allow machine_B
 |---|---|
 | `--allow` `MACHINE` | let MACHINE reach the target |
 | `--deny` `MACHINE` | stop MACHINE reaching the target |
-| `--user` | whose authorized_keys (default: `root`) |
+| `--user` | whose authorized_keys; a grant defaults to the account the target is reached as, a revoke to every account |
 | `--migrate` | spend passwords an older fleet stored |
 | `--json` | print JSON instead of a table, for scripts and agents |
 
@@ -416,6 +417,26 @@ fleet setup --dry-run
 | `--dry-run` | show what would change; write nothing |
 | `--uninstall` | remove what setup installed |
 | `--refresh` | rewrite only what fleet already installed, so it matches this fleet; adds nothing new |
+
+## fleet service
+
+The background service that keeps the center listening on port 7373.
+
+Starting a fleet installs it and updates restart it, so you rarely need this: it is for looking when something is wrong, putting it back after a handover (the new center's `fleet service install`), or removing it.
+
+```
+fleet service [OPTIONS] [ACTION]
+```
+
+Example:
+
+```bash
+fleet service status
+```
+
+| Argument | |
+|---|---|
+| `ACTION` | status \| install \| remove \| start \| stop |
 
 ## fleet paths
 

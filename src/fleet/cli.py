@@ -1604,7 +1604,10 @@ def cmd_access(target: str = typer.Argument(None, help="one machine, instead of 
                                          help="let MACHINE reach the target"),
                deny: str = typer.Option(None, "--deny", metavar="MACHINE",
                                         help="stop MACHINE reaching the target"),
-               user: str = typer.Option("root", "--user", help="whose authorized_keys"),
+               user: str = typer.Option(None, "--user",
+                                        help="whose authorized_keys; a grant defaults to the "
+                                             "account the target is reached as, a revoke "
+                                             "to every account"),
                migrate: bool = typer.Option(False, "--migrate",
                                             help="spend passwords an older fleet stored"),
                json_out: bool = typer.Option(False, "--json", help="print JSON instead of a table, for scripts and agents")):
@@ -1667,12 +1670,22 @@ def cmd_access(target: str = typer.Argument(None, help="one machine, instead of 
             # writer: two agents granting at once each keep their grant.
             dst = _access_fp(acc, target)
             src = _access_fp(acc, allow or deny)
-            done = (acl.grant(acc, src, dst, user=user) if allow
-                    else acl.revoke(acc, src, dst, user=user))
-            return src, dst, done
+            if allow:
+                # The account the center itself reaches the target as -- the one whose
+                # authorized_keys it can write. Defaulting to root left every grant on a
+                # machine added as ubuntu@ pending for good, and the grantee's
+                # `fleet ssh` logs in as that account anyway.
+                who = [user or (acc.keys.get(dst) or {}).get("user") or "root"]
+                done = acl.grant(acc, src, dst, user=who[0])
+            else:
+                # "Stop the laptop reaching the NAS" means as anyone, unless one is named.
+                who = [user] if user else sorted(
+                    {e.user for e in acc.allow if e.src == src and e.dst == dst}) or ["root"]
+                done = any([acl.revoke(acc, src, dst, user=w) for w in who])
+            return src, dst, done, who
 
         try:
-            current, (src, dst, changed) = acl.update(change)
+            current, (src, dst, changed, users) = acl.update(change)
         except acl.AccessError as exc:
             err.print(f"[red]{exc}[/red]")
             raise typer.Exit(2)
@@ -1682,7 +1695,7 @@ def cmd_access(target: str = typer.Argument(None, help="one machine, instead of 
         # it asked for come back unreadable.
         with _chatter_to_stderr(json_out):
             console.print(f"[green]✓[/green] {verb} {current.name_of(src)} -> "
-                          f"{current.name_of(dst)}"
+                          f"{current.name_of(dst)} as {', '.join(users)}"
                           + ("" if changed else "  [dim](already so)[/dim]"))
             if changed:
                 # Applied here rather than left for a sweep. You have just said what you
@@ -1691,9 +1704,11 @@ def cmd_access(target: str = typer.Argument(None, help="one machine, instead of 
                 # waits to be asked would keep the key until it next happened to sync,
                 # which for an idle machine is never, while the peer losing access
                 # carries on using it.
-                _apply_now(current, src, dst, user, install=bool(allow))
+                for who in users:
+                    _apply_now(current, src, dst, who, install=bool(allow))
         change_done = {"change": verb, "from": current.name_of(src),
-                       "to": current.name_of(dst), "user": user, "changed": changed}
+                       "to": current.name_of(dst), "user": ", ".join(users),
+                       "changed": changed}
 
     ledger = rec.load_ledger()
     rows = []
@@ -2157,14 +2172,14 @@ def cmd_setup(
                   "new terminal.[/dim]")
 
 
-@app.command("service", hidden=True)
+@app.command("service")
 def cmd_service(action: str = typer.Argument("status",
                                              help="status | install | remove | start | stop")):
-    """Manage the background service that keeps the center listening.
+    """The background service that keeps the center listening on port 7373.
 
-    Hidden because nobody should have to run it: `fleet center --init` installs it and
-    `fleet update` stops and starts it around the install. It exists so those two have
-    something to call, and so you can look when something is wrong.
+    Starting a fleet installs it and updates restart it, so you rarely need this: it is
+    for looking when something is wrong, putting it back after a handover (the new
+    center's `fleet service install`), or removing it.
 
     [dim]Example:[/dim]  fleet service status
     """

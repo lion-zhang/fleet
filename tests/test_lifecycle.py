@@ -324,3 +324,26 @@ def test_dissolving_removes_the_background_service(a_fleet, monkeypatch):
     monkeypatch.setattr(rec, "apply_edge", lambda *a, **k: (True, ""))
     assert runner.invoke(cli.app, ["center", "--dissolve"], input="y\n").exit_code == 0
     assert removed == [1]
+
+
+def test_a_grant_is_made_as_the_account_the_machine_is_reached_as(a_fleet, monkeypatch):
+    """Found in review: `--user` defaulted to root, so on a machine added as ubuntu@ (or
+    lin@) every grant made the way the docs show it stayed pending for good -- the center
+    had only ever placed its own key in that account's file."""
+    runner, me = a_fleet
+    acc = acl.load(acl.ACCESS_PATH)
+    acc.keys["SHA256:xps"]["user"] = "lin"
+    acc.keys["SHA256:lap"] = {"name": "laptop", "pubkey": "ssh-ed25519 AAAA l",
+                              "device_id": "id:lap", "user": "me"}
+    acl.save(acc, acl.ACCESS_PATH)
+    applied = []
+    monkeypatch.setattr(cli, "_apply_now",
+                        lambda acc, src, dst, user, install: applied.append((user, install)))
+    assert runner.invoke(cli.app, ["access", "lin-xps", "--allow", "laptop"]).exit_code == 0
+    assert ("SHA256:lap", "SHA256:xps", "lin") in acl.load(acl.ACCESS_PATH).edges()
+    runner.invoke(cli.app, ["access", "lin-xps", "--allow", "laptop", "--user", "root"])
+    applied.clear()
+    r = runner.invoke(cli.app, ["access", "lin-xps", "--deny", "laptop"])
+    assert r.exit_code == 0, r.output
+    assert sorted(applied) == [("lin", False), ("root", False)], "every account, by default"
+    assert not [e for e in acl.load(acl.ACCESS_PATH).allow if e.src == "SHA256:lap"]
