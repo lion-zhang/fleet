@@ -70,6 +70,9 @@ def test_the_shipped_skill_says_what_to_do_without_fleet():
     text = (REPO / "skills/fleet/SKILL.md").read_text(encoding="utf-8")
     assert text.startswith("---\nname: fleet\ndescription: ")
     assert "uv tool install agents-fleet" in text and "`fleet ls --json`" in text
+    # Installs when asked -- the README tells people to ask -- and never unasked.
+    assert "Never install it\nunasked" in text and "When the user asks you to install it, do" in text
+    assert "INSTALL.md" in text and "member" in text
 
 
 def test_every_install_link_launches_the_published_package():

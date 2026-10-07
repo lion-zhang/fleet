@@ -48,7 +48,8 @@ HOOK = ("command -v fleet >/dev/null 2>&1 || [ -x \"$HOME/.local/bin/fleet\" ] |
         "machine. If the user asks about their machines, GPUs or remote compute, tell "
         f"them it installs with: curl -LsSf {links.INSTALL_SH} | sh   (Windows: "
         f"irm {links.INSTALL_PS1} | iex, or anywhere: uv tool install {links.PACKAGE}). "
-        "Do not install it unasked: it makes this machine the center of a new fleet.'")
+        "Do not install it unasked: it makes this machine the center of a new fleet. "
+        f"When they ask, follow {links.REPO}/blob/main/INSTALL.md.'")
 
 
 def version() -> str:

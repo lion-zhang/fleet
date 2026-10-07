@@ -14,8 +14,8 @@ from __future__ import annotations
 from .registry import HERMES_CATEGORY, fleet_command, package_version
 
 
-_DESCRIPTION = ("Use when the task needs a remote machine or GPU -- lists your compute, "
-                "what is free, and connects to it.")
+_DESCRIPTION = ("Use when the task needs a remote machine or GPU, or the user asks to "
+                "install fleet -- lists your compute, what is free, and connects to it.")
 
 
 
@@ -220,18 +220,27 @@ def agents_block(cmd: str) -> str:
 # For the copy `fleet setup` does not write: skills/fleet/SKILL.md, which the Claude Code
 # plugin, the Gemini CLI extension and `npx skills add` all ship. It reaches a machine
 # before fleet does, so the first thing it must say is what to do when fleet is not
-# there -- and the answer is to tell the user, not to install it unasked: installing
-# makes the machine the center of a fleet.
-_INSTALL_HINT = """If `fleet` is not found, it is not installed on this machine. Do not install it
-yourself: ask the user which of the two modes this machine is for --
+# there. Installing makes the machine the center of a fleet, so never unasked -- but
+# when the user asks, the agent installs it, rather than handing the job back to them.
+_INSTALL_HINT = """If `fleet` is not found, it is not installed on this machine. Never install it
+unasked. When the user asks you to install it, do -- following
+https://github.com/lion-zhang/fleet/blob/main/INSTALL.md -- after confirming which of
+the two modes this machine is for:
 
-- **center**, the one machine that decides who may reach what (usually the one they
-  work from), starting a new fleet:
+- **center**, the one machine that keeps the fleet and decides who may reach what
+  (one that can reach all their devices and is online most of the time), starting a
+  new fleet:
   - macOS / Linux: `curl -LsSf https://raw.githubusercontent.com/lion-zhang/fleet/main/install.sh | sh`
   - Windows: `powershell -ExecutionPolicy ByPass -c "irm https://raw.githubusercontent.com/lion-zhang/fleet/main/install.ps1 | iex"`
-  - or `uv tool install agents-fleet`
+  - or, where piping a script into a shell is not allowed:
+    `uv tool install agents-fleet && uv tool update-shell && fleet setup`
 - **member** of a fleet that already exists: `fleet invite` on that fleet's center
-  prints the one line to paste here.
+  prints the one line to run here.
+
+The installer writes outside the project (`~/.local/bin`, agent skill folders, a
+background service): if your sandbox blocks that, ask the user to allow it rather
+than installing halfway. Afterwards, tell the user to start a new session so this
+skill is loaded with fleet present.
 """
 
 

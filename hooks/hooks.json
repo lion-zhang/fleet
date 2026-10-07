@@ -6,7 +6,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "command -v fleet >/dev/null 2>&1 || [ -x \"$HOME/.local/bin/fleet\" ] || echo 'The fleet plugin is enabled but the fleet command is not installed on this machine. If the user asks about their machines, GPUs or remote compute, tell them it installs with: curl -LsSf https://raw.githubusercontent.com/lion-zhang/fleet/main/install.sh | sh   (Windows: irm https://raw.githubusercontent.com/lion-zhang/fleet/main/install.ps1 | iex, or anywhere: uv tool install agents-fleet). Do not install it unasked: it makes this machine the center of a new fleet.'"
+            "command": "command -v fleet >/dev/null 2>&1 || [ -x \"$HOME/.local/bin/fleet\" ] || echo 'The fleet plugin is enabled but the fleet command is not installed on this machine. If the user asks about their machines, GPUs or remote compute, tell them it installs with: curl -LsSf https://raw.githubusercontent.com/lion-zhang/fleet/main/install.sh | sh   (Windows: irm https://raw.githubusercontent.com/lion-zhang/fleet/main/install.ps1 | iex, or anywhere: uv tool install agents-fleet). Do not install it unasked: it makes this machine the center of a new fleet. When they ask, follow https://github.com/lion-zhang/fleet/blob/main/INSTALL.md.'"
           }
         ]
       }

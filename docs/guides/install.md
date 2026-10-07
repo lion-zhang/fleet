@@ -1,8 +1,10 @@
 # Installing and upgrading
 
 The usual way to install fleet is to ask your agent: "Install fleet from
-https://github.com/lion-zhang/fleet". This page covers what that does, the other ways to
-install, upgrading, and removing fleet again.
+https://github.com/lion-zhang/fleet". The agent follows [INSTALL.md](../../INSTALL.md),
+which tells it to ask whether this machine is a center or a member, to run the installer,
+and to ask you for permission if its sandbox blocks the install. This page covers what
+the installer does, the other ways to install, upgrading, and removing fleet again.
 
 ## What the installer does
 

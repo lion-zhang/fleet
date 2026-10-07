@@ -201,6 +201,7 @@ function Install-Fleet {
     } else {
         Write-Host 'next:  fleet setup         start a fleet here and teach your agents (or: fleet join CODE)'
     }
+    if ($setup) { Write-Host "agents load fleet's skill when a session starts: start a new one to use it" }
 }
 
 Install-Fleet

@@ -36,6 +36,8 @@ agent that can run commands:
 Install fleet from https://github.com/lion-zhang/fleet
 ```
 
+<sub>Agents: the steps are in [INSTALL.md](INSTALL.md).</sub>
+
 That is the whole setup. fleet is installed once on this machine, and every
 [supported agent](docs/guides/agents.md) you have here learns it — not only the one you asked.
 From here on you say what you want in plain words, with no commands to remember.

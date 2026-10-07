@@ -265,6 +265,9 @@ main() {
     else
         say "next:  fleet setup         start a fleet here and teach your agents (or: fleet join CODE)"
     fi
+    if [ "$setup" = 1 ]; then
+        say "agents load fleet's skill when a session starts: start a new one to use it"
+    fi
 }
 
 main "$@"
