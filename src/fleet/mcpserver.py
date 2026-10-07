@@ -266,8 +266,8 @@ def build_server():
 
     @server.tool(description="Let one machine reach another over ssh, as the account the "
                              "machine is reached as unless `user` names another. Applied on "
-                             "the spot; a machine that is off stays pending until sync_fleet "
-                             "on the center. "
+                             "the spot; a machine that is off stays pending, and the center "
+                             "applies it once the machine is back. "
                              "Only the center can do this. Ask before calling it: access "
                              "is the user's decision.")
     def grant_access(machine: str, may_be_reached_by: str, user: str | None = None) -> Any:

@@ -1845,6 +1845,18 @@ def cmd_center(name: str = typer.Argument(None, help="hand the role to this mach
         console.print(f"  [dim]machines are told to dial {url}[/dim]")
         console.print("  [dim]only keys this fleet has pinned are answered; a new "
                       "machine gets in by enrolment or with [bold]fleet invite[/bold][/dim]")
+        retry_s = int(load_config().get("access_retry_s") or 0)
+        if retry_s > 0:
+            # Grants and revokes the center could not apply when they were made -- the
+            # machine was off -- are tried again from here, so a revoke does not wait
+            # for somebody to remember `fleet sync`.
+            import threading
+            from .ops.sweep import retry_forever
+
+            threading.Thread(target=retry_forever, args=(retry_s,), daemon=True,
+                             name="fleet-access-retry").start()
+            console.print(f"  [dim]pending grants and revokes are retried every "
+                          f"{retry_s // 60 or 1} min or so[/dim]")
         try:
             serve_center(port=where, advertise=url)
         except KeyboardInterrupt:

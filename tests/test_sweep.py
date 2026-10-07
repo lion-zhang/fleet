@@ -427,3 +427,132 @@ def test_the_inventory_is_signed_once_not_once_per_machine(fleet_at, monkeypatch
     assert len(sent) >= 2, "the fleet has more than one machine to hand it to"
     assert len(seals) == 1, f"signed {len(seals)} times for {len(sent)} machines"
     assert {s for _, s in sent} == {"SEALED"}, "every machine gets the same envelope"
+
+
+# ---- the listener's retry -------------------------------------------------------------
+# A grant or revoke made while its machine was off used to wait for somebody to run
+# `fleet sync` on the center; a revoked key stayed on the machine until then.
+
+def _no_probe(monkeypatch):
+    monkeypatch.setattr(acl, "is_center", lambda *a, **k: True)
+    monkeypatch.setattr(sweep, "run_probe", lambda *a, **k: (_ for _ in ()).throw(OSError()))
+    monkeypatch.setattr(enrol, "run_probe", lambda *a, **k: (_ for _ in ()).throw(OSError()))
+
+
+def _age_attempts(seconds: int) -> None:
+    ledger = rec.load_ledger(acl.LEDGER_PATH)
+    for st in ledger.values():
+        if st.last_attempt_at:
+            st.last_attempt_at -= seconds
+    rec.save_ledger(ledger, acl.LEDGER_PATH)
+
+
+def test_the_listener_applies_what_could_not_be_applied(fleet_at, monkeypatch):
+    runner, _ = fleet_at
+    _no_probe(monkeypatch)
+    monkeypatch.setattr(rec, "apply_edge", lambda *a, **k: (False, "timed out"))
+    runner.invoke(cli.app, ["sync"])                      # the machines are off
+    assert not rec.load_ledger(acl.LEDGER_PATH)[f"{A}>{B}>root"].converged
+
+    _age_attempts(3600)
+    monkeypatch.setattr(rec, "apply_edge", lambda *a, **k: (True, ""))
+    # It decides nothing new: no enrolment, and the inventory is not handed round.
+    monkeypatch.setattr(sweep, "enrol_unpinned", lambda *a, **k: pytest.fail("enrolled"))
+    monkeypatch.setattr(sweep, "broadcast", lambda *a, **k: pytest.fail("broadcast"))
+    done, failed = sweep.retry_pending(interval_s=300)
+    assert (done, failed) == (2, 0)
+    ledger = rec.load_ledger(acl.LEDGER_PATH)
+    assert ledger[f"{A}>{B}>root"].observed == "present"
+    assert ledger[f"{A}>{C}>root"].observed == "present"
+
+
+def test_a_revoke_made_while_the_machine_was_off_lands_by_itself(fleet_at, monkeypatch):
+    runner, _ = fleet_at
+    _no_probe(monkeypatch)
+    monkeypatch.setattr(rec, "apply_edge", lambda *a, **k: (True, ""))
+    acc = acl.load(acl.ACCESS_PATH)
+    acl.grant(acc, C, B, user="root")
+    acl.save(acc, acl.ACCESS_PATH)
+    runner.invoke(cli.app, ["sync"])
+
+    monkeypatch.setattr(rec, "apply_edge", lambda *a, **k: (False, "timed out"))
+    r = runner.invoke(cli.app, ["access", "oracle", "--deny", "lin-xps", "--user", "root"])
+    assert r.exit_code == 0, r.output
+    st = rec.load_ledger(acl.LEDGER_PATH)[f"{C}>{B}>root"]
+    assert st.desired == "absent" and st.observed == "present" and st.last_attempt_at
+
+    _age_attempts(3600)
+    removed = []
+    monkeypatch.setattr(rec, "apply_edge", lambda acc_, edge, ep, **kw:
+                        removed.append((edge, kw["install"])) or (True, ""))
+    sweep.retry_pending(interval_s=300)
+    assert ((C, B, "root"), False) in removed
+    assert f"{C}>{B}>root" not in rec.load_ledger(acl.LEDGER_PATH)   # gone and done
+
+
+def test_a_machine_that_keeps_missing_is_asked_less_often(fleet_at, monkeypatch):
+    runner, _ = fleet_at
+    _no_probe(monkeypatch)
+    calls = []
+    monkeypatch.setattr(rec, "apply_edge",
+                        lambda *a, **k: calls.append(1) or (False, "timed out"))
+    runner.invoke(cli.app, ["sync"])
+    calls.clear()
+    assert sweep.retry_pending(interval_s=300) == (0, 0)  # just tried: not due yet
+    assert not calls
+    _age_attempts(301)
+    sweep.retry_pending(interval_s=300)
+    assert calls, "due after one interval"
+    calls.clear()
+    _age_attempts(301)
+    sweep.retry_pending(interval_s=300)
+    assert not calls, "the second miss doubles the wait"
+
+
+def test_retry_due_doubles_up_to_the_cap():
+    st = rec.EdgeState(attempts=0, last_attempt_at=0)
+    assert sweep.retry_due(st, interval_s=300, cap_s=1800, now=1000)
+    st = rec.EdgeState(attempts=1, last_attempt_at=1000)
+    assert not sweep.retry_due(st, interval_s=300, cap_s=1800, now=1299)
+    assert sweep.retry_due(st, interval_s=300, cap_s=1800, now=1300)
+    st = rec.EdgeState(attempts=3, last_attempt_at=1000)
+    assert not sweep.retry_due(st, interval_s=300, cap_s=1800, now=2199)
+    assert sweep.retry_due(st, interval_s=300, cap_s=1800, now=2200)
+    st = rec.EdgeState(attempts=30, last_attempt_at=1000)
+    assert sweep.retry_due(st, interval_s=300, cap_s=1800, now=2800)
+
+
+def test_only_a_center_retries(fleet_at, monkeypatch):
+    runner, _ = fleet_at
+    monkeypatch.setattr(rec, "apply_edge", lambda *a, **k: pytest.fail("acted"))
+    monkeypatch.setattr(acl, "is_center", lambda *a, **k: False)   # not this machine
+    assert sweep.retry_pending(interval_s=300) == (0, 0)
+
+
+def test_no_retry_while_the_role_is_being_handed_over(fleet_at, monkeypatch):
+    monkeypatch.setattr(acl, "HANDING_PATH", fleet_at[1] / "handing.yaml")
+    acl.HANDING_PATH.write_text("to_name: oracle\n")
+    monkeypatch.setattr(acl, "is_center", lambda *a, **k: True)
+    monkeypatch.setattr(rec, "apply_edge", lambda *a, **k: pytest.fail("acted"))
+    assert sweep.retry_pending(interval_s=300) == (0, 0)
+
+
+def test_the_retry_loop_survives_a_failed_round_and_stops(monkeypatch):
+    import threading
+
+    rounds = []
+
+    def boom(**kw):
+        rounds.append(1)
+        if len(rounds) == 1:
+            raise RuntimeError("first round fails")
+        if len(rounds) >= 3:
+            stop.set()
+        return 0, 0
+
+    stop = threading.Event()
+    monkeypatch.setattr(sweep, "retry_pending", boom)
+    t = threading.Thread(target=sweep.retry_forever, args=(0.01,), kwargs={"stop": stop})
+    t.start()
+    t.join(5)
+    assert not t.is_alive() and len(rounds) >= 3

@@ -83,7 +83,8 @@ where to run them: report that to the user, nothing is queued.
 
 - `{cmd} access NAME --allow MACHINE` -- grant, and it is applied on the spot, as the
   account NAME is reached as. `--user` names another, since a box can answer as both
-  root@ and ubuntu@. A machine that is off stays pending until `{cmd} sync` on the center
+  root@ and ubuntu@. A machine that is off stays pending; the center applies it once the
+  machine is back (`{cmd} sync` on the center tries at once).
 - `{cmd} access NAME --deny MACHINE` -- revoke, for every account unless `--user` names one
 - `{cmd} sync` -- on the center, the sweep: enrol anything not yet enrolled, install and
   remove keys, and collect telemetry. On a member, fetch a fresh copy from the center
