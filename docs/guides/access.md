@@ -45,8 +45,9 @@ fleet access nas        # just this machine
 A change the center could not apply yet — the target is switched off — is shown as
 **pending** (a grant) or **revoking** (a revoke), with how long it has waited, and never
 reported as done. A revoke still shown as revoking means the key is *still there*. The
-center does not retry by itself: run `fleet sync` on the center once the machine is
-back, and it applies every pending change.
+listening center tries again by itself, every five minutes or so (less often while the
+machine stays off), so a revoke lands soon after the machine is back. `fleet sync` on the
+center tries at once.
 
 On a member, `fleet access` names the center; changes have to be made there.
 

@@ -45,6 +45,9 @@ Open a new terminal afterwards so `fleet` is on your PATH.
 - `fleet top` runs in Windows Terminal and the classic console; `q` quits.
 - The center's background service is a scheduled task that runs without a console
   window.
+- `fleet update` updates this machine in the background, once the command has exited:
+  Windows cannot replace a program while it runs. It takes a minute; `fleet --version`
+  shows the result, and `update.log` in fleet's state folder says how it went.
 
 **One limit: a Windows machine cannot type a password for you**, because Windows has no
 pseudo-terminal for ssh to prompt on. So a Windows center adds only machines that already

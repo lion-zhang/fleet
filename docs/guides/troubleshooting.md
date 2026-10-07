@@ -21,6 +21,7 @@ not broken.
 | `… accepts no key of ours and there is no terminal to type a password` | The machine needs a password, and only you can type it: run `fleet add "ssh …"` yourself in a terminal. Or put the fleet's key there first (`fleet center --pubkey`, run on the center), or use an invite. |
 | `… this machine cannot type a password (no pty on Windows)` | A Windows center cannot type passwords. Put the output of `fleet center --pubkey` (run on the center) into the host's `authorized_keys`, or use an invite. |
 | `it keeps its name; to rename it: fleet edit NAME --name …` | That machine was already known; the new address was added to it under its old name. |
+| `… shares a machine-id with … most likely cloned from the same image` | Two machines made from one image. They are kept apart; nothing to do. |
 | `this invite has already been used` | Each invite admits one machine. Run `fleet invite` again. |
 | `this invite has expired` | Invites last 15 minutes by default. Issue a new one, with `--ttl 2h` if needed. |
 | `no answer from …/join` | The center is not listening. Check `fleet center` on it, and that port 7373 is reachable. |
@@ -34,7 +35,7 @@ not broken.
 | `auth_failed`, or `rejected our key` | The machine is up and refused the key. Only the center can put one back: run `fleet add "ssh …"` for it again on the center (you may have to type its password once). |
 | `timeout` with an old "last seen" | A machine that keeps not answering is asked less often. Ask it directly: `fleet ls NAME -r`. |
 | A member shows a machine as up that it cannot reach itself | The center can reach it, and the member shows the center's reading. `fleet ls NAME -r` tries again from here. |
-| A grant stays `pending`, or a revoke shows `revoking` | The center could not reach that machine when the change was made. It tries again only when `fleet sync` runs on the center; run it once the machine is back. Until then a revoked key is still there. |
+| A grant stays `pending`, or a revoke shows `revoking` | The center could not reach that machine when the change was made. The listening center tries again by itself every few minutes (less often while the machine stays off); `fleet sync` on the center tries at once. Until it lands, a revoked key is still there. |
 | `the center has not swept this machine for Nd` | Normal for a center that is often off. Everything already granted keeps working; only changes wait. |
 | `Only the center can … Run it on NAME` | You are on a member. Run it on the machine named. |
 | `The role is being handed to NAME` | Mid-handover: `fleet center --accept` on NAME, or `fleet center --cancel` here. |

@@ -33,8 +33,9 @@ What waits for the center:
   contact with the center, while still measuring the machines it reaches itself.
 
 When it comes back, members catch up by themselves. A change the center could not apply
-because a machine was off stays pending until `fleet sync` runs on the center; run it
-once that machine is back. A member whose center has been quiet for a week says so in
+because a machine was off stays pending; the listening center tries it again by itself,
+every five minutes or so (less often while that machine stays off), and `fleet sync` on
+the center tries at once. A member whose center has been quiet for a week says so in
 `fleet ls`; that is a note, not an error.
 
 ## What runs where

@@ -24,7 +24,10 @@ answers with its own copy.
 **Members pull.** A member asks the center for fresh information when it needs it: on
 `fleet ls` or `fleet show`, if it last heard from the center more than `sync_ttl_s` ago
 (five minutes). It posts its signed inventory and readings to the center's listener
-(`POST /sync` on port 7373) and merges the signed answer. This is lazy on purpose: a
+(`POST /sync` on port 7373) and merges the signed answer. The center believes a member's
+readings about the member itself, and about machines the center has never measured —
+the ones it cannot reach — never about a machine it measures itself, where a member's
+word could only steer work. This is lazy on purpose: a
 machine nobody is using needs no fresh data, and the moment someone uses it, it gets
 some. Only one process per machine asks at a time; the others carry on with what they
 have rather than wait. A center that does not answer is asked less often — a minute,
@@ -55,6 +58,21 @@ machine it may change only the tags, cost, disk paths and notes; its name, addre
 kind and role stay as the center has them, and a machine the center does not know yet
 comes in with no role. A member's timestamps are capped at the center's clock, so a
 member whose clock runs ahead cannot win every merge for days.
+
+**Clocks.** Every signed answer from the center carries the time it was sent. A member
+keeps how far its own clock is from the center's (`clock.yaml`), stamps its changes by
+the center's clock, and, on each answer, caps its records at the time the center sent
+it — so a member whose clock runs ahead cannot go on preferring its own records over the
+center's later changes. Reading times travel in the center's clock and are converted on
+arrival. On the center the offset is always zero.
+
+**Clones.** Machines cloned from one image share a machine-id. When `fleet add` finds a
+known id at a new address, it measures the known machine again at its own address: the
+same id but another hostname, or booted at another moment, is two machines; one host at
+one boot is one machine reached two ways; an old address that now answers as another
+machine means the machine moved. The clone gets the id `<id>:<suffix>`, written on it
+(`device-id` in fleet's configuration folder), so its probes and its own fleet use it
+too. A clone that joins with an invite adopts the id the center gives it.
 
 **Deletion is a tombstone.** `fleet rm` keeps the record with `deleted_at` set, and the
 newer-wins rule carries it like any other change; a record that merely vanished would be
