@@ -88,24 +88,43 @@ def load(path: Path | None = None) -> list[Device]:
     try:
         raw = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
     except yaml.YAMLError as exc:
-        # Report the line and keep going -- a stray tab must not blank your fleet.
+        # Report the line rather than read it as empty -- a stray tab must not blank
+        # your fleet. `fleet` turns this into one line, not a traceback.
         raise InventoryError(f"{path} is not valid YAML: {exc}") from exc
     return _devices_from(raw)
 
 
 def _devices_from(raw: dict) -> list[Device]:
+    """The records in a parsed inventory. A malformed one stops the load, by name.
+
+    Not skipped: the next write would save the list without it, and a typo in one entry
+    would quietly delete that machine from the fleet.
+    """
+    if not isinstance(raw, dict):
+        raise InventoryError("not an inventory document")
     devices = []
-    for d in raw.get("devices") or []:
-        d = dict(d)
-        d["kind"] = Kind(d.get("kind", "permanent"))
-        # `tags: gpu` -- no brackets -- is the likeliest typo in a file whose docstring
-        # promises it stays fixable in vim, and without this it loads as the string
-        # "gpu", which every consumer then iterates into ["g", "p", "u"].
-        if isinstance(d.get("tags"), str):
-            d["tags"] = [t for t in d["tags"].replace(",", " ").split() if t]
-        known = {f for f in Device.__slots__}
-        devices.append(Device(**{k: v for k, v in d.items() if k in known}))
+    for i, d in enumerate(raw.get("devices") or []):
+        try:
+            devices.append(_device_from(d))
+        except (TypeError, ValueError) as exc:
+            label = d.get("name") if isinstance(d, dict) else None
+            raise InventoryError(
+                f"device {label or f'#{i + 1}'} in the inventory is malformed: {exc}") from exc
     return devices
+
+
+def _device_from(d) -> Device:
+    if not isinstance(d, dict):
+        raise TypeError("expected a mapping of fields")
+    d = dict(d)
+    d["kind"] = Kind(d.get("kind", "permanent"))
+    # `tags: gpu` -- no brackets -- is the likeliest typo in a file whose docstring
+    # promises it stays fixable in vim, and without this it loads as the string
+    # "gpu", which every consumer then iterates into ["g", "p", "u"].
+    if isinstance(d.get("tags"), str):
+        d["tags"] = [t for t in d["tags"].replace(",", " ").split() if t]
+    known = {f for f in Device.__slots__}
+    return Device(**{k: v for k, v in d.items() if k in known})
 
 
 def loads(text: str) -> list[Device]:

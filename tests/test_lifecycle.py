@@ -259,3 +259,24 @@ def test_rm_takes_the_centers_key_off_last(a_fleet, monkeypatch):
     removed, unreached = sweep.remove_now(acl.load(acl.ACCESS_PATH), dev)
     assert unreached == [], unreached
     assert removed == 3, "the worker's block, and the center's as lin and as root"
+
+
+def test_a_grant_reaches_the_machine_that_was_pinned_not_one_now_using_its_old_name(a_fleet, monkeypatch):
+    """Found in review: lin-xps was renamed, and a new machine was added under the old
+    name. The access list still said lin-xps, apply_now looked the name up, and the grant
+    landed on the new machine while the ledger recorded it as present."""
+    from fleet.ops import sweep
+
+    runner, me = a_fleet
+    devices = inv.load(inv.INVENTORY_PATH)
+    for d in devices:
+        if d.id == "id:xps":
+            d.name = "xps-renamed"
+    devices.append(Device(id="id:imposter", name="lin-xps", kind=Kind.PERMANENT,
+                          endpoints=[{"target": "192.0.2.99", "user": "lin", "port": 22}]))
+    inv.save(devices, inv.INVENTORY_PATH)
+    reached = []
+    monkeypatch.setattr(rec, "converge_edge",
+                        lambda acc, edge, ep, **kw: reached.append(ep.target) or (True, "", True))
+    sweep.apply_now(acl.load(acl.ACCESS_PATH), me, "SHA256:xps", "lin", install=True)
+    assert reached == ["5.6.7.8"], reached

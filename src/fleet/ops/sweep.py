@@ -163,11 +163,22 @@ def apply_now(acc, src: str, dst: str, user: str, *, install: bool) -> None:
     a retry count, which is the honest report and what `fleet access` already shows.
     """
 
-    dev = inv.find_exact(inv.load(), acc.name_of(dst))
+    # By the device the key was pinned for, not by name: the access list keeps the name a
+    # machine had when it was pinned, and a renamed machine's old name may by now belong
+    # to another one -- which then received the grant, while the ledger said it landed.
+    devices = inv.live(inv.load())
+    did = (acc.keys.get(dst) or {}).get("device_id", "")
+    dev = next((d for d in devices if did and d.id == did), None)
+    if dev is None and not did:
+        dev = inv.find_exact(devices, acc.name_of(dst))   # a pin from before device ids
     if dev is None:
+        console.print(f"  [yellow]·[/yellow] {acc.name_of(dst)} is not in the inventory "
+                      "[dim]-- it stays pending[/dim]")
         return
     ep = endpoint_for(dev, user)
     if ep is None:
+        console.print(f"  [yellow]·[/yellow] {dev.name} has no address to reach it on "
+                      "[dim]-- it stays pending[/dim]")
         return
     ledger = rec.load_ledger()
     key = ">".join((src, dst, user))
@@ -203,7 +214,10 @@ def enrol_unpinned(acc, devices) -> bool:
     `fleet center --pubkey` prints, rather than to find someone to type a password.
     """
     pinned = {v.get("device_id") for v in acc.keys.values()}
-    named = {v.get("name") for v in acc.keys.values()}
+    # A name only stands in for an id on pins made before ids were recorded. Skipping any
+    # machine whose *name* was pinned meant a new machine that took a renamed one's old
+    # name was never enrolled at all.
+    named = {v.get("name") for v in acc.keys.values() if not v.get("device_id")}
     done = False
     for dev in inv.live(devices):
         if dev.id in pinned or dev.name in named:

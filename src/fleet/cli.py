@@ -2216,7 +2216,30 @@ def cmd_paths():
 
 
 def main() -> None:
-    app()
+    """Run the CLI. Failures a person can act on end in one line, not a traceback.
+
+    A malformed inventory or access list, a write that could not get its turn, or a
+    machine that never answered used to surface as a Python traceback -- and under
+    `--json`, an agent got an empty stdout and no reason. Those now print what went
+    wrong (as JSON too, with `--json`) and exit 2. Anything else is a bug, and keeps its
+    traceback, which is what a bug report needs.
+    """
+    import subprocess
+
+    from .state.writes import QueueTimeout
+
+    expected = (inv.InventoryError, acl.AccessError, QueueTimeout,
+                subprocess.TimeoutExpired)
+    try:
+        app()
+    except expected as exc:
+        message = str(exc) or type(exc).__name__
+        if isinstance(exc, subprocess.TimeoutExpired):
+            message = f"a machine did not answer within {exc.timeout:.0f}s"
+        if "--json" in sys.argv:
+            sys.stdout.write(jsonlib.dumps({"ok": False, "error": message}) + "\n")
+        err.print(f"[red]fleet:[/red] {message}")
+        raise SystemExit(2) from None
 
 
 if __name__ == "__main__":
