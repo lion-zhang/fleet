@@ -26,7 +26,11 @@ across the room and a rented A100 bills you by the hour. It cannot use what it c
 
 ## Get started: ask your agent
 
-Paste this into Claude Code, Codex, Gemini CLI, or any agent that can run commands:
+Install it on the machine that will be your fleet's **center** — the one that keeps the
+list of your machines and decides which may reach which — so pick one that can reach
+all your devices and is online most of the time, such as a desktop or home server (you
+can move the role later). There, paste this into Claude Code, Codex, Gemini CLI, or any
+agent that can run commands:
 
 ```text
 Install fleet from https://github.com/lion-zhang/fleet
@@ -34,8 +38,7 @@ Install fleet from https://github.com/lion-zhang/fleet
 
 That is the whole setup. fleet is installed once on this machine, and every
 [supported agent](docs/agents.md) you have here learns it — not only the one you asked.
-This machine becomes your fleet's **center**. From here on you say what you want in plain
-words, with no commands to remember.
+From here on you say what you want in plain words, with no commands to remember.
 
 ### Then add your machines
 
