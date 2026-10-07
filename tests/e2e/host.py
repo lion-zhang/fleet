@@ -174,7 +174,9 @@ def main() -> int:
     expect("center (status)", ["center"], r"center")
     ok, pub = expect("center --pubkey", ["center", "--pubkey"], r"^ssh-ed25519 ")
     expect("center --export", ["center", "--export"], r".")
-    expect("service status", ["service", "status"], r".", required=False)
+    _, svc = expect("service status", ["service", "status"], r".", required=False)
+    # A container has no service manager at all; everywhere else the service must serve.
+    no_manager = "unavailable" in svc
 
     # Is the center listening (the service the installer started)? If not, listen now.
     listener = None
@@ -202,7 +204,7 @@ def main() -> int:
                 time.sleep(2)
                 why += "\nstack: " + (log.read_text(errors="replace")[-3000:] if log.exists()
                                        else "no log")
-    check("the service is listening on 7373", up, why)
+    check("the service is listening on 7373", up, why, required=not no_manager)
     if not up:
         listener = subprocess.Popen([FLEET, "center", "--listen"], stdout=subprocess.DEVNULL,
                                     stderr=subprocess.DEVNULL, stdin=subprocess.DEVNULL)
@@ -277,6 +279,8 @@ def main() -> int:
     expect("ssh still works after the edits", ["ssh", name, "--", "echo", "still-in"],
            r"still-in")
 
+    interactive_checks(name)
+
     # agents
     expect("setup --dry-run --target all", ["setup", "--dry-run", "--target", "all"], r".")
     home = Path.home()
@@ -298,6 +302,72 @@ def main() -> int:
 
     report(a.report)
     return 1 if any(s == "FAIL" for s, _, _ in RESULTS) else 0
+
+
+def interactive_checks(machine: str) -> None:
+    """`fleet top` and `fleet ssh` at a real terminal, typed into as a person types.
+
+    Everything above runs fleet the way an agent does: no terminal. That never reached
+    the code a person uses, and on Windows both were broken there -- top died on "No
+    module named 'termios'", and ssh shared the keyboard with the shell it returned to.
+    """
+    sys.path.insert(0, str(Path(__file__).parent))
+    from term import Term
+
+    env = {**os.environ, "TERM": "xterm-256color"}
+    env.pop("NO_COLOR", None)
+    env.pop("COLUMNS", None)
+    # The remote shell is this OS's: cmd.exe on Windows. 4^2 and $((40+2)) both print
+    # 42, so the typed command echoing back can never pass for its output.
+    sixty = "echo fleet-ok-4^2" if WINDOWS else 'echo fleet-ok-$((40+2))'
+    long_wait = "ping -n 30 127.0.0.1" if WINDOWS else "sleep 30"
+
+    t = Term([FLEET, "top", "-i", "1"], env=env)
+    try:
+        drew = t.expect(re.escape(machine) + "|online", 30)
+        check("top: draws in a terminal", drew, t.tail())
+        t.send("q")
+        code = t.wait(15)
+        check("top: q quits it", code == 0, f"exit {code}: {t.tail()}")
+    finally:
+        t.close()
+
+    t = Term([FLEET, "ssh", machine], env=env)
+    try:
+        time.sleep(4)                                  # login and the first prompt
+        check("ssh: an interactive session stays open", t.alive(), t.tail())
+        at = t.mark()
+        t.send(sixty + "\r", per_key=0.03)
+        check("ssh: what is typed runs there", t.expect(r"fleet-ok-42\s*$", 20, since=at),
+              t.tail())
+        at = t.mark()
+        typed = "echo the-quick-brown-fox-jumps-0123456789"
+        t.send(typed + "\r", per_key=0.02)
+        # The far side's echo of it, alone on its line: a key lost, doubled or reordered
+        # on the way would make it anything else.
+        whole = t.expect(r"^the-quick-brown-fox-jumps-0123456789\s*$", 20, since=at)
+        check("ssh: every key arrives, in order, once", whole,
+              clean_text(t.text[at:])[-800:])
+        t.send(long_wait + "\r")
+        time.sleep(3)
+        t.send("\x03")                                  # Ctrl+C, for the remote command
+        time.sleep(2)
+        at = t.mark()
+        t.send(sixty + "\r", per_key=0.03)
+        check("ssh: Ctrl+C stops the remote command, not the session",
+              t.alive() and t.expect(r"fleet-ok-42\s*$", 20, since=at), t.tail())
+        t.send("exit 7\r")
+        code = t.wait(20)
+        check("ssh: the session's exit code comes back", code == 7, f"exit {code}: {t.tail()}")
+    finally:
+        t.close()
+
+
+def clean_text(text: str) -> str:
+    sys.path.insert(0, str(Path(__file__).parent))
+    from term import clean
+
+    return clean(text)
 
 
 def mcp_checks(machine: str) -> None:

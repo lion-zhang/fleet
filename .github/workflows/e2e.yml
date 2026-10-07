@@ -9,7 +9,7 @@ on:
   pull_request:
     paths: ["src/**", "install.sh", "install.ps1", "tests/e2e/**", ".github/workflows/e2e.yml"]
   push:
-    branches: [main]
+    branches: [main, claude/continue-fleet-development-y01p2j]   # TEMP: while it is built
     paths: ["src/**", "install.sh", "install.ps1", "tests/e2e/**", ".github/workflows/e2e.yml"]
 
 jobs:
@@ -81,4 +81,5 @@ jobs:
         shell: pwsh
         run: |
           $env:FLEET_BIN = Join-Path (uv tool dir --bin) 'fleet.exe'
-          uv run --no-project --with mcp --with . python tests/e2e/host.py --ssh-user $env:USERNAME --report $env:GITHUB_STEP_SUMMARY
+          # pywinpty: a ConPTY pseudo-console, to type into fleet as a person would
+          uv run --no-project --with mcp --with pywinpty --with . python tests/e2e/host.py --ssh-user $env:USERNAME --report $env:GITHUB_STEP_SUMMARY
