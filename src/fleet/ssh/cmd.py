@@ -95,6 +95,9 @@ def parse_ssh_command(cmd: str) -> ParsedSsh:
     if rest:
         out.target = rest[0]
         out.remote_command = " ".join(rest[1:])
+    for value in (out.target, out.jump or ""):
+        if value.startswith("-"):
+            raise ValueError(f"not an address: {value!r}")
     if "@" in out.target:
         user, _, host = out.target.rpartition("@")
         out.user = out.user or user

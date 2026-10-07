@@ -130,8 +130,8 @@ def exchange(raw: str) -> tuple[int, str]:
     # from nobody else: otherwise any member, by syncing, could erase any machine from
     # the fleet while its keys stayed installed with no record left of them.
     own = (acc.keys.get(acl.fingerprint(signer)) or {}).get("device_id", "")
-    incoming = [d for d in incoming if not d.deleted_at or d.id == own]
-    merged, _ = inv.update(lambda current: inv.merge(current, incoming))
+    merged, _ = inv.update(
+        lambda current: inv.merge(current, inv.from_member(current, incoming, own)))
     if note["telemetry"]:
         record_relayed(note["telemetry"])
     if note.get("claims", {}).get("center_key") == "present":

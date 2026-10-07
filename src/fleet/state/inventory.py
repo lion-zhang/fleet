@@ -50,9 +50,27 @@ def _via(raw: str, target: str = "") -> str:
     return route_of(raw, target)
 
 
+def _usable(e: dict) -> bool:
+    """Whether an endpoint's fields can be handed to ssh as they are.
+
+    The inventory is shared between machines, so its addresses are not only ever typed
+    by you. A host, user or jump that began with `-` would be read by ssh as an option
+    (older OpenSSH, as some Windows builds ship, accepts more of them), and whitespace or
+    a control character has no business in any of the three. Such an endpoint is left
+    out rather than dialled.
+    """
+    for field in ("target", "user", "jump"):
+        v = str(e.get(field, "") or "")
+        if v.startswith("-") or any(c.isspace() or ord(c) < 32 or ord(c) == 127 for c in v):
+            return False
+    return bool(e.get("target"))
+
+
 def endpoints_of(dev: Device) -> list[Endpoint]:
     out: list[Endpoint] = []
     for i, e in enumerate(dev.endpoints):
+        if not _usable(e):
+            continue
         out.append(Endpoint(
             target=e.get("target", ""), user=e.get("user", ""),
             port=int(e.get("port", 22) or 22), identity=_identity(e.get("identity", "")),
@@ -283,6 +301,49 @@ def _one_center(devices: list[Device]) -> None:
     for d in centers:
         if d is not keep:
             d.role = "none"
+
+
+# What a member may change about a machine other than itself. Labels a person curates,
+# and nothing that decides where fleet connects or who is the center.
+MEMBER_MAY_EDIT = ("tags", "cost", "disk_paths", "notes")
+
+
+def from_member(current: list[Device], incoming: list[Device], sender_id: str) -> list[Device]:
+    """The part of a member's inventory the center takes, before it is merged.
+
+    The center merges what members send -- through its listener and from every sweep --
+    and then signs the result and hands it to everyone as authoritative. Merged as it
+    came, any member could rewrite any machine's record: a future `updated_at` won the
+    whole record, an extra endpoint with a low preference became the route every machine
+    dials for `fleet ssh`, and the sweep then "revoked" keys on whatever host answered
+    there while the ledger reported the revoke as done. So a member is the authority on
+    itself and on machines nobody has recorded yet (adding from a member is allowed),
+    and for the rest may change only the labels in MEMBER_MAY_EDIT. Never a role: no
+    machine makes itself, or anyone, the center. A deletion counts only for itself.
+    """
+    import dataclasses
+
+    now = int(time.time())
+    have = {d.id: d for d in current}
+    out: list[Device] = []
+    for d in incoming:
+        mine = have.get(d.id)
+        if d.deleted_at and d.id != sender_id:
+            continue
+        # A future clock wins nothing: newer than ours counts as newer by a second, not
+        # by however far ahead the member's clock happens to be.
+        cap = max(now, mine.updated_at + 1) if mine is not None else now
+        d.updated_at = min(int(d.updated_at or 0), cap)
+        if d.id == sender_id or mine is None:
+            d.role = mine.role if mine is not None else "none"
+            out.append(d)
+            continue
+        if d.updated_at <= mine.updated_at:
+            continue
+        out.append(dataclasses.replace(
+            mine, updated_at=d.updated_at,
+            **{f: getattr(d, f) for f in MEMBER_MAY_EDIT}))
+    return out
 
 
 def merge(local: list[Device], remote: list[Device], *,

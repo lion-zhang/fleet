@@ -23,6 +23,7 @@ later. A fingerprint is stable by construction, because the key is the identity.
 from __future__ import annotations
 
 import base64
+import re
 import hashlib
 import os
 import subprocess
@@ -66,21 +67,64 @@ class AccessError(RuntimeError):
     """Anything that would otherwise silently become "no access anywhere"."""
 
 
+KEY_TYPES = frozenset({
+    "ssh-ed25519", "ssh-rsa", "ecdsa-sha2-nistp256", "ecdsa-sha2-nistp384",
+    "ecdsa-sha2-nistp521", "sk-ssh-ed25519@openssh.com", "sk-ecdsa-sha2-nistp256@openssh.com",
+})
+_SAFE_COMMENT = re.compile(r"[A-Za-z0-9._:@+=-]{1,128}")
+_BASE64 = re.compile(r"[A-Za-z0-9+/]+={0,2}")
+
+
+def canonical_pubkey(pubkey: str) -> str:
+    """One public key, as one line: `TYPE BASE64 [COMMENT]`. Anything else is refused.
+
+    A pinned key is later written into other machines' authorized_keys inside a marked
+    block, so a value that was more than one key was a way to plant a second key *outside*
+    the block -- after a forged end marker -- where no revoke and no `fleet rm` would ever
+    find it. Only the first key was fingerprinted and checked, so the rest rode along. One
+    line, a known key type, a base64 blob, and a comment of plain characters or none:
+    what reaches authorized_keys is exactly one key.
+    """
+    text = (pubkey or "").strip()
+    if not text or any(c in text for c in "\r\n\x00"):
+        raise AccessError("not a single public key")
+    parts = text.split()
+    if len(parts) < 2 or parts[0] not in KEY_TYPES or not _BASE64.fullmatch(parts[1]):
+        raise AccessError(f"not a public key: {text[:40]!r}")
+    comment = " ".join(parts[2:])
+    keep = comment if _SAFE_COMMENT.fullmatch(comment or "") else ""
+    return f"{parts[0]} {parts[1]}" + (f" {keep}" if keep else "")
+
+
 def fingerprint(pubkey: str) -> str:
     """OpenSSH's own SHA256 fingerprint, computed rather than shelled out for.
 
     Same string `ssh-keygen -lf` prints, so it can be compared against anything a human
-    reads out of an authorized_keys file.
+    reads out of an authorized_keys file. Refuses anything but a single key
+    (`canonical_pubkey`), so nothing fingerprinted as one key can be more than one.
     """
-    parts = (pubkey or "").split()
-    if len(parts) < 2:
-        raise AccessError(f"not a public key: {pubkey[:40]!r}")
+    parts = canonical_pubkey(pubkey).split()
     try:
         blob = base64.b64decode(parts[1], validate=True)
     except Exception as exc:
         raise AccessError(f"unreadable public key: {exc}") from exc
     digest = base64.b64encode(hashlib.sha256(blob).digest()).decode().rstrip("=")
     return f"SHA256:{digest}"
+
+
+_SAFE_USER = re.compile(r"[^\x00-\x1f\x7f]{1,64}")
+
+
+def check_user(user: str) -> str:
+    """A login name, as it will be written into an authorized_keys marker line.
+
+    A newline in it would end the marker and start a line of its own -- another key --
+    so control characters are refused, and so is a leading `-`, which ssh would read as
+    an option. Spaces are allowed: Windows account names have them.
+    """
+    if not _SAFE_USER.fullmatch(user or "") or user.startswith("-"):
+        raise AccessError(f"not a user name: {user[:40]!r}")
+    return user
 
 
 @dataclass(slots=True)
@@ -206,6 +250,7 @@ def update(mutate, path: Path | None = None):
 
 def grant(acc: Access, src: str, dst: str, *, user: str = "root", note: str = "") -> bool:
     """Add an edge. False if it was already there."""
+    check_user(user)
     if (src, dst, user) in {e.key for e in acc.allow}:
         return False
     acc.allow.append(Edge(src=src, dst=dst, user=user, note=note))
@@ -354,7 +399,11 @@ def verify(payload: str, signature: str, signer_pubkey: str) -> bool:
         return False
     with tempfile.TemporaryDirectory() as scratch:
         allowed = Path(scratch) / "allowed_signers"
-        allowed.write_text(f"center {signer_pubkey.strip()}\n", encoding="utf-8")
+        try:
+            key = canonical_pubkey(signer_pubkey)
+        except AccessError:
+            return False
+        allowed.write_text(f"center {key}\n", encoding="utf-8")
         sig = Path(scratch) / "payload.sig"
         sig.write_text(signature, encoding="utf-8")
         try:
@@ -662,8 +711,9 @@ def enroll(acc: Access, name: str, pubkey: str, device_id: str = "",
         # back to root for everything, so the center kept trying to write root's file on
         # hosts we only ever reach as an ordinary user -- and every such grant sat
         # pending on a permission denial that named the wrong account.
-        acc.keys[fp] = {"name": name, "pubkey": pubkey.strip(), "device_id": device_id,
-                        "user": user or "root", "pinned_at": int(time.time())}
+        acc.keys[fp] = {"name": name, "pubkey": canonical_pubkey(pubkey),
+                        "device_id": device_id, "user": check_user(user or "root"),
+                        "pinned_at": int(time.time())}
     elif user and not known.get("user"):
         known["user"] = user               # backfill a pin made before this was recorded
     return fp

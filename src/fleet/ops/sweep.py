@@ -364,7 +364,7 @@ def broadcast(devices) -> None:
 
     mine = inv.dumps(inv.load())
     me = identity.local_device_id()
-    routes = []
+    routes, senders = [], []
     for dev in inv.live(devices):
         # Never the machine this is running on. "No endpoints" used to stand in for "the
         # center", which held only while the center was a laptop nobody could reach: once
@@ -376,6 +376,7 @@ def broadcast(devices) -> None:
         eps = sorted(inv.endpoints_of(dev), key=lambda e: e.preference)
         if eps:
             routes.append(eps[0])
+            senders.append(dev.id)
 
     cfg = load_config()
     # Sealed once, here, before any thread starts. Sealing reads the access list, reads
@@ -388,7 +389,7 @@ def broadcast(devices) -> None:
                                workers=int(cfg.max_workers))
 
     reached = 0
-    for answer, error in answers:
+    for sender, (answer, error) in zip(senders, answers):
         if error is not None:
             # A machine that takes longer than the timeout to answer -- a NAS, a rental
             # that has gone away -- is a machine that did not get the inventory, not a
@@ -405,7 +406,10 @@ def broadcast(devices) -> None:
         # with: the round trips take a while and a `fleet add` may have landed since.
         # Still one at a time, and still here rather than in a worker -- merging is the
         # part that writes.
-        inv.update(lambda current: inv.merge(current, returned, authoritative=False))
+        # Only what that member is the authority on: its reply is not signed, and a
+        # member's word about other machines must not become the fleet's.
+        inv.update(lambda current: inv.merge(
+            current, inv.from_member(current, returned, sender), authoritative=False))
         reached += 1
     if reached:
         console.print(f"[dim]· inventory handed to {reached} machine(s)[/dim]")

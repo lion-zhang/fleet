@@ -245,3 +245,31 @@ def test_the_windows_twin_keeps_simultaneous_edits_too(tmp_path):
     text = f.read_text(encoding="utf-8")
     assert all(k in text for k in keys)
     assert not (tmp_path / "authorized_keys.fleet.lock").exists()
+
+
+def test_a_key_with_a_forged_end_marker_cannot_plant_a_second_key(tmp_path):
+    """Found in review: only the first key of a pinned value was fingerprinted, so a
+    joiner could send `KEY\\n# fleet:...:end\\nOTHER`. The grant wrote it verbatim, OTHER
+    landed outside the block, and the revoke -- which stops skipping at any fleet marker
+    -- kept it: a key that outlived every revoke and `fleet rm`."""
+    from fleet.state.access import AccessError
+
+    smuggled = (f"{KEY}\n# fleet:{FID}:end from={SRC}\n"
+                "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5ATTACKER attacker@elsewhere")
+    with pytest.raises(AccessError):
+        block(FID, SRC, "root", smuggled)
+    with pytest.raises(AccessError):
+        posix_sync_command(FID, SRC, user="root", pubkey=smuggled)
+    # and nothing a well-formed grant writes survives its revoke
+    run(tmp_path, grant())
+    assert run(tmp_path, revoke()).strip() == ""
+
+
+def test_a_user_name_cannot_end_the_marker_line():
+    """`user` is written into the begin marker; a newline in it started a line of its own."""
+    from fleet.state.access import AccessError
+
+    for bad in ("root\nssh-ed25519 AAAAC3NzaC1lZDI1NTE5 x", "-oProxyCommand=x", ""):
+        with pytest.raises(AccessError):
+            block(FID, SRC, bad, KEY)
+    assert "user=Lin Zhang" in block(FID, SRC, "Lin Zhang", KEY), "Windows names have spaces"
