@@ -150,6 +150,34 @@ def test_accepting_skips_the_outgoing_center_and_keeps_the_chain(successor, monk
     assert acl.trusted_center_pubkey() == "", "a center pins no center"
 
 
+def test_an_accept_cut_short_is_finished_by_running_it_again(successor, monkeypatch):
+    """Found in the final audit: the role changed hands first and the chain was saved
+    after, so a kill in between left a center no member would listen to -- and running
+    --accept again said "already the center" and stopped."""
+    from fleet import reconcile as rec
+    from fleet.ops import sweep
+
+    handover.receive(_bundle(successor))
+    inv.save([Device(id="id:hub", name="hub", kind=Kind.PERMANENT, role="center"),
+              Device(id="id:worker", name="worker", kind=Kind.PERMANENT,
+                     endpoints=[{"target": "w", "user": "root", "port": 22}])])
+    monkeypatch.setattr(rec, "_remote", lambda *a, **k: (True, ""))
+    monkeypatch.setattr(sweep, "run", lambda devices: None)
+    real = handover._retire_key
+    monkeypatch.setattr(handover, "_retire_key",
+                        lambda *a: (_ for _ in ()).throw(KeyboardInterrupt()))
+    with pytest.raises(KeyboardInterrupt):
+        handover.accept(acl.load())
+    assert acl.load().center == acl.fingerprint(successor["new"][1])
+    assert len(acl.handover_chain()) == 1, "the chain is saved before the role moves"
+    assert acl.INBOX_PATH.exists()
+
+    monkeypatch.setattr(handover, "_retire_key", real)
+    handover.accept(acl.load())
+    assert not acl.INBOX_PATH.exists() and len(acl.handover_chain()) == 1
+    assert acl.trusted_center_pubkey() == ""
+
+
 def test_accept_with_no_handover_says_where_to_start(successor):
     with pytest.raises(FleetError, match="no handover"):
         handover.accept(None)
@@ -243,6 +271,23 @@ def test_a_handover_that_cannot_be_delivered_retires_nothing(outgoing, monkeypat
         handover.give_away(acl.load(), "worker", force=True)
     assert not acl.HANDING_PATH.exists()
     assert acl.is_center()
+
+
+def test_a_delivery_whose_answer_was_lost_still_fences_this_center(outgoing, monkeypatch):
+    """The far side may have stored it: a lost answer is not a refusal. Left unmarked,
+    this machine went on taking changes the successor never saw."""
+    from fleet.ops import sweep
+
+    acc, _ = outgoing
+    acl.HANDING_PATH.unlink()
+    inv.save([Device(id="id:worker", name="worker", kind=Kind.PERMANENT,
+                     endpoints=[{"target": "w", "user": "root", "port": 22}])])
+    monkeypatch.setattr(sweep, "apply_now", lambda *a, **k: None)
+    monkeypatch.setattr(handover, "sshrun", lambda *a, **k: subprocess.CompletedProcess(
+        a, 255, b"", b"Connection reset by peer"))
+    with pytest.raises(FleetError, match="not delivered"):
+        handover.give_away(acl.load(), "worker", force=True)
+    assert acl.HANDING_PATH.exists(), "fenced until --accept there or --cancel here"
 
 
 # ---------------------------------------------- found on the second from-scratch run

@@ -589,6 +589,11 @@ def _update_cache(change, cache_path: Path | None = None) -> None:
         data = _read_yaml(path)
         before = dict(data)
         change(data)
+        if not before and not data.get("center_pubkey"):
+            # A record of a center with no center in it. Written by a refresh that was
+            # under way while this machine left the fleet, it made a machine in no
+            # fleet look like a member.
+            return
         if data != before:
             atomic_write(path, yaml.safe_dump(data, sort_keys=False))
 

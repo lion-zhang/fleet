@@ -4,6 +4,7 @@ universal interface: cron jobs, Makefiles, and non-MCP agents can all use it."""
 from __future__ import annotations
 
 import contextlib
+import copy
 import getpass
 import json as jsonlib
 import os
@@ -1504,17 +1505,20 @@ def cmd_rm(name: str = typer.Argument(..., help="the exact name; a prefix is nev
     try:
         acc = acl.load()
         if acl.is_center(acc) and not itself:
-            # The network work first, on a copy; then the change, to the list as it is
-            # by then. Saving the copy instead erased any grant made meanwhile.
-            _, unreached = _remove_now(acc, dev)
-
+            # Out of the list first, then off the machines, working from the list as it
+            # was. The other way round, a retry running meanwhile -- the listener's --
+            # still saw the pins, still wanted the center's key on the machine being
+            # removed, and put it back after it had been taken off.
             def forget_keys(current):
+                before = copy.deepcopy(current)
                 for fp in [fp for fp, m in current.keys.items()
                            if m.get("device_id") == dev.id]:
                     current.allow = [e for e in current.allow if fp not in (e.src, e.dst)]
                     current.keys.pop(fp, None)
+                return before
 
-            acl.update(forget_keys)
+            _, before = acl.update(forget_keys)
+            _, unreached = _remove_now(before, dev)
     except acl.AccessError:
         pass
 

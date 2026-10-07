@@ -190,15 +190,22 @@ def apply_now(acc, src: str, dst: str, user: str, *, install: bool) -> None:
         conn.close()
     ok, out, install = rec.converge_edge(acc, (src, dst, user), ep, install=install,
                                          platform=remote_platform(snap))
-    st.desired = "present" if install else "absent"
+    wanted = "present" if install else "absent"
+    if wanted != st.desired:
+        # A new request: its own age, and its own backoff from the start.
+        st.pending_since, st.attempts = int(time.time()), 0
+    st.desired = wanted
     st.dst_device = st.dst_device or dev.id
+    # When we last looked, success or not: what `save_ledger` decides by when two
+    # writers changed the same edge.
+    st.last_attempt_at = int(time.time())
     if ok:
         st.observed = st.desired
         st.last_error = ""
+        st.attempts = 0
         console.print(f"  [green]✓[/green] applied on {dev.name}")
     else:
         st.attempts += 1
-        st.last_attempt_at = int(time.time())
         st.pending_since = st.pending_since or st.last_attempt_at
         st.last_error = out
         console.print(f"  [yellow]·[/yellow] {dev.name} not reached [dim]({out[:60]})[/dim]")
@@ -359,6 +366,7 @@ def converge_pending(acc, ledger, pending, devices) -> tuple[int, int]:
                     # What was applied last, which is what the list wanted by then.
                     st.desired = st.observed = "present" if install else "absent"
                     st.last_error = ""
+                    st.attempts = 0            # the next failure backs off from scratch
                     done += 1
                     verb = "installed on" if install else "removed from"
                     console.print(f"[green]✓[/green] {acc.name_of(src)}'s key {verb} {dev.name}")

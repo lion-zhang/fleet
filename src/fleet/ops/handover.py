@@ -119,21 +119,41 @@ def give_away(acc, name: str, *, force: bool) -> None:
     bundle = yaml.safe_dump({"kind": BUNDLE_KIND, "body": body,
                              "signature": acl.sign(body)}, sort_keys=False)
 
+    # Marked as being handed over *before* it is sent. Marked after, a delivery that
+    # worked but whose answer was lost -- a dropped connection, a timeout -- left this
+    # machine unfenced: it went on taking changes the successor's copy did not have,
+    # and never stepped down. Unmarked again only when the far side clearly refused.
+    with turn(acl.HANDING_PATH):
+        atomic_write(acl.HANDING_PATH, yaml.safe_dump({
+            "to": fp, "to_name": acc.name_of(fp), "to_pubkey": meta["pubkey"],
+            "url": f"http://{ep.target}:{DEFAULT_PORT}/sync", "at": int(time.time()),
+        }, sort_keys=False))
+    import subprocess
+
     remote = 'sh -lc \'PATH="$HOME/.local/bin:$PATH" fleet center --receive\''
-    proc = sshrun(build_argv(ep, remote=remote), input=bundle.encode(), timeout=60)
-    if proc.returncode != 0:
-        out = (proc.stdout + proc.stderr).decode(errors="replace").strip()
+    try:
+        proc = sshrun(build_argv(ep, remote=remote), input=bundle.encode(), timeout=60)
+        code, out = proc.returncode, (proc.stdout + proc.stderr).decode(errors="replace").strip()
+    except subprocess.TimeoutExpired:
+        code, out = None, "timed out"
+    if code != 0:
+        refused = code in (1, 2, 126, 127)    # fleet said no, or is not there: not delivered
+        if refused:
+            with turn(acl.HANDING_PATH):
+                acl.HANDING_PATH.unlink(missing_ok=True)
         err.print(f"[red]Could not deliver the handover to {acc.name_of(fp)}:[/red] "
                   f"{out[-200:]}")
-        err.print("  [dim]it needs fleet installed there ([bold]fleet install "
-                  f"{acc.name_of(fp)}[/bold]); run this again once it does. Nothing has "
-                  "been retired.[/dim]")
+        if refused:
+            err.print("  [dim]it needs fleet installed there ([bold]fleet install "
+                      f"{acc.name_of(fp)}[/bold]); run this again once it does. Nothing "
+                      "has been retired.[/dim]")
+        else:
+            err.print(f"  [dim]it may have arrived anyway, so this machine now takes no "
+                      f"changes. Either [bold]fleet center --accept[/bold] on "
+                      f"{acc.name_of(fp)}, or [bold]fleet center --cancel[/bold] here to "
+                      "keep the role.[/dim]")
         raise FleetError("handover not delivered", code=1)
 
-    atomic_write(acl.HANDING_PATH, yaml.safe_dump({
-        "to": fp, "to_name": acc.name_of(fp), "to_pubkey": meta["pubkey"],
-        "url": f"http://{ep.target}:{DEFAULT_PORT}/sync", "at": int(time.time()),
-    }, sort_keys=False))
     console.print(f"[green]✓[/green] handover delivered to {acc.name_of(fp)}")
     console.print(f"\n  next, on {acc.name_of(fp)}: [bold]fleet center --accept[/bold]")
     console.print(f"\n[dim]It checks it can write every machine before taking the role. "
@@ -202,6 +222,15 @@ def accept(acc) -> None:
     _, pub = ensure_keypair()
     mine = acl.fingerprint(pub)
     if mine == acc.center:
+        if acl.INBOX_PATH.exists():
+            # The role was taken and what follows it was cut short -- a kill, a queue
+            # timeout. Without finishing, members still pinning the old key refused
+            # every message from here, and the old center never stepped down.
+            inbox = yaml.safe_load(acl.INBOX_PATH.read_text(encoding="utf-8")) or {}
+            old_fp = str((yaml.safe_load(inbox.get("record") or "") or {}).get("from") or "")
+            console.print("[dim]finishing a handover that stopped partway[/dim]")
+            _finish_taking_role(acc, old_fp, mine, inbox)
+            return
         console.print("[dim]already the center[/dim]")
         return
     if mine not in acc.keys:
@@ -264,24 +293,41 @@ def accept(acc) -> None:
         if old_dev is None or not inv.endpoints_of(old_dev):
             current.keys.setdefault(old_fp, {})["no_route"] = True
 
-    # The checks above wrote to every machine over ssh; the role changes in the list as
-    # it is now, so nothing granted meanwhile is lost.
-    acc, _ = acl.update(take_role)
-    _retire_key(acc, old_fp, mine)
+    # The chain first: it is what lets every member follow from the old key to ours,
+    # and a role taken without it reached nobody.
     if inbox.get("record"):
         acl.save_handover_chain(list(inbox.get("chain") or [])
                                 + [{"record": inbox["record"],
                                     "signature": inbox.get("signature", "")}])
-        acl.INBOX_PATH.unlink(missing_ok=True)
+    # The checks above wrote to every machine over ssh; the role changes in the list as
+    # it is now, so nothing granted meanwhile is lost.
+    acc, _ = acl.update(take_role)
+    _finish_taking_role(acc, old_fp, mine, inbox)
+
+
+def _finish_taking_role(acc, old_fp: str, mine: str, inbox: dict) -> None:
+    """Everything after the role changed hands. Safe to run again: `--accept` does, when
+    it finds the role taken and the handover still in the inbox -- removed last."""
+    from .sweep import run as sweep
+
+    outgoing = acc.name_of(old_fp) if old_fp else "the old center"
+    if old_fp:
+        _retire_key(acc, old_fp, mine)
+    if inbox.get("record") and not acl.handover_chain():
+        acl.save_handover_chain(list(inbox.get("chain") or [])
+                                + [{"record": inbox["record"],
+                                    "signature": inbox.get("signature", "")}])
     # Nothing of the old center's trust is kept: this machine is the center now, and a
     # pinned center key here would make it try to refresh from a machine it replaced.
-    acl.CACHE_PATH.unlink(missing_ok=True)
+    with turn(acl.CACHE_PATH):
+        acl.CACHE_PATH.unlink(missing_ok=True)
     for d in inv.live(inv.load()):
         if d.id == (acc.keys.get(mine) or {}).get("device_id"):
             def promote(current, my_id=d.id):
                 return current, inv.promote_center(current, inv.find_exact(current, my_id))
             inv.update(promote)
             break
+    acl.INBOX_PATH.unlink(missing_ok=True)
     console.print(f"\n[green]✓[/green] this machine is now the center of {acc.fleet_id}.")
     console.print(f"  [dim]sweeping, so every machine learns it -- and {outgoing}'s own "
                   "key comes off them[/dim]")

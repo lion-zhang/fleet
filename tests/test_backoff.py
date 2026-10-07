@@ -163,7 +163,13 @@ def test_forcing_asks_regardless(a_member):
     assert len(asked) == 2
 
 
-def test_the_wait_doubles_per_miss_up_to_the_ceiling():
+@pytest.fixture
+def pinned():
+    """A member: a center pinned, which is when there is a center to wait for."""
+    acl.pin_center_pubkey("ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIOMqqnkVzrm0SdG6UOoqKLsabgH5C9okWi0dh2l9GKJl c")
+
+
+def test_the_wait_doubles_per_miss_up_to_the_ceiling(pinned):
     for _ in range(3):
         acl.note_center_unanswered()
     assert 230 <= acl.center_retry_after(60, 1800) <= 240
@@ -172,7 +178,7 @@ def test_the_wait_doubles_per_miss_up_to_the_ceiling():
     assert 1790 <= acl.center_retry_after(60, 1800) <= 1800
 
 
-def test_hearing_from_the_center_ends_the_wait():
+def test_hearing_from_the_center_ends_the_wait(pinned):
     acl.note_center_unanswered()
     assert acl.center_retry_after(60, 1800) > 0
     acl.note_center_seen()

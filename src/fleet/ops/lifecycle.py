@@ -62,14 +62,22 @@ def dissolve(acc, *, force: bool) -> None:
     if not force and not confirm("Dissolve it?"):
         raise FleetError("cancelled", code=1)
 
+    # This machine's listener first: its retry thread would otherwise go on installing
+    # the keys being removed here -- the list still wants the center's own -- and save
+    # its ledger back after the fleet was forgotten.
+    from .. import service
+
+    with suppress(Exception):
+        service.stop()
+    # Onto the list as it is now: the confirmation above may have waited minutes.
+    acc, _ = acl.update(lambda current: setattr(current, "allow", []))
     # Every edge becomes desired-absent, including the center's own -- which `revoke`
-    # refuses to express, and rightly: on any other day it would strand a machine.
+    # refuses to express, and rightly: on any other day it would strand a machine. Read
+    # after the list changed, so a grant applied in between is removed too.
     ledger = rec.plan(acc, rec.load_ledger())
     now = int(time.time())
     for st in ledger.values():
         st.desired, st.pending_since = "absent", now
-    # Onto the list as it is now: the confirmation above may have waited minutes.
-    acc, _ = acl.update(lambda current: setattr(current, "allow", []))
 
     devices = {d.id: d for d in inv.live(inv.load())}
     left, gone = [], set()
@@ -124,15 +132,20 @@ def dissolve(acc, *, force: bool) -> None:
         err.print("\n  [dim]run this again when they are reachable, or [bold]--force"
                   "[/bold] to forget the fleet anyway -- those keys then stay installed "
                   "with nothing left to remove them[/dim]")
+        with suppress(Exception):
+            service.start()                # the fleet goes on; so does its listener
         raise FleetError("some machines could not be reached", code=1)
 
+    from ..state import invites
+
+    # Open invites too: left, they would admit a machine into a fleet started here
+    # again with the same key.
     for path in (acl.ACCESS_PATH, acl.LEDGER_PATH, acl.CACHE_PATH, acl.OUTBOX_PATH,
-                 acl.CHAIN_PATH, acl.INBOX_PATH, acl.HANDING_PATH):
+                 acl.CHAIN_PATH, acl.INBOX_PATH, acl.HANDING_PATH, invites.INVITES_PATH):
         with suppress(OSError):
             path.unlink()
     # The listener has no fleet to serve now, and left installed it was restarted by the
     # service manager for good, exiting each time.
-    from .. import service
     with suppress(Exception):
         service.remove()
     console.print(f"\n[green]✓[/green] fleet {acc.fleet_id} dissolved; "
