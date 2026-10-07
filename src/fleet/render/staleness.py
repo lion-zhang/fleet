@@ -20,7 +20,12 @@ from ..state.access import STALE_AFTER_S, center_last_seen
 
 
 def staleness_note(cache_path: Path | None = None) -> str:
-    """A line for `ls` and `top` when the center has been quiet, or ""."""
+    """A line for `ls` and `top` when the center has been quiet or refused, or ""."""
+    from ..state.access import center_refusal
+
+    if refused := center_refusal(cache_path):
+        return (f"the center refused this machine ({refused}) -- it is not a machine the "
+                "fleet knows any more, or its key changed; on the center, invite it again")
     seen = center_last_seen(cache_path)
     if not seen:
         return ""

@@ -20,6 +20,7 @@ import time
 from ..state import inventory as inv
 from ..state import store
 from ..config import load_config
+from ..models import Kind
 from ..probe.runner import probe_many, run_probe_local
 from ..render.view import Detail, device_view
 from . import identity
@@ -101,8 +102,13 @@ def snapshot(names: list[str] | None = None, *, refresh: bool = False,
         for d in devices:
             st, _ = store.latest(conn, d.id)
             eligible = d.probeable or (bool(names) and d.probe_policy != "never")
-            if eligible and (refresh or not store.is_fresh(
-                    st, int(cfg.telemetry_ttl_s), backoff_max=backoff)):
+            ttl = int(cfg.telemetry_ttl_s)
+            if d.kind == Kind.SHARED:
+                # A multi-user cluster is not measured more often than this, by `ls` and
+                # `show` as by `top` -- before, every agent's `ls` measured it every
+                # minute. `-r` naming it still asks now.
+                ttl = max(ttl, int(cfg.shared_min_interval_s or 0))
+            if eligible and (refresh or not store.is_fresh(st, ttl, backoff_max=backoff)):
                 stale.append(d)
         if stale:
             _probe(conn, stale, cfg, me=me)

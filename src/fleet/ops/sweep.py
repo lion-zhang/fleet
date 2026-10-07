@@ -463,7 +463,20 @@ def broadcast(devices) -> None:
     mine = inv.dumps(inv.load())
     me = identity.local_device_id()
     routes, senders = [], []
+    # Machines that keep not answering are left out until they answer a probe again:
+    # each costs a full ssh attempt here, and on a large fleet with dead hosts the hand-
+    # round took minutes for nothing. And readings of machines no longer in the fleet
+    # are dropped, so the cache and every relayed message stop carrying them.
+    conn = store.connect()
+    try:
+        store.forget_except(conn, {d.id for d in inv.live(devices)})
+        quiet = {r["device_id"] for r in conn.execute(
+            "SELECT device_id FROM device_state WHERE source='self' AND fail_streak >= 3")}
+    finally:
+        conn.close()
     for dev in inv.live(devices):
+        if dev.id in quiet:
+            continue
         # Never the machine this is running on. "No endpoints" used to stand in for "the
         # center", which held only while the center was a laptop nobody could reach: once
         # it had an address of its own, the center opened an SSH connection to itself to

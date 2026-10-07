@@ -202,6 +202,24 @@ def record(conn: sqlite3.Connection, device_id: str, res: ProbeResult, *,
     return True
 
 
+def forget_except(conn: sqlite3.Connection, keep: set[str]) -> int:
+    """Drop every cached reading of a machine not in `keep`. Returns how many machines.
+
+    Rows of machines removed from the fleet, or re-identified, were kept for good, and
+    `telemetry_to_relay` went on sending them in every message.
+    """
+    if not keep:
+        return 0                               # an empty inventory is a reason to stop
+    gone = [r[0] for r in conn.execute("SELECT DISTINCT device_id FROM device_state")
+            if r[0] not in keep]
+    for device_id in gone:
+        conn.execute("DELETE FROM device_state WHERE device_id=?", (device_id,))
+        conn.execute("DELETE FROM snapshot WHERE device_id=?", (device_id,))
+    if gone:
+        conn.commit()
+    return len(gone)
+
+
 def get_meta(conn: sqlite3.Connection, key: str) -> str | None:
     row = conn.execute("SELECT value FROM meta WHERE key=?", (key,)).fetchone()
     return row["value"] if row else None

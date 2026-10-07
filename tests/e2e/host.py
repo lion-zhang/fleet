@@ -268,7 +268,7 @@ def main() -> int:
                       "--ssh", target, env=menv)
     check("join from a second state on the same machine is refused, saying why",
           code != 0 and "already has a different key pinned" in out, f"exit {code}: {out}")
-    expect("sync on the center", ["sync"], r".", rc=None)
+    expect("sync on the center", ["sync"], r".")
     expect("access (whole fleet)", ["access"], r".")
     expect("access --json", ["access", "--json"], r"\{")
 
@@ -297,7 +297,7 @@ def main() -> int:
     mcp_timeout_check(name)
 
     # take the fleet down
-    expect("center --dissolve --force", ["center", "--dissolve", "--force"], r".", rc=None)
+    expect("center --dissolve --force", ["center", "--dissolve", "--force"], r"dissolved")
     if listener:
         listener.terminate()
 

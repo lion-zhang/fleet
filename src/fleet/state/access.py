@@ -774,6 +774,33 @@ def note_center_unanswered(cache_path: Path | None = None) -> None:
     _update_cache(unanswered, cache_path)
 
 
+def note_center_refused(status: int, reason: str, cache_path: Path | None = None) -> None:
+    """Record that the center answered and said no -- which is not the same as silence.
+
+    A member re-imaged with a new key, or one removed from the fleet, is refused by the
+    center for good; recorded as unanswered it looked like a center that was off, and
+    the person went looking for a network problem.
+    """
+    def refused(data: dict) -> None:
+        data["refused_at"] = int(time.time())
+        data["refused"] = f"{status} {reason.strip()[:160]}"
+        data["unanswered_at"] = int(time.time())
+        data["unanswered"] = int(data.get("unanswered") or 0) + 1
+
+    _update_cache(refused, cache_path)
+
+
+def center_refusal(cache_path: Path | None = None) -> str:
+    """Why the center last refused this machine, if that is newer than its last answer."""
+    data = _read_yaml(cache_path or CACHE_PATH)
+    try:
+        if int(data.get("refused_at") or 0) > int(data.get("seen_at") or 0):
+            return str(data.get("refused") or "")
+    except (TypeError, ValueError):
+        pass
+    return ""
+
+
 def center_retry_after(base_s: int, max_s: int, cache_path: Path | None = None) -> int:
     """Seconds until the center is worth asking again; 0 means now.
 

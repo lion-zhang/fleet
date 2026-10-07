@@ -698,9 +698,13 @@ def cmd_invite(name: str = typer.Argument(None, help="what the machine will be c
         try:
             got = invites_mod.revoke(withdraw)
         except invites_mod.InviteError as exc:
-            err.print(f"[red]{exc}[/red]")
+            if not _emit({"ok": False, "error": str(exc)}, json_out):
+                err.print(f"[red]{exc}[/red]")
             raise typer.Exit(1)
         state = got.state()
+        if _emit({"ok": True, "id": got.id, "state": state,
+                  "withdrawn": state == "revoked"}, json_out):
+            return
         if state == "revoked":
             console.print(f"[green]✓[/green] invite {got.id} withdrawn")
         else:
@@ -1322,6 +1326,13 @@ def cmd_sync(serve: bool = typer.Option(False, "--serve",
         return
 
     if serve:
+        with contextlib.suppress(acl.AccessError):
+            if acl.is_center(acl.load()):
+                # Only a member is handed the fleet this way. On the center, with no
+                # center pinned, first contact would have taken the caller's key and
+                # merged its inventory as the center's -- past the member filter.
+                err.print("[red]This machine is the center; it is not served by another.[/red]")
+                raise typer.Exit(2)
 
         raw = sys.stdin.read()
         # The inventory carries the endpoints that decide where `fleet ssh` dials, and
@@ -1416,34 +1427,15 @@ def cmd_sync(serve: bool = typer.Option(False, "--serve",
         with _as_exit():
             _sweep(devices)
         return
-    eps = inv.endpoints_of(center)
-    if not eps:
-        err.print(f"[red]{center.name} is the center but has no endpoint recorded[/red]")
-        raise typer.Exit(2)
-
-    code, output = _sync.run_sync(sorted(eps, key=lambda e: e.preference)[0], inv.dumps(devices))
-    if code != 0:
-        # sync is not on the critical path: every command still works from local state.
-        err.print(f"[red]sync failed[/red] (exit {code})\n{output.strip()[-400:]}")
-        raise typer.Exit(2)
-    try:
-        returned = inv.loads(output)
-    except Exception as exc:
-        err.print(f"[red]the center returned something unreadable:[/red] {exc}")
-        raise typer.Exit(2)
-
-    # NOT merged against `devices`: that list was loaded before the round trip, and
-    # saving it back would erase anything committed while we were waiting.
-    merged, changes = inv.update(
-        lambda current: inv.merge(current, returned, authoritative=True))
-    if _emit({"center": center.name, "devices": len(merged), "changes": changes}, json_out):
-        return
-    console.print(f"[green]✓[/green] synced with [bold]{center.name}[/bold] "
-                  f"({len(merged)} devices)")
-    for line in changes:
-        console.print(f"  {line}")
-    if not changes:
-        console.print("  [dim]already up to date.[/dim]")
+    # Not over ssh. That path merged the center's reply as authoritative though nothing
+    # signed it -- everything else that crosses between machines is signed -- and a
+    # member that knows its center has always learned where it listens from the
+    # center's own signed messages, so only a machine that never heard from it lands
+    # here. The way in for that one is the listener.
+    err.print(f"[red]This machine has not heard from its center, {center.name}, yet.[/red]")
+    err.print(f"  [dim]reach it at its listener: [bold]fleet sync --from "
+              f"{center.name}[/bold] (or its address), or join it with an invite[/dim]")
+    raise typer.Exit(2)
 
 
 @app.command("top")
@@ -1457,6 +1449,9 @@ def cmd_top(name: str = typer.Argument(None, help="one device, instead of the wh
 
     [dim]Example:[/dim]  fleet top machine_A -i 1
     """
+    if interval <= 0:
+        err.print("[red]--interval must be more than 0 seconds[/red]")
+        raise typer.Exit(2)
     _first_run("top")
     cfg = load_config()
     devices = inv.live(inv.load())
@@ -1587,7 +1582,10 @@ def cmd_rm(name: str = typer.Argument(..., help="the exact name; a prefix is nev
             # tombstone then rode the merge to the center and deleted it fleet-wide.
             centre = _fleet_membership() == ""
         if not centre:
-            err.print(f"[red]Only the center can remove {dev.name}.[/red]")
+            from .ops import member as _member
+
+            err.print(f"[red]Only the center can remove {dev.name}.[/red] Run this on "
+                      f"[bold]{_member.center_name() or 'the center'}[/bold].")
             err.print("  [dim]a machine can remove itself -- that is leaving -- but "
                       "removing another revokes its keys, which only the center "
                       "can do[/dim]")
@@ -1692,7 +1690,12 @@ def cmd_ssh(ctx: typer.Context,
         raise typer.Exit(1)
     eps = sorted(inv.endpoints_of(dev), key=lambda e: e.preference)
     if not eps:
-        err.print(f"[red]{dev.name} has no endpoint recorded[/red]")
+        if dev.id == identity.local_device_id():
+            err.print(f"[red]{dev.name} is this machine[/red] -- run the command here, "
+                      "without fleet ssh")
+        else:
+            err.print(f"[red]{dev.name} has no endpoint recorded[/red] [dim]-- give it "
+                      f"one on the center: fleet edit {dev.name} --ssh \"ssh user@host\"[/dim]")
         raise typer.Exit(1)
     ep = eps[0]
     conn = store.connect()

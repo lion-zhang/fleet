@@ -257,22 +257,21 @@ def test_sync_on_the_center_itself_is_a_no_op_not_an_error(tmp_path, monkeypatch
     assert result.exit_code == 0
 
 
-def test_sync_applies_what_the_center_returns(tmp_path, monkeypatch):
-    from fleet import cli
+def test_a_member_that_never_heard_from_its_center_is_pointed_at_the_listener(
+        tmp_path, monkeypatch):
+    """It used to dial the center over ssh and merge the reply as authoritative, though
+    nothing signed it. The way in for such a machine is the listener: `sync --from`."""
     from fleet.state import inventory as inv
     from fleet.cli import app
 
     runner, path = _serve_env(tmp_path, monkeypatch,
                               [_dev("laptop"), _dev("hub", role="center")])
-    returned = inv.dumps([_dev("laptop"), _dev("hub", role="center"), _dev("from-center")])
-    monkeypatch.setattr(sync, "run_sync", lambda *a, **k: (0, returned))
-    # broadcast seals once then sends per machine, so the stub goes
-    # on the half that dials; sealing would shell out to ssh-keygen.
-    monkeypatch.setattr(sync, "sealed_envelope", lambda payload: payload)
-    monkeypatch.setattr(sync, "send_sealed", lambda *a, **k: (0, returned))
+    monkeypatch.setattr(sync, "run_sync", lambda *a, **k: pytest.fail("dialled over ssh"))
+    before = path.read_text()
     result = runner.invoke(app, ["sync"])
-    assert result.exit_code == 0, result.output
-    assert "from-center" in _names(inv.load(path))
+    assert result.exit_code == 2
+    assert "sync --from" in result.output
+    assert path.read_text() == before, "nothing unsigned was merged"
 
 
 def test_a_failed_sync_leaves_local_state_untouched(tmp_path, monkeypatch):
@@ -484,42 +483,6 @@ def test_adding_a_device_that_was_never_removed_is_unaffected():
 
 # --------------------------------------------------------------- lost updates
 
-def test_sync_does_not_erase_a_device_added_while_it_was_running(tmp_path, monkeypatch):
-    """auto-sync is spawned before the command that triggered it even runs, so a
-    `fleet add` lands in the middle of the round trip. Saving the merge computed from
-    sync's own stale snapshot silently erases it -- which is how a device that `fleet
-    add` and `fleet identity` both confirmed vanished before `fleet ls`.
-    """
-    from typer.testing import CliRunner
-
-    from fleet import cli
-    from fleet.state import inventory as inv, store
-    from fleet.cli import app
-
-    path = tmp_path / "inventory.yaml"
-    inv.save([_dev("hub", role="center")], path)
-    monkeypatch.setattr(inv, "INVENTORY_PATH", path)
-    monkeypatch.setattr(store, "DB_PATH", tmp_path / "cache.db")
-    monkeypatch.setattr(identity, "local_device_id", lambda: "linux:machine-id:laptop")
-
-    def racing_center(ep, payload):
-        """The center answers -- and `fleet add` commits while we are waiting."""
-        concurrent = inv.load(path)
-        concurrent.append(_dev("just-added"))
-        inv.save(concurrent, path)
-        return 0, payload            # center knows nothing of the new device
-
-    monkeypatch.setattr(sync, "run_sync", racing_center)
-    # broadcast seals once then sends per machine, so the stub goes
-    # on the half that dials; sealing would shell out to ssh-keygen.
-    monkeypatch.setattr(sync, "sealed_envelope", lambda payload: payload)
-    monkeypatch.setattr(sync, "send_sealed", racing_center)
-    result = runner_invoke = CliRunner().invoke(app, ["sync"])
-    assert result.exit_code == 0, result.output
-    assert "just-added" in [d.name for d in inv.live(inv.load(path))], \
-        "sync overwrote a device committed during its round trip"
-
-
 def test_the_center_does_not_erase_a_device_added_while_it_was_serving(tmp_path, monkeypatch):
     """--serve has the same window: it loads, merges what arrived, and writes back."""
     from typer.testing import CliRunner
@@ -707,3 +670,17 @@ def test_a_route_changed_on_the_center_does_not_come_back():
     assert [e["target"] for e in on_member[0].endpoints] == ["192.0.2.2"]
     again, _ = merge(on_member, [new], authoritative=True)  # tied, still the center's
     assert [e["target"] for e in again[0].endpoints] == ["192.0.2.2"]
+
+
+def test_the_center_is_never_served_by_another(monkeypatch):
+    """With no center pinned, `--serve` takes first contact on trust -- on the center that
+    would merge a caller's inventory as the center's, past the member filter."""
+    from typer.testing import CliRunner
+
+    from fleet.cli import app
+    from fleet.state import access as acl
+
+    acl.save(acl.Access(fleet_id="f", center="SHA256:me", keys={}), acl.ACCESS_PATH)
+    monkeypatch.setattr(acl, "is_center", lambda *a, **k: True)
+    r = CliRunner().invoke(app, ["sync", "--serve"], input="devices: []\n")
+    assert r.exit_code == 2 and "is the center" in r.output

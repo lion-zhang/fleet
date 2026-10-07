@@ -142,6 +142,7 @@ def telemetry_to_relay() -> list[dict]:
     between machines with nothing to say how far it had travelled or how old it really
     was.
     """
+    live = {d.id for d in inv.live(inv.load())}
     conn = store.connect()
     try:
         rows = conn.execute(
@@ -149,6 +150,8 @@ def telemetry_to_relay() -> list[dict]:
             "FROM device_state WHERE source='self'").fetchall()
         out = []
         for r in rows:
+            if live and r["device_id"] not in live:
+                continue                       # no longer in the fleet: nobody's business
             _, snap = store.latest(conn, r["device_id"])
             out.append({"device_id": r["device_id"], "status": r["status"],
                         # in the center's clock: a member converts its own
@@ -258,7 +261,14 @@ def _refresh(url: str, pinned: str) -> None:
         payload = acl.seal(inv.dumps(inv.load()), telemetry=telemetry_to_relay())
     except Exception:
         return                             # no key of our own yet; nothing to say
-    body = post(url, payload)
+    body = post(url, payload, errors=True)
+    if isinstance(body, tuple):
+        status, text = body
+        if status is not None and 400 <= status < 500:
+            acl.note_center_refused(status, text)
+        else:
+            acl.note_center_unanswered()
+        return
     if body is None:
         acl.note_center_unanswered()
         return
