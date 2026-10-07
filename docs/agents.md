@@ -74,11 +74,11 @@ These register fleet's MCP server, launched as `uvx agents-fleet mcp`.
 
 | Agent | Link |
 |---|---|
-| Cursor | [Add to Cursor](https://cursor.com/en/install-mcp?name=fleet&config=eyJjb21tYW5kIjoidXZ4IiwiYXJncyI6WyJhZ2VudC1mbGVldCIsIm1jcCJdfQ%3D%3D) |
+| Cursor | [Add to Cursor](https://cursor.com/en/install-mcp?name=fleet&config=eyJjb21tYW5kIjoidXZ4IiwiYXJncyI6WyJhZ2VudHMtZmxlZXQiLCJtY3AiXX0%3D) |
 | VS Code | [Install in VS Code](https://insiders.vscode.dev/redirect/mcp/install?name=fleet&config=%7B%22command%22%3A%22uvx%22%2C%22args%22%3A%5B%22agents-fleet%22%2C%22mcp%22%5D%7D) · [VS Code Insiders](https://insiders.vscode.dev/redirect/mcp/install?name=fleet&config=%7B%22command%22%3A%22uvx%22%2C%22args%22%3A%5B%22agents-fleet%22%2C%22mcp%22%5D%7D&quality=insiders) |
 | Visual Studio | [Install in Visual Studio](https://vs-open.link/mcp-install?%7B%22name%22%3A%22fleet%22%2C%22type%22%3A%22stdio%22%2C%22command%22%3A%22uvx%22%2C%22args%22%3A%5B%22agents-fleet%22%2C%22mcp%22%5D%7D) |
 | Kiro | [Add to Kiro](https://kiro.dev/launch/mcp/add?name=fleet&config=%7B%22command%22%3A%22uvx%22%2C%22args%22%3A%5B%22agents-fleet%22%2C%22mcp%22%5D%7D) |
-| LM Studio | [Add to LM Studio](https://lmstudio.ai/install-mcp?name=fleet&config=eyJjb21tYW5kIjoidXZ4IiwiYXJncyI6WyJhZ2VudC1mbGVldCIsIm1jcCJdfQ%3D%3D) |
+| LM Studio | [Add to LM Studio](https://lmstudio.ai/install-mcp?name=fleet&config=eyJjb21tYW5kIjoidXZ4IiwiYXJncyI6WyJhZ2VudHMtZmxlZXQiLCJtY3AiXX0%3D) |
 | Goose | `goose://extension?cmd=uvx&arg=agents-fleet&arg=mcp&id=fleet&name=fleet&description=fleet&timeout=300` (paste into a browser) |
 | Claude Desktop | download `fleet.mcpb` from the [latest release](https://github.com/lion-zhang/fleet/releases/latest) and open it ✓ |
 

@@ -70,3 +70,27 @@ def test_the_shipped_skill_says_what_to_do_without_fleet():
     text = (REPO / "skills/fleet/SKILL.md").read_text(encoding="utf-8")
     assert text.startswith("---\nname: fleet\ndescription: ")
     assert "uv tool install agents-fleet" in text and "`fleet ls --json`" in text
+
+
+def test_every_install_link_launches_the_published_package():
+    """Install links carry the launch line inside a URL, some base64-encoded (Cursor, LM
+    Studio). A rename of the package missed those: they launched `agent-fleet`, which is
+    not on PyPI, and the button installed a server that could never start."""
+    import base64
+    import re
+    import urllib.parse
+
+    from fleet.links import PACKAGE
+
+    found = 0
+    for doc in [REPO / "README.md", *sorted((REPO / "docs").rglob("*.md"))]:
+        for url in re.findall(r"https?://[^\s)\"'>]+", doc.read_text(encoding="utf-8")):
+            query = urllib.parse.parse_qs(urllib.parse.urlsplit(url).query)
+            for value in query.get("config", []):
+                try:
+                    config = json.loads(value)
+                except ValueError:
+                    config = json.loads(base64.b64decode(value))
+                found += 1
+                assert config.get("args", [])[:1] == [PACKAGE], (doc.name, config)
+    assert found >= 4, "README and docs/agents.md carry install links"
