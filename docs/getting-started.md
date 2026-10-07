@@ -163,7 +163,12 @@ uses it.
 Three ways fleet gets in, and it works out which:
 
 - **A key you already hold works** — the usual case on a cloud VM, where password auth is
-  off and the provider injected a key at creation. Nothing is asked of you.
+  off and the provider injected a key at creation. Nothing is asked of you. fleet offers
+  your ssh-agent's keys and whatever `~/.ssh/config` names for the host; for a key file
+  of its own, put it in the command as you would for ssh:
+  `fleet add "ssh -i ~/.ssh/my_key ubuntu@1.2.3.4"`. Any key file works — `.pem`,
+  `id_ed25519`, whatever the provider gave you. fleet uses it to put its own key
+  there, so the machine stays reachable from every machine you grant, not only this one.
 - **The host takes a password** — you type it once. It is spent on one connection and
   stored nowhere.
 - **Neither** — put the center's key on the machine yourself. `fleet center --pubkey`

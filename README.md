@@ -50,6 +50,7 @@ Each one takes a sentence, whatever the machine is:
 | The machine | What you tell the agent |
 |---|---|
 | a server you can already SSH into | "add `ssh ubuntu@10.0.0.7`" — fleet uses the key you already have |
+| one you reach with a particular key file | "add `ssh -i ~/.ssh/my_key ubuntu@1.2.3.4`" — or a `Host` from your `~/.ssh/config` |
 | a new rental (vast.ai, RunPod, Lambda) | "add `ssh -p 40001 root@1.2.3.4`, it costs $1.89/hr" |
 | one that only takes a password | "add it" — then you type the password once yourself; it is stored nowhere |
 | one fleet cannot get into from here | "invite my laptop" — you get one line to paste there, and it joins by itself |
