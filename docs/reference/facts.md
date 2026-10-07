@@ -42,8 +42,10 @@ when it is at least 85% of it. CPU counts are exact.
 | `cores-N` | 2, 4, 8, 12, 16, 24, 32, 48, 64, 96, 128, 192, 256 |
 | `storage-Nt` | 1, 2, 4, 8, 16, 32, 64 |
 
-A machine that has never been measured has no facts, and matches no `--tag` that is not
-one of its tags. `fleet ls --tag` says how many machines it left out for that reason.
+A machine that has never been measured has no measured facts: only those that come from
+its record — its kind (`rental`, `shared`, `appliance`) and how it is reached
+(`public-ip`, `mesh`, `lan`) — and matches no other `--tag` that
+is not one of its tags. `fleet ls --tag` says how many machines it left out for that reason.
 
 ## Tags
 
@@ -59,7 +61,7 @@ overrides that.
 | Kind | Picked when | What it changes |
 |---|---|---|
 | `permanent` | otherwise (the default) | nothing |
-| `rental` | the machine shows signs of vast.ai, RunPod or AutoDL, or its address names vast.ai, RunPod, AutoDL, SeetaCloud, Lambda or Paperspace | the `rental` fact, and the idle-rental alert |
+| `rental` | the machine shows signs of vast.ai, RunPod or AutoDL, or the address it was added by contains `vast.ai`, `runpod`, `autodl`, `seetacloud`, `lambdalabs` or `paperspace` | the `rental` fact, and the idle-rental alert |
 | `shared` | it runs SLURM, or more than three people are logged in | measured lightly (no process list; SLURM jobs and partitions instead), only when named (`fleet ls NAME`), never offered for work, and always flagged |
 | `appliance` | only with `--kind appliance` | the `appliance` fact; never offered for work |
 | `mobile` | only with `--kind mobile` | never measured, never offered for work |

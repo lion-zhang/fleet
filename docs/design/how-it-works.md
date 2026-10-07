@@ -88,7 +88,8 @@ script's temporary file is removed when it finishes.
 `fleet ls` measures every machine whose last reading is older than a minute, up to eight
 at a time, and reuses the rest. A machine that keeps not answering is asked less and less
 often — the wait doubles, up to half an hour — so a switched-off box never makes
-`fleet ls` slow; naming a machine always asks it now. On Linux and macOS, connections to
+`fleet ls` slow. Naming a machine skips that wait, though a reading under a minute old
+is still reused; `-r` always measures again. On Linux and macOS, connections to
 the same machine are shared for two minutes, so a burst of commands pays for one SSH
 handshake.
 
@@ -113,7 +114,7 @@ address nor any key passes through the agent.
 
 `fleet access nas --allow laptop`, on the center:
 
-1. **The list changes**: an edge *laptop's key → nas, as root* is added to `access.yaml`,
+1. **The list changes**: an edge *laptop's key → nas, as the account the center reaches nas as* is added to `access.yaml`,
    through the write queue.
 2. **The center connects to nas** and rewrites its `authorized_keys`: the block for that
    edge gets laptop's public key. Only lines inside blocks carrying this fleet's id are

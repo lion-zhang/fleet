@@ -41,17 +41,26 @@ two machines may have named the same box differently, and its address may have c
 1. **Known to one side only** — kept.
 2. **Known to both** — the record with the newer `updated_at` wins *whole*. Not field by
    field: merging fields independently could assemble a machine that never existed on
-   either side, and there is no per-field timestamp to justify it.
-3. **Addresses** — unioned, so a box one machine reaches over the LAN and another over
-   Tailscale is one box with two routes. Except when the center's signed answer is
-   merged: then its list replaces ours, so a wrong route can be removed by editing it on
-   the center.
+   either side, and there is no per-field timestamp to justify it. An older record adds
+   nothing, not even an address.
+3. **Addresses** — when the newer record wins, or both are equally new, the two lists
+   are unioned, so a box one machine reaches over the LAN and another over Tailscale is
+   one box with two routes. Except when the center's signed inventory is merged — its
+   answer to a member, or what it pushes after a sweep: then its list replaces ours, so a
+   wrong route can be removed by editing it on the center.
+
+**What the center takes from a member.** A member's upload is filtered before it is
+merged. About itself, a member may change anything but its role. About any other
+machine it may change only the tags, cost, disk paths and notes; its name, addresses,
+kind and role stay as the center has them, and a machine the center does not know yet
+comes in with no role. A member's timestamps are capped at the center's clock, so a
+member whose clock runs ahead cannot win every merge for days.
 
 **Deletion is a tombstone.** `fleet rm` keeps the record with `deleted_at` set, and the
 newer-wins rule carries it like any other change; a record that merely vanished would be
 indistinguishable from one the other side has not seen yet, and would come back on the
 next sync. A member's tombstone is accepted only for itself. Tombstones are pruned after
-30 days, by which time every machine has seen them. Adding the machine again later makes
+a year, long after every machine has seen them. Adding the machine again later makes
 a newer record, so it comes back rather than staying deleted.
 
 ## Signing

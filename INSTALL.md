@@ -28,8 +28,8 @@ FLEET_NO_AUTO_CENTER=1 fleet center --json     # PowerShell: $env:FLEET_NO_AUTO_
 `"role": "center"` or `"member"`: it is in a fleet already; run `fleet setup` to teach the
 agents here, and report. `"role": ""`: it is in no fleet yet; ask the question above,
 then run `fleet setup` for a center or `fleet join CODE && fleet setup` for a member.
-Plain `fleet center`, `fleet ls` and most other commands start a new fleet on a machine
-in none, so do not run them before you know.
+On a machine in none, plain `fleet center`, `fleet ls`, `show`, `top`, `add`, `invite`,
+`access` and `setup` start a new fleet, so do not run them before you know.
 
 ## 2. Run the installer
 

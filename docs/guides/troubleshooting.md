@@ -18,9 +18,9 @@ not broken.
 | What you see | What to do |
 |---|---|
 | `NAME did not answer` | Nothing was recorded. Check the address and that sshd runs there, then add it again. |
-| `… accepts no key of ours and there is no terminal to type a password` | The machine needs a password, and only you can type it: run `fleet add "ssh …"` yourself in a terminal. Or put the fleet's key there first (`fleet center --pubkey`), or use an invite. |
-| `… this machine cannot type a password (no pty on Windows)` | A Windows center cannot type passwords. Put `fleet center --pubkey` on the host, or use an invite. |
-| `NAME keeps its name; to rename it: fleet edit …` | That machine was already known; the new address was added to it. |
+| `… accepts no key of ours and there is no terminal to type a password` | The machine needs a password, and only you can type it: run `fleet add "ssh …"` yourself in a terminal. Or put the fleet's key there first (`fleet center --pubkey`, run on the center), or use an invite. |
+| `… this machine cannot type a password (no pty on Windows)` | A Windows center cannot type passwords. Put the output of `fleet center --pubkey` (run on the center) into the host's `authorized_keys`, or use an invite. |
+| `it keeps its name; to rename it: fleet edit NAME --name …` | That machine was already known; the new address was added to it under its old name. |
 | `this invite has already been used` | Each invite admits one machine. Run `fleet invite` again. |
 | `this invite has expired` | Invites last 15 minutes by default. Issue a new one, with `--ttl 2h` if needed. |
 | `no answer from …/join` | The center is not listening. Check `fleet center` on it, and that port 7373 is reachable. |
@@ -31,15 +31,18 @@ not broken.
 | What you see | What it means |
 |---|---|
 | `This machine is not in a fleet` | Start one with `fleet center --init`, or join one with a code from `fleet invite`. |
-| `auth_failed`, or `rejected our key` | The machine is up and refused the fleet's key. Only the center can put it back: `fleet sync` on the center. |
+| `auth_failed`, or `rejected our key` | The machine is up and refused the key. Only the center can put one back: run `fleet add "ssh …"` for it again on the center (you may have to type its password once). |
 | `timeout` with an old "last seen" | A machine that keeps not answering is asked less often. Ask it directly: `fleet ls NAME -r`. |
-| A grant or revoke stays `pending` | The center has not reached that machine yet. It retries every time it syncs (`fleet sync` on the center). A pending revoke means the key is still there. |
+| A member shows a machine as up that it cannot reach itself | The center can reach it, and the member shows the center's reading. `fleet ls NAME -r` tries again from here. |
+| A grant stays `pending`, or a revoke shows `revoking` | The center could not reach that machine when the change was made. It tries again only when `fleet sync` runs on the center; run it once the machine is back. Until then a revoked key is still there. |
 | `the center has not swept this machine for Nd` | Normal for a center that is often off. Everything already granted keeps working; only changes wait. |
 | `Only the center can … Run it on NAME` | You are on a member. Run it on the machine named. |
 | `The role is being handed to NAME` | Mid-handover: `fleet center --accept` on NAME, or `fleet center --cancel` here. |
-| `No machine named exactly …` | `fleet rm` never acts on a prefix. Give the full name. |
-| `N agents read an older description of fleet` | `fleet setup --refresh`. |
-| `fleet ls --tag …` finds nothing, and says machines were skipped | Those machines have never been measured, so they have no facts yet. `fleet ls -r` measures them. |
+| `No machine named exactly …` | `fleet rm` never acts on a prefix. Give the full name, an alias or the id. |
+| `claude reads an older description of fleet` (or several agents) | `fleet setup --refresh`. |
+| `fleet ls --tag …` finds nothing, and says machines were skipped | Those machines have never been measured, so they have no measured facts yet. `fleet ls -r` measures them; a shared or mobile machine is measured only when named: `fleet ls NAME`. |
+| `… is not valid YAML`, `device X in the inventory is malformed: …`, or `unreadable access list at …` | A state file was edited by hand and no longer parses. The message names the file (`fleet paths` lists them); fix it or restore a copy. fleet changes nothing until it parses. |
+| `config.yaml: KEY: … is not a number; using N` | A setting has the wrong type. fleet uses the default and says so once. |
 
 ## Still stuck
 

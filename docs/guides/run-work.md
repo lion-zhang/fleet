@@ -13,8 +13,8 @@ fleet ssh gpu-box                        # an interactive shell, as with plain s
 fleet ssh a -- 'cd ~/proj && make test'  # by alias; quote anything with && or |
 ```
 
-`fleet ssh` finds the machine's address and the right key, so neither ever appears in
-the conversation, and an agent never builds an `ssh` command by hand. It works on every
+`fleet ssh` finds the machine's address and the right key, so the agent needs neither
+and never builds an `ssh` command by hand. It works on every
 OS: on a Windows machine the command goes to its shell as it is, and the remote
 command's exit code comes back in every case.
 
@@ -50,6 +50,6 @@ themselves with `scp` or `rsync`.
 
 | What you see | What it means |
 |---|---|
-| `NAME rejected our key` | The machine is up but does not accept the fleet's key. Only the center can put it back: on the center, `fleet sync`. |
+| `NAME rejected our key` | The machine is up but does not accept the key. Only the center can put one back: on the center, `fleet add "ssh …"` for it again, or `fleet sync` if this machine was granted access to it and the grant is still pending. |
 | `No device named …` | Check the name with `fleet ls`; an alias works too. |
 | `NAME has no endpoint recorded` | fleet knows the machine but not how to reach it, e.g. a former center. `fleet edit NAME --ssh "ssh user@host"` on the center. |

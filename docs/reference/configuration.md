@@ -55,11 +55,13 @@ max_workers: 16
 | `sync_ttl_s` | `300` | On a member, how old the last contact with the center may be before `ls` or `show` asks it for fresh information. |
 | `probe_timeout_s` | `20` | Seconds `ls`, `show` and `top` give a machine to answer. |
 | `connect_timeout_s` | `8` | ssh connection timeout for those readings. |
-| `max_workers` | `8` | How many machines are measured, or updated, at once. |
+| `max_workers` | `8` | How many machines are measured at once, and how many the center reaches at once when it syncs (placing keys, handing out the inventory). |
+| `shared_min_interval_s` | `300` | The shortest time between two measurements of a `shared` machine, so a multi-user cluster is never hammered. |
 | `snapshot_retention` | `120` | Readings kept per machine in `cache.db`. |
 | `repo` | (empty) | The git URL `fleet install` and `fleet update` deploy from; otherwise the repository fleet was installed from, or GitHub. |
 
-An unreadable `config.yaml` is ignored rather than stopping fleet. The center's port,
+An unreadable `config.yaml` is ignored rather than stopping fleet, and a number setting
+that is not a number falls back to its default, with one warning. The center's port,
 7373, is not a setting; `fleet center --listen --port N` uses another one for that run.
 
 ## Environment variables
@@ -67,7 +69,7 @@ An unreadable `config.yaml` is ignored rather than stopping fleet. The center's 
 | Variable | Effect |
 |---|---|
 | `FLEET_CONFIG_DIR`, `FLEET_STATE_DIR` | where fleet keeps its files |
-| `FLEET_NO_AUTO_CENTER` | when set, a machine in no fleet is not made a center by its first fleet command |
+| `FLEET_NO_AUTO_CENTER` | when set, a machine in no fleet is not made a center by its first `ls`, `show`, `top`, `add`, `invite`, `access`, `setup`, or a bare `fleet center` |
 | `HERMES_HOME` | where `fleet setup` puts the Hermes skill (default `~/.hermes`, or `%LOCALAPPDATA%\hermes` on Windows) |
 | `TERM=dumb` | `fleet top` prints one frame instead of a live view (as it does without a terminal) |
 
@@ -93,9 +95,12 @@ It runs as you, never as root, and serves on all interfaces. See
 
 ## On the machines you add
 
-fleet writes only to `authorized_keys` there — `~/.ssh/authorized_keys`, or on Windows
-for administrators `C:\ProgramData\ssh\administrators_authorized_keys` — and only inside
-blocks it marks with its fleet id:
+fleet writes two things there. The machine's own fleet key, created once if it has none
+and never replaced: `~/.config/fleet/id_ed25519` (macOS: `~/Library/Application
+Support/fleet`, Windows: `%LOCALAPPDATA%\fleet`). And `authorized_keys` —
+`~/.ssh/authorized_keys`, or on Windows for administrators
+`C:\ProgramData\ssh\administrators_authorized_keys` — only inside blocks it marks with its
+fleet id:
 
 ```
 # fleet:7f3a9c:begin from=SHA256:... user=root
