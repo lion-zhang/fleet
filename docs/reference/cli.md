@@ -16,7 +16,7 @@ command accepts `--help`. For what to use when, start with the
 | [`fleet join`](#fleet-join) | Join a fleet with an invite from its center. No password, nothing to approve. |
 | [`fleet edit`](#fleet-edit) | Change a device's address or settings after it was added. |
 | [`fleet install`](#fleet-install) | Install fleet on a device, so you and its agents can use the fleet from there. |
-| [`fleet update`](#fleet-update) | Deploy the newest fleet from git, to the machines that have it. |
+| [`fleet update`](#fleet-update) | Update fleet on the machines that have it, the way it was installed there. |
 | [`fleet sync`](#fleet-sync) | Merge this machine's inventory with the center's. |
 | [`fleet top`](#fleet-top) | Live view of the fleet, or of one device. Like htop, for your machines. |
 | [`fleet rm`](#fleet-rm) | Remove a device from the inventory. |
@@ -216,9 +216,9 @@ fleet install machine_A
 
 ## fleet update
 
-Deploy the newest fleet from git, to the machines that have it.
+Update fleet on the machines that have it, the way it was installed there.
 
-`fleet install` already re-runs as an update, but only one device at a time and only over ssh. This adds the two things you actually reach for: updating everything at once, and updating the machine you are standing on without connecting to it.
+A machine with fleet from PyPI gets `uv tool upgrade` (or `pipx upgrade`), one with fleet's own checkout is updated from git, and your own source install is left as it is. `--repo` or `--ref` asks for git everywhere. Updates this machine without ssh, and `--all` every machine that runs fleet.
 
 A device with no fleet is skipped and named, never given one: most of a fleet is meant to have nothing installed, and `fleet install NAME` is how you change that on purpose.
 

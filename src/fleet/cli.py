@@ -920,7 +920,8 @@ def cmd_install(name: str = typer.Argument(None,
 
     console.print(f"[dim]installing fleet on {dev.name} from {url} ({ref})[/dim]")
     code, output = run_installer(sorted(eps, key=lambda e: e.preference)[0],
-                                 install_script(url, ref=ref, platform=platform),
+                                 install_script(url, ref=ref, platform=platform,
+                                                from_git=bool(repo) or ref != "main"),
                                  forward_agent=forward_agent, platform=platform)
     if code != 0:
         err.print(f"[red]Install failed[/red] (exit {code})\n{output.strip()[-600:]}")
@@ -1011,11 +1012,12 @@ def cmd_update(name: str = typer.Argument(None, help="defaults to this machine")
                                                help="every device that already runs fleet"),
                repo: str = typer.Option(None, "--repo", metavar="URL", help="git URL to deploy from; defaults to config or this checkout"),
                ref: str = typer.Option("main", "--ref", help="branch or tag")):
-    """Deploy the newest fleet from git, to the machines that have it.
+    """Update fleet on the machines that have it, the way it was installed there.
 
-    `fleet install` already re-runs as an update, but only one device at a time and only
-    over ssh. This adds the two things you actually reach for: updating everything at
-    once, and updating the machine you are standing on without connecting to it.
+    A machine with fleet from PyPI gets `uv tool upgrade` (or `pipx upgrade`), one with
+    fleet's own checkout is updated from git, and your own source install is left as it
+    is. `--repo` or `--ref` asks for git everywhere. Updates this machine without ssh,
+    and `--all` every machine that runs fleet.
 
     A device with no fleet is skipped and named, never given one: most of a fleet is
     meant to have nothing installed, and `fleet install NAME` is how you change that on
@@ -1025,6 +1027,9 @@ def cmd_update(name: str = typer.Argument(None, help="defaults to this machine")
     """
     devices = inv.load()
     url = repo or configured_repo()
+    # Asking for a repo or a ref by name is asking for git. Otherwise each machine is
+    # updated the way fleet was installed there (install.py, _how_installed_posix).
+    from_git = bool(repo) or ref != "main"
     if not url:
         err.print("[red]No repo to update from.[/red]  Pass [bold]--repo "
                   "git@github.com:you/fleet.git[/bold], or set [bold]repo:[/bold] in "
@@ -1055,7 +1060,7 @@ def cmd_update(name: str = typer.Argument(None, help="defaults to this machine")
         # it certainly has fleet -- update_only would be true either way, and saying so
         # keeps one script shape for every path.
         local_script = install_script(url, ref=ref, platform=local_platform(),
-                                      update_only=True)
+                                      update_only=True, from_git=from_git)
         p = subprocess.run(local_install_argv(),
                            input=payload_for(local_script, local_platform()),
                            capture_output=True)
@@ -1085,7 +1090,7 @@ def cmd_update(name: str = typer.Argument(None, help="defaults to this machine")
         console.print(f"[dim]updating {dev.name}[/dim]")
         code, output = run_installer(eps[0],
                                      install_script(url, ref=ref, platform=platform,
-                                                    update_only=True),
+                                                    update_only=True, from_git=from_git),
                                      platform=platform)
         if code == 0:
             console.print(f"[green]✓[/green] {dev.name}")
