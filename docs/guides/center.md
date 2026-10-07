@@ -9,8 +9,15 @@ and it:
 - **answers members** that ask for fresh information, and machines joining with an
   invite.
 
-Every other machine is a **member**. Pick as the center a machine that can reach all your
-devices and is online most of the time — a desktop or a home server. A laptop works too.
+Other machines are of two kinds:
+
+- **members** run fleet too — machines where you also run agents, or want to check the
+  fleet from. They join with an [invite](add-machines.md#let-the-machine-join-by-itself).
+- **every other machine** runs nothing of fleet's. It only needs SSH: the center measures
+  it and places keys on it over SSH.
+
+Pick as the center a machine that can reach all your devices and is online most of the
+time — a desktop or a home server. A laptop works too.
 
 ## When the center is off
 

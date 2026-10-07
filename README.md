@@ -85,9 +85,17 @@ You describe the work; the agent finds where it fits. It checks what each machin
 No hostnames, keys or passwords go into the conversation, and anything irreversible
 waits for your yes.
 
-Every machine besides the center is a **member**. To use fleet *from* a member too — its
-agents seeing the whole fleet — add it with an invite: the line installs fleet there and
-joins. Paste it into a terminal on that machine, or give it to the agent there.
+**Only install fleet where you use it.** The machines you add above need nothing but SSH:
+fleet measures them and connects to them from the center. Install fleet on another
+machine only if you also run agents there, or want to check the fleet from it. That
+machine becomes a **member**: ask the center's agent to "invite" it, and paste the line it
+gives you into a terminal there, or give it to the agent there.
+
+| | Runs fleet | How it gets there |
+|---|---|---|
+| **center** | yes — one per fleet | the first install |
+| **member** | yes | an invite line from the center |
+| every other machine | no, only SSH | "add `ssh user@host`" on the center |
 
 ### An app that cannot run commands?
 
@@ -157,47 +165,148 @@ fleet is about the machines you already have. It complements tools that launch n
 
 ## FAQ
 
-<details>
-<summary><b>I use Claude Code <i>and</i> Codex (and more) on one machine. Does that work?</b></summary>
+**Setting up**
 
-Yes — that is the normal case. fleet is installed once per machine: one command, one
-inventory, one set of keys. Each agent only gets a small skill or MCP entry pointing at
-it, so Claude Code, Codex, Gemini CLI and a desktop app all see the same machines, and can
-use them at the same time. Install a new agent later? Run `fleet setup` (or ask an agent
-that already has fleet to do it).
+<details>
+<summary><b>Do I need to install fleet on every machine?</b></summary>
+
+No. Install it where you **use** it: the machine you work from (the center), and any
+other machine where you also run agents or want to check the fleet from (a member). The
+machines you only *use* — GPU servers, rentals, a NAS — need SSH and nothing else; fleet
+measures them and connects to them from the center.
 </details>
 
 <details>
-<summary><b>What does my agent actually get?</b></summary>
+<summary><b>What are the center and members?</b></summary>
 
-Agents with a shell (Claude Code, Codex, Gemini CLI, Copilot CLI, OpenCode, …) get a
-skill — text that tells them the `fleet` commands; it costs nothing until a task needs a
-machine. Apps that cannot run commands (Claude Desktop, Cursor, VS Code, …) get an MCP
-server that runs the same commands for them. The installer sets up the supported agents
-you have; [Agents](docs/guides/agents.md) has the details for each.
+The **center** is the machine you installed fleet on first. It keeps the list of machines,
+holds the key that reaches them, and is the only machine that grants or removes access.
+There is one per fleet. A **member** is any other machine that runs fleet, joined with an
+invite line from the center; its agents see the whole fleet too. Every other machine is
+just *in* the fleet: reachable over SSH, nothing installed. See
+[The center](docs/guides/center.md).
 </details>
 
 <details>
-<summary><b>Does it work behind NAT, or across sites?</b></summary>
+<summary><b>Which machine should be the center?</b></summary>
 
-The center needs an address it can route to: a public IP, a LAN, or an overlay such as
-Tailscale. A machine the center cannot dial can still join with the `fleet invite` line
-and report in; granting access to it waits until the center can reach it.
+One that can reach all your devices and is online most of the time — a desktop or a home
+server. A laptop works too. You can hand the role to another machine later with
+`fleet center NAME`.
 </details>
 
 <details>
 <summary><b>What if the center is off?</b></summary>
 
 Normal — it can be a laptop that is closed half the day. Everything already granted keeps
-working; only changes wait for it. Move the role with `fleet center NAME`.
+working, and members keep listing and connecting from what they know; only *changes* —
+granting, removing, inviting — wait for it.
+</details>
+
+<details>
+<summary><b>I use Claude Code <i>and</i> Codex (and more) on one machine. Does that work?</b></summary>
+
+Yes — that is the normal case. fleet is installed once per machine: one command, one
+inventory, one set of keys. Each agent only gets a small skill or MCP entry pointing at
+it, so Claude Code, Codex, Gemini CLI and a desktop app all see the same machines, and can
+use them at the same time. Install a new agent later? Ask an agent that has fleet to run
+`fleet setup`.
+</details>
+
+<details>
+<summary><b>What does my agent actually get?</b></summary>
+
+Agents that can run commands (Claude Code, Codex, Gemini CLI, Copilot CLI, OpenCode, …)
+get a skill — text that tells them the `fleet` commands; it costs nothing until a task
+needs a machine. Apps that cannot (Claude Desktop, Cursor, VS Code, …) get an MCP server
+that runs the same commands for them. See [Agents](docs/guides/agents.md). After
+installing, start a new session so the agent loads it.
+</details>
+
+**Safety**
+
+<details>
+<summary><b>Does fleet store my passwords? Does my agent see my keys?</b></summary>
+
+No and no. A password is typed by you, once, for a machine that accepts nothing else; it
+is used for one connection and stored nowhere. After that fleet uses its own key. The
+agent runs `fleet ssh NAME` and never sees an address, a key or a password.
+</details>
+
+<details>
+<summary><b>What does fleet leave on the machines I add?</b></summary>
+
+Two things: a block in `~/.ssh/authorized_keys`, marked with your fleet's id, and the
+machine's own fleet key in fleet's folder (`~/.config/fleet` on Linux). No program, no
+service. Your own keys and
+the provider's are never touched, and `fleet rm` takes fleet's block off again.
+</details>
+
+<details>
+<summary><b>Can the agent do something I cannot undo?</b></summary>
+
+It is told not to. Removing a machine, taking the fleet down and moving the center are
+left to you, and are not available to apps over MCP at all. When a request is ambiguous —
+which machine, which user — the agent asks instead of guessing.
+</details>
+
+<details>
+<summary><b>What if a machine is compromised?</b></summary>
+
+Remove it on the center (`fleet rm NAME`): its key comes off every other machine. But a
+key is a key — revoking it does not undo what someone with root on that machine already
+did — and the center is the one machine whose compromise reaches everything. The
+[threat model](docs/design/access.md#threat-model-plainly) spells it out.
+</details>
+
+**Machines**
+
+<details>
+<summary><b>The disk space fleet reports is wrong.</b></summary>
+
+Some systems — containers, GPU rentals — show `/` as a small overlay while the space is on
+another volume. Tell fleet which paths to watch: "on gpu-box, watch /workspace", or
+`fleet edit gpu-box --disk-path /workspace`. See
+[Disks](docs/guides/find-machines.md#disks-tell-fleet-where-the-space-is).
+</details>
+
+<details>
+<summary><b>My rental came back on a new IP or port.</b></summary>
+
+Re-point it, keeping its name, tags, cost and history: "gpu-box is now at
+`ssh -p 40123 root@5.6.7.8`", or `fleet edit gpu-box --ssh "ssh -p 40123 root@5.6.7.8"`.
+</details>
+
+<details>
+<summary><b>Does it work behind NAT, or across sites?</b></summary>
+
+The center needs an address it can reach each machine at: a public IP, a LAN, or an
+overlay such as Tailscale, ZeroTier or WireGuard. A machine the center cannot reach can
+still join with an invite and report what it has. See
+[Adding machines](docs/guides/add-machines.md#machines-on-other-networks).
 </details>
 
 <details>
 <summary><b>Windows?</b></summary>
 
-Yes, both ways. A Windows machine works as a target with OpenSSH Server and nothing else,
-and fleet runs on Windows too, center included: interactive `fleet ssh`, `fleet top` and
-the background service all work there. See [Windows](docs/guides/windows.md).
+Yes, both ways. A Windows machine works in a fleet with OpenSSH Server and nothing else,
+and fleet runs on Windows too, center included. See [Windows](docs/guides/windows.md).
+</details>
+
+<details>
+<summary><b>Does anything keep running in the background?</b></summary>
+
+On the center only: a small service, run as you, that listens on port 7373 so members can
+refresh and new machines can join. Nothing runs on the other machines; members run fleet
+only when you or an agent use it.
+</details>
+
+<details>
+<summary><b>How do I remove fleet?</b></summary>
+
+On a member: `fleet center --leave`, `fleet setup --uninstall`, then
+`uv tool uninstall agents-fleet`. On the center, `fleet center --dissolve` first takes
+every key off every machine. See [Removing fleet](docs/guides/install.md#removing-fleet).
 </details>
 
 ## Learn more

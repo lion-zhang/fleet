@@ -20,7 +20,7 @@ Task by task: what to say to your agent, and the command it runs.
 | [The center](guides/center.md) | understand what the center does, what happens when it is off, and move it |
 | [Agents](guides/agents.md) | add fleet to a specific agent or app — 35+ of them |
 | [Installing and upgrading](guides/install.md) | install by hand, upgrade, put fleet on more machines, remove it |
-| [Windows](guides/windows.md) | use Windows machines, as members or as the center |
+| [Windows](guides/windows.md) | add Windows machines to a fleet, or run fleet on Windows |
 | [Troubleshooting](guides/troubleshooting.md) | find out what a message means and what to do |
 
 ## Reference

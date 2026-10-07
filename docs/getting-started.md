@@ -16,7 +16,10 @@ You need:
 
 The machine you install fleet on becomes your fleet's **center**. It keeps the list of
 your machines, holds the key that reaches them, and decides which machine may reach which.
-Every other machine you add is a **member**.
+
+The machines you add to it need nothing installed — only SSH. You install fleet on a
+second machine only if you also run agents there, or want to check the fleet from it;
+that machine is then a **member** ([step 6](#6-optional-a-machine-that-runs-fleet-too)).
 
 Pick a machine that can reach all your devices and is online most of the time — a desktop
 or a home server is ideal. A laptop works too: while it is closed, everything already set

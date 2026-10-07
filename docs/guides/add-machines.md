@@ -28,7 +28,7 @@ its user, port, key and `ProxyJump`. In one step fleet then:
 1. **connects** with that;
 2. **puts the fleet's own key** in the machine's `authorized_keys`, inside a marked block
    it alone edits — your keys and the provider's are left as they are;
-3. **gives the machine a fleet key of its own** (in `~/.config/fleet`, if it has none)
+3. **gives the machine a fleet key of its own** (in fleet's folder — `~/.config/fleet` on Linux — if it has none)
    and records it: that key is the machine's identity when it is granted access to
    another machine;
 4. **measures it**: CPU, memory, GPUs, disks, and what is free right now.
