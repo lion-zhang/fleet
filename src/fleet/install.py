@@ -520,16 +520,23 @@ def _windows_update_runner(inner: Path, pids: list[int]) -> str:
     inner_lit = str(inner).replace("'", "''")
     start = ", ".join(str(p) for p in pids)
     return f"""$ErrorActionPreference = 'Continue'
-$ids = @()
-foreach ($first in @({', '.join(str(p) for p in pids) or '0'})) {{
-  $id = $first
-  while ($id -and -not ($ids -contains $id)) {{
-    $p = Get-CimInstance Win32_Process -Filter "ProcessId=$id" -ErrorAction SilentlyContinue
-    if (-not $p -or $p.Name -notmatch '^(fleet|python|pythonw|uv)\\.exe$') {{ break }}
-    $ids += $id
-    $id = $p.ParentProcessId
-  }}
+# Up from this fleet to the fleet.exe that started it, and no further: whatever ran
+# fleet.exe -- a shell, an agent, a test written in python -- is not ours to wait for,
+# and waiting for it while it waits for us would never end.
+# At most three steps (this python, the tool's python.exe launcher, fleet.exe); with no
+# fleet.exe among them -- `python -m fleet`, say -- only this process itself.
+$chain = @()
+$found = $false
+$id = {pids[0] if pids else 0}
+while ($id -and $chain.Count -lt 3 -and -not ($chain -contains $id)) {{
+  $p = Get-CimInstance Win32_Process -Filter "ProcessId=$id" -ErrorAction SilentlyContinue
+  if (-not $p) {{ break }}
+  $chain += $id
+  if ($p.Name -match '^fleet\\.exe$') {{ $found = $true; break }}
+  if ($p.Name -notmatch '^pythonw?\\.exe$') {{ break }}
+  $id = $p.ParentProcessId
 }}
+$ids = if ($found) {{ $chain }} else {{ @({pids[0] if pids else 0}) }}
 "waiting for fleet to exit (started from {start}; waiting on $($ids -join ', '))"
 foreach ($i in $ids) {{ Wait-Process -Id $i -Timeout 1800 -ErrorAction SilentlyContinue }}
 Start-Sleep -Seconds 1

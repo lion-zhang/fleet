@@ -196,7 +196,10 @@ def test_on_windows_this_machine_is_updated_last_and_in_the_background(fleet_of,
 
 def test_the_windows_runner_waits_for_fleet_then_reports_how_it_ended(tmp_path):
     text = install._windows_update_runner(tmp_path / "it's.ps1", [123, 456])
-    assert "@(123, 456)" in text
+    assert "$id = 123" in text and "456" not in text.split("waiting for fleet")[0]
+    # up to the fleet.exe that started us and no further: whoever ran fleet.exe -- an
+    # agent, a test harness -- may be waiting for us, and waiting for it never ends
+    assert "'^fleet\\.exe$'" in text and "$chain.Count -lt 3" in text
     assert "Wait-Process" in text
     assert "it''s.ps1" in text, "the path is quoted for PowerShell"
     assert text.rstrip().endswith(f'"{install.UPDATE_EXIT_MARK} $LASTEXITCODE"')
