@@ -83,6 +83,10 @@ itself; for any other provider add `--kind rental` to `fleet add`. A rental with
 and none of its GPUs busy gets the alert *RENTAL is idle -- this is costing money*. The
 price you set shows in the `$/HR` column and in the fleet's hourly burn rate.
 
+A rental's space is often on a volume such as `/workspace` rather than on `/`. If
+`fleet show` reports the wrong disk, name the right one:
+`fleet edit a100 --disk-path /workspace` ([more](find-machines.md#disks-tell-fleet-where-the-space-is)).
+
 Rentals change address. When yours comes back on a new IP or port, re-point it without
 losing its name, tags, cost or history:
 

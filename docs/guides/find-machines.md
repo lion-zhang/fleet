@@ -59,6 +59,34 @@ after a kernel upgrade — so the machine is kept away from CUDA work. A machine
 never measured has no facts and matches nothing; `fleet ls --tag` says how many it had
 to leave out.
 
+## Disks: tell fleet where the space is
+
+fleet watches `/` and any mount under `/workspace`, `/data`, `/mnt`, `/home`, `/srv`,
+`/opt`, `/Volumes` or `/scratch` (on Windows: every fixed drive). That covers most
+machines, but not all of them, and a wrong disk misleads the agent twice: the free
+space it reports, and the `storage-Nt` fact it picks machines by.
+
+- **Containers and GPU rentals** often show `/` as a small overlay, while the real space
+  is a volume somewhere else.
+- **Some systems do not report `/` at its real size** — the data lives on a volume
+  mounted under a name fleet does not look for.
+- **A quota or a big directory** matters more than the filesystem around it.
+
+Name the paths to watch, and fleet watches **exactly those** from the next reading on:
+
+> **You:** on gpu-box, watch /workspace and /data/datasets for disk space
+
+```bash
+fleet edit gpu-box --disk-path /workspace --disk-path /data/datasets
+fleet edit gpu-box --disk-path / --disk-path /workspace   # keep / as well
+fleet edit gpu-box --clear-disk-paths                     # back to detecting them
+```
+
+A path can be a mount point or any directory; fleet measures the disk that holds it and
+labels it with the path you gave. A path that does not exist on the machine is skipped.
+`fleet show gpu-box` lists the disks as fleet now sees them, and the 90%-full alert and
+the `storage-Nt` fact follow the paths you set.
+
 ## By what you call it: tags
 
 Tags are labels of your own, for what no measurement can tell: `prod`, `nas`, `quiet`,

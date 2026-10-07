@@ -9,7 +9,7 @@ agent on it. Installing it also teaches every supported agent on this machine to
 
 ## 1. Ask which mode this machine is for
 
-Ask the user, unless they already said:
+Ask the user **before you install anything**, unless they already said:
 
 - **center** — this machine starts a new fleet and keeps it: the list of machines, the key
   that reaches them, who may reach what. Recommend a machine that can reach all their
@@ -18,9 +18,18 @@ Ask the user, unless they already said:
   that fleet's center, `fleet invite NAME` prints a code (`fleet1:…`) or the whole install
   line. Ask them for it.
 
-If `fleet --version` already works here, fleet is installed: do not reinstall it. Run
-`fleet setup` (it teaches the agents on this machine) and `fleet center` (it says whether
-this machine is a center or a member), and report.
+**If `fleet --version` already works here**, fleet is installed: do not reinstall it.
+Find out what this machine is, without changing anything:
+
+```bash
+FLEET_NO_AUTO_CENTER=1 fleet center --json     # PowerShell: $env:FLEET_NO_AUTO_CENTER=1 first
+```
+
+`"role": "center"` or `"member"`: it is in a fleet already; run `fleet setup` to teach the
+agents here, and report. `"role": ""`: it is in no fleet yet; ask the question above,
+then run `fleet setup` for a center or `fleet join CODE && fleet setup` for a member.
+Plain `fleet center`, `fleet ls` and most other commands start a new fleet on a machine
+in none, so do not run them before you know.
 
 ## 2. Run the installer
 
@@ -66,6 +75,9 @@ Point out:
 - **Start a new session.** Agents load skills when a session starts, so fleet's skill is
   there from the next conversation on — yours included.
 - **If `fleet` is not found** in a new shell, the user needs to open a new terminal, once.
+- **If the installer says `no service manager for this user here`** (a container, most
+  GPU rentals), the center is not listening for members and invites. Tell the user, and
+  offer to start it: `nohup fleet center --listen > ~/fleet-center.log 2>&1 &`.
 
 ## Rules
 
