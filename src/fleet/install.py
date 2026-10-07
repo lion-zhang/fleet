@@ -525,6 +525,7 @@ def _windows_update_runner(inner: Path, pids: list[int], log: Path | None = None
     return f"""$ErrorActionPreference = 'Continue'
 $log = '{log_lit}'
 function Say($text) {{ Add-Content -LiteralPath $log -Value $text -Encoding utf8 }}
+Say "update runner started (pid $PID)"
 # Up from this fleet to the fleet.exe that started it, and no further: whatever ran
 # fleet.exe -- a shell, an agent, a test written in python -- is not ours to wait for,
 # and waiting for it while it waits for us would never end.
@@ -550,12 +551,12 @@ Say "{UPDATE_EXIT_MARK} $LASTEXITCODE"
 """
 
 
-def update_windows_in_background(script: str, *, wait_s: float = 20.0) -> Path:
+def update_windows_in_background(script: str, *, wait_s: float = 20.0) -> tuple[Path, bool]:
     """Start the installer for *this* Windows machine detached, to run once we exit.
 
-    Returns the log it writes; its last line is `fleet-update-exit: N`. Waits (briefly)
-    until the runner has found the processes it must outlive, so that returning -- and
-    exiting -- cannot race it.
+    Returns the log it writes (its last line is `fleet-update-exit: N`) and whether the
+    runner said it had started. Waits (briefly) until the runner has found the processes
+    it must outlive, so that returning -- and exiting -- cannot race it.
     """
     import os
     import subprocess
@@ -572,19 +573,30 @@ def update_windows_in_background(script: str, *, wait_s: float = 20.0) -> Path:
                       encoding="utf-8-sig")
     log.write_text("", encoding="utf-8")
     # The runner's own output -- a parse error, say -- separately: the log is its to write.
+    # A hidden console rather than DETACHED_PROCESS: PowerShell given no console at all
+    # exits at once, saying nothing, and the update never ran. Out of our job object
+    # where that is allowed: uv's launcher (fleet.exe) puts what it starts in one that
+    # is killed when it exits -- and the runner exists to outlive it.
+    base = (getattr(subprocess, "CREATE_NO_WINDOW", 0)
+            | getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0))
+    breakaway = getattr(subprocess, "CREATE_BREAKAWAY_FROM_JOB", 0)
+    argv = ["powershell", "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", str(runner)]
     with open(state / "update-run.log", "wb") as out:
-        flags = (getattr(subprocess, "DETACHED_PROCESS", 0)
-                 | getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0))
-        subprocess.Popen(["powershell", "-NoProfile", "-ExecutionPolicy", "Bypass",
-                          "-File", str(runner)],
-                         stdin=subprocess.DEVNULL, stdout=out, stderr=subprocess.STDOUT,
-                         creationflags=flags, close_fds=True)
+        for flags in (base | breakaway, base):
+            try:
+                subprocess.Popen(argv, stdin=subprocess.DEVNULL, stdout=out,
+                                 stderr=subprocess.STDOUT, creationflags=flags,
+                                 close_fds=True)
+                break
+            except OSError:
+                if flags == base:
+                    raise                  # a job that refuses breakaway: try without
     deadline = time.monotonic() + wait_s
     while time.monotonic() < deadline:
         try:
             if b"waiting for fleet" in log.read_bytes():
-                break
+                return log, True
         except OSError:
             pass
         time.sleep(0.2)
-    return log
+    return log, False

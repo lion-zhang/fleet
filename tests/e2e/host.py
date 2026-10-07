@@ -469,6 +469,9 @@ def local_update_check() -> None:
     code, out = fleet("update", "--repo", str(repo), "--ref", "e2e-update",
                       env={"COLUMNS": "1000"}, timeout=600)
     if not check("update this machine", code == 0, f"exit {code}: {out}"):
+        found = re.search(r"in (\S+update-run\.log)", out)
+        if found and Path(found.group(1)).exists():
+            print("      runner said:", Path(found.group(1)).read_text(errors="replace")[-3000:])
         return
     if WINDOWS:
         found = re.search(r"the log is (.+?update\.log)", out)

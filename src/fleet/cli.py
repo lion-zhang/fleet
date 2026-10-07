@@ -1176,14 +1176,20 @@ def cmd_update(name: str = typer.Argument(None, help="defaults to this machine")
     if here_later:
         from .install import update_windows_in_background
 
-        log = update_windows_in_background(
+        log, started = update_windows_in_background(
             install_script(url, ref=ref, platform=local_platform(), update_only=True,
                            from_git=from_git))
-        console.print(f"[green]✓[/green] this machine: updating in the background, once "
-                      "this command has exited [dim](Windows cannot replace a program "
-                      f"while it runs). It takes a minute; the log is {log}, and "
-                      "[bold]fleet --version[/bold] shows the result.[/dim]")
-        ok += 1
+        if started:
+            console.print(f"[green]✓[/green] this machine: updating in the background, "
+                          "once this command has exited [dim](Windows cannot replace a "
+                          f"program while it runs). It takes a minute; the log is {log}, "
+                          "and [bold]fleet --version[/bold] shows the result.[/dim]")
+            ok += 1
+        else:
+            err.print("[red]✗[/red] this machine: the background update did not start "
+                      f"[dim]-- what PowerShell said is in "
+                      f"{log.with_name('update-run.log')}[/dim]")
+            failed += 1
 
     if ok + failed + skipped > 1 or failed:
         tail = f", {skipped} skipped" if skipped else ""

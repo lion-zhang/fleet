@@ -7,6 +7,7 @@ The two things missing were the ones you actually reach for.
 from __future__ import annotations
 
 import subprocess
+from pathlib import Path
 
 import pytest
 from typer.testing import CliRunner
@@ -185,7 +186,7 @@ def test_on_windows_this_machine_is_updated_last_and_in_the_background(fleet_of,
     monkeypatch.setattr(cli, "run_installer",
                         lambda ep, script, **kw: order.append(ep.target) or (0, "ok"))
     monkeypatch.setattr(install, "update_windows_in_background",
-                        lambda script: order.append(("here", script)) or "C:/update.log")
+                        lambda script: order.append(("here", script)) or (Path("C:/update.log"), True))
     r = runner.invoke(cli.app, ["update", "--all"])
     assert r.exit_code == 0, r.output
     assert not local, "never as our child"
@@ -203,3 +204,12 @@ def test_the_windows_runner_waits_for_fleet_then_reports_how_it_ended(tmp_path):
     assert "Wait-Process" in text
     assert "it''s.ps1" in text, "the path is quoted for PowerShell"
     assert text.rstrip().endswith(f'"{install.UPDATE_EXIT_MARK} $LASTEXITCODE"')
+
+
+def test_a_background_update_that_never_started_is_a_failure(fleet_of, monkeypatch):
+    runner, _, _ = fleet_of
+    monkeypatch.setattr(cli, "local_platform", lambda: "windows")
+    monkeypatch.setattr(install, "update_windows_in_background",
+                        lambda script: (Path("C:/f/update.log"), False))
+    r = runner.invoke(cli.app, ["update"])
+    assert r.exit_code == 1 and "did not start" in r.output, r.output
