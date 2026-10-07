@@ -24,10 +24,15 @@ emit host.uname_s "$OS"
 emit host.arch "$(uname -m 2>/dev/null | clean)"
 emit host.kernel "$(uname -r 2>/dev/null | clean)"
 
+# The same order identity.py reads them in, and the same rule: an empty file is no id.
+# Without that, a container whose /etc/machine-id exists but is empty reported no id here
+# while fleet on it fell back to dbus's -- and the two never matched.
 machine_id=""
-if [ -r /etc/machine-id ]; then machine_id=$(cat /etc/machine-id 2>/dev/null | clean)
-elif [ -r /var/lib/dbus/machine-id ]; then machine_id=$(cat /var/lib/dbus/machine-id 2>/dev/null | clean)
-elif [ "$OS" = "Darwin" ] && have ioreg; then
+if [ -r /etc/machine-id ]; then machine_id=$(cat /etc/machine-id 2>/dev/null | clean); fi
+if [ -z "$machine_id" ] && [ -r /var/lib/dbus/machine-id ]; then
+  machine_id=$(cat /var/lib/dbus/machine-id 2>/dev/null | clean)
+fi
+if [ -z "$machine_id" ] && [ "$OS" = "Darwin" ] && have ioreg; then
   machine_id=$(ioreg -rd1 -c IOPlatformExpertDevice 2>/dev/null \
     | awk -F'"' '/IOPlatformUUID/{print $4; exit}' | clean)
 fi

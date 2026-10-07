@@ -280,3 +280,25 @@ def test_a_grant_reaches_the_machine_that_was_pinned_not_one_now_using_its_old_n
                         lambda acc, edge, ep, **kw: reached.append(ep.target) or (True, "", True))
     sweep.apply_now(acl.load(acl.ACCESS_PATH), me, "SHA256:xps", "lin", install=True)
     assert reached == ["5.6.7.8"], reached
+
+
+def test_a_revoke_that_has_not_landed_is_still_listed(a_fleet, monkeypatch):
+    """Found in review: `fleet access` listed only what the list wants, so a revoke
+    whose machine was off vanished from the table and from --json at once -- while the
+    key was still in that machine's authorized_keys."""
+    import json
+
+    runner, me = a_fleet
+    acc = acl.load(acl.ACCESS_PATH)
+    acc.keys["SHA256:lap"] = {"name": "laptop", "pubkey": "ssh-ed25519 AAAA l",
+                              "device_id": "id:lap"}
+    acl.save(acc, acl.ACCESS_PATH)
+    ledger = rec.load_ledger()
+    ledger["SHA256:lap>SHA256:xps>lin"] = rec.EdgeState(desired="absent", observed="present",
+                                                         last_error="no route")
+    rec.save_ledger(ledger)
+    r = runner.invoke(cli.app, ["access", "--json"])
+    assert r.exit_code == 0, r.output
+    rows = json.loads(r.output)["edges"]
+    assert {"from": "laptop", "to": "lin-xps", "user": "lin", "state": "revoking"}.items() \
+        <= next(x for x in rows if x["from"] == "laptop").items()

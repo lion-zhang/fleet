@@ -1697,6 +1697,23 @@ def cmd_access(target: str = typer.Argument(None, help="one machine, instead of 
                      "pending_s": (int(time.time()) - st.pending_since)
                                   if not st.converged and st.pending_since else 0,
                      "last_error": st.last_error})
+    # A revoke that has not reached its machine is still a key in that machine's
+    # authorized_keys. Listing only what the list wants made it vanish from the table the
+    # moment it was asked for -- exactly the "reported as done while the key is still
+    # there" the access design rules out.
+    wanted = set(current.edges())
+    for key, st in sorted(ledger.items()):
+        parts = tuple(key.split(">"))
+        if len(parts) != 3 or parts in wanted or st.desired != "absent" or st.converged:
+            continue
+        src, dst, who = parts
+        if target and dst != _access_fp(current, target):
+            continue
+        rows.append({"from": current.name_of(src), "to": current.name_of(dst),
+                     "user": who, "state": "revoking",
+                     "pending_s": (int(time.time()) - st.pending_since)
+                                  if st.pending_since else 0,
+                     "last_error": st.last_error or "revoke not applied yet -- the key is still there"})
     if _emit({"center": current.name_of(current.center), "edges": rows,
               **(change_done if allow or deny else {})}, json_out):
         return
@@ -1708,7 +1725,8 @@ def cmd_access(target: str = typer.Argument(None, help="one machine, instead of 
         t.add_column(col, no_wrap=(col != "NOTE"))
     for r in rows:
         live = r["state"] == "present"
-        dot = "[green]●[/green]" if live else "[yellow]○[/yellow]"
+        dot = ("[green]●[/green]" if live else
+               "[red]○[/red]" if r["state"] == "revoking" else "[yellow]○[/yellow]")
         note = r["last_error"] or ("" if live else "not applied yet")
         if r["pending_s"]:
             note = f"pending {r['pending_s'] // 60}m · {note}" if note else \

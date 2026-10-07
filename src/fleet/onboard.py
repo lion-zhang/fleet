@@ -111,7 +111,7 @@ def onboard_self(*, name: str | None = None, kind: str | None = None,
     # the machine itself, and its name from its hostname. A center recorded as
     # `localhost` was pinned that way for good and never recognised as this machine.
     dev_id = derive_id(snap, ep)
-    if dev_id.startswith("net:"):
+    if dev_id.startswith("net:") or (snap and not snap.machine_id):
         dev_id = identity.local_device_id() or dev_id
     named_by = ep if snap and snap.hostname else Endpoint(
         target=socket.gethostname() or "localhost", user="", port=22)

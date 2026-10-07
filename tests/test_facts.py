@@ -566,11 +566,11 @@ def test_a_windows_machine_knows_its_own_id(monkeypatch):
     monkeypatch.setattr(identity, "local_platform", lambda: "windows")
     # lru_cache(maxsize=1): without clearing on both sides this answer leaks into every
     # test that runs after it, and the failure surfaces somewhere else entirely.
-    identity.local_device_id.cache_clear()
+    identity._machine_id.cache_clear()
     try:
         assert identity.local_device_id() == "linux:machine-id:665aebe1-5029-45c5-adae-035a2b4fada7"
     finally:
-        identity.local_device_id.cache_clear()
+        identity._machine_id.cache_clear()
 
 
 def test_init_marks_the_center_in_the_inventory_too(tmp_path, monkeypatch):

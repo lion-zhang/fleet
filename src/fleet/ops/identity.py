@@ -21,13 +21,30 @@ from pathlib import Path
 from ..ssh.cmd import local_platform
 
 
-@lru_cache(maxsize=1)
 def local_device_id() -> str:
     """This machine's identity, in the same shape onboard.py stamps on a probed device.
 
-    Used only to notice that we ARE the center, so `fleet sync` can be safe to run
-    everywhere rather than being a command you must remember not to run in one place.
+    Used to notice that we ARE a given machine -- the center, or the row `fleet show`
+    describes. A machine with no machine-id at all (many containers) falls back to its
+    fleet key, as joining does (`join._stable_id`): otherwise every such machine was
+    `net:localhost:22`, one id for all of them, and none ever recognised its own record.
     """
+    return _machine_id() or _key_id()
+
+
+def _key_id() -> str:
+    from .. import config
+    from ..state import access as acl
+
+    try:
+        pub = config.FLEET_KEY.with_suffix(".pub").read_text(encoding="utf-8")
+        return f"key:{acl.fingerprint(pub)}"
+    except (OSError, acl.AccessError):
+        return ""
+
+
+@lru_cache(maxsize=1)
+def _machine_id() -> str:
     if local_platform() == "windows":
         # The same registry value payload.ps1 reads, so this agrees with the id
         # `derive_id` stamps from a probe -- which is the whole point: without it a

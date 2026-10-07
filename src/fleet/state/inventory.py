@@ -237,7 +237,10 @@ def near_matches(devices: list[Device], name: str, limit: int = 5) -> list[str]:
                   if lowered in h.lower() or h.lower().startswith(lowered))[:limit]
 
 
-TOMBSTONE_TTL_S = 60 * 60 * 24 * 30      # long enough for every machine to have synced
+# A year, not a month. A member that had been off for longer than the tombstone lived
+# still held the machine as live, synced, and the machine came back -- and the sweep then
+# tried to enrol it again, putting the center's key back on a machine you had removed.
+TOMBSTONE_TTL_S = 60 * 60 * 24 * 365
 
 
 def live(devices: list[Device]) -> list[Device]:
