@@ -1544,7 +1544,16 @@ def cmd_ssh(ctx: typer.Context, name: str):
         # Windows has no exec: os.execvp starts ssh and exits this process at once with
         # 0, so every `fleet ssh NAME -- cmd` reported success whatever cmd did (found on
         # a real Windows runner), and an interactive shell fought the prompt for input.
-        raise typer.Exit(subprocess.call(argv))
+        # Ctrl+C belongs to ssh and the remote command. Reaching this process too, it
+        # made subprocess kill ssh -- dropping the session to stop one remote command.
+        import signal
+
+        before = signal.signal(signal.SIGINT, signal.SIG_IGN)
+        try:
+            code = subprocess.call(argv)
+        finally:
+            signal.signal(signal.SIGINT, before)
+        raise typer.Exit(code)
     os.execvp("ssh", argv)      # replace this process; ssh owns the tty from here
 
 

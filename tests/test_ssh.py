@@ -135,3 +135,24 @@ def test_on_windows_the_remote_exit_code_is_passed_on(box, monkeypatch):
     r = CliRunner().invoke(cli.app, ["ssh", "lin-xps", "--", "exit", "3"])
     assert r.exit_code == 3
     assert not box, "never execvp on Windows"
+
+
+def test_on_windows_ctrl_c_is_left_to_ssh(box, monkeypatch):
+    """Windows has no exec, so fleet waits for ssh -- and a Ctrl+C meant for the remote
+    command reached fleet too, which made subprocess kill ssh and drop the session."""
+    import signal
+    import subprocess
+    import sys
+
+    seen = {}
+    monkeypatch.setattr(sys, "platform", "win32")
+
+    def call(argv):
+        seen["handler"] = signal.getsignal(signal.SIGINT)
+        return 0
+    monkeypatch.setattr(subprocess, "call", call)
+    before = signal.getsignal(signal.SIGINT)
+    r = CliRunner().invoke(cli.app, ["ssh", "lin-xps"])
+    assert r.exit_code == 0
+    assert seen["handler"] is signal.SIG_IGN, "ignored while ssh runs"
+    assert signal.getsignal(signal.SIGINT) == before, "and restored after"
