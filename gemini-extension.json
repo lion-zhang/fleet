@@ -6,7 +6,7 @@
     "fleet": {
       "command": "uvx",
       "args": [
-        "agent-fleet",
+        "agents-fleet",
         "mcp"
       ]
     }

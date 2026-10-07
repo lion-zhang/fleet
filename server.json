@@ -12,7 +12,7 @@
   "packages": [
     {
       "registryType": "pypi",
-      "identifier": "agent-fleet",
+      "identifier": "agents-fleet",
       "version": "0.5.0",
       "runtimeHint": "uvx",
       "transport": {

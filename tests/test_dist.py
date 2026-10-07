@@ -35,7 +35,7 @@ def test_every_manifest_names_the_package_and_its_version():
                 "mcpb/manifest.json"):
         assert json.loads((REPO / rel).read_text(encoding="utf-8"))["version"] == v, rel
     server = json.loads((REPO / "server.json").read_text(encoding="utf-8"))
-    assert server["packages"][0]["identifier"] == "agent-fleet"
+    assert server["packages"][0]["identifier"] == "agents-fleet"
     assert len(server["description"]) <= 100, "the MCP Registry's limit"
     # The registry proves we own the PyPI package by finding this in its README.
     assert f"<!-- mcp-name: {server['name']} -->" in (REPO / "README.md").read_text(encoding="utf-8")
@@ -69,4 +69,4 @@ def test_the_plugin_hook_speaks_only_when_fleet_is_missing(tmp_path):
 def test_the_shipped_skill_says_what_to_do_without_fleet():
     text = (REPO / "skills/fleet/SKILL.md").read_text(encoding="utf-8")
     assert text.startswith("---\nname: fleet\ndescription: ")
-    assert "uv tool install agent-fleet" in text and "`fleet ls --json`" in text
+    assert "uv tool install agents-fleet" in text and "`fleet ls --json`" in text

@@ -18,7 +18,7 @@ for another agent keeps the core that is already there. Added an agent later?
 `fleet setup` teaches it.
 
 This page is for adding fleet from inside one agent, or to an agent the installer does not
-know. Every entry runs the same `fleet` from PyPI ([agent-fleet](https://pypi.org/project/agent-fleet/)),
+know. Every entry runs the same `fleet` from PyPI ([agents-fleet](https://pypi.org/project/agents-fleet/)),
 so all your agents share one fleet. MCP entries need only [uv](https://docs.astral.sh/uv/)
 (`uvx`); skills and plugins also need the `fleet` command, and say how to get it if it is
 missing.
@@ -51,35 +51,35 @@ until a task needs a machine.
 
 ## One command
 
-These register fleet's MCP server, launched as `uvx agent-fleet mcp`.
+These register fleet's MCP server, launched as `uvx agents-fleet mcp`.
 
 | Agent | Command | |
 |---|---|---|
-| Claude Code | `claude mcp add --scope user fleet -- uvx agent-fleet mcp` | ✓ |
-| Codex (CLI, IDE, ChatGPT app) | `codex mcp add fleet -- uvx agent-fleet mcp` | ✓ |
-| GitHub Copilot CLI | `copilot mcp add fleet -- uvx agent-fleet mcp` | ✓ |
-| Amp | `amp mcp add fleet -- uvx agent-fleet mcp` | ✓ |
-| OpenCode | `opencode mcp add fleet -- uvx agent-fleet mcp` | ✓ |
-| Qwen Code | `qwen mcp add fleet uvx agent-fleet mcp` | ✓ |
-| Auggie (Augment CLI) | `auggie mcp add fleet -- uvx agent-fleet mcp` | ✓ |
-| Factory Droid | `droid mcp add fleet "uvx agent-fleet mcp"` | ✓ |
-| Kiro CLI | `kiro-cli mcp add --name fleet --scope global --command uvx --args agent-fleet --args mcp` | ✓ |
-| Mistral Vibe | `vibe mcp add fleet --transport stdio --command uvx --arg agent-fleet --arg mcp` | ✓ |
-| VS Code (Copilot agent mode) | `code --add-mcp '{"name":"fleet","command":"uvx","args":["agent-fleet","mcp"]}'` | docs |
-| Windsurf / Devin Desktop | `devin mcp add fleet -s user -- uvx agent-fleet mcp` | docs |
-| Jan | `jan cli mcp add fleet --command uvx --arg agent-fleet --arg mcp --active` | docs |
-| Crush | `echo 'mcp add fleet --command uvx --args agent-fleet --args mcp' >> ~/.config/crush/crushrc` | docs |
+| Claude Code | `claude mcp add --scope user fleet -- uvx agents-fleet mcp` | ✓ |
+| Codex (CLI, IDE, ChatGPT app) | `codex mcp add fleet -- uvx agents-fleet mcp` | ✓ |
+| GitHub Copilot CLI | `copilot mcp add fleet -- uvx agents-fleet mcp` | ✓ |
+| Amp | `amp mcp add fleet -- uvx agents-fleet mcp` | ✓ |
+| OpenCode | `opencode mcp add fleet -- uvx agents-fleet mcp` | ✓ |
+| Qwen Code | `qwen mcp add fleet uvx agents-fleet mcp` | ✓ |
+| Auggie (Augment CLI) | `auggie mcp add fleet -- uvx agents-fleet mcp` | ✓ |
+| Factory Droid | `droid mcp add fleet "uvx agents-fleet mcp"` | ✓ |
+| Kiro CLI | `kiro-cli mcp add --name fleet --scope global --command uvx --args agents-fleet --args mcp` | ✓ |
+| Mistral Vibe | `vibe mcp add fleet --transport stdio --command uvx --arg agents-fleet --arg mcp` | ✓ |
+| VS Code (Copilot agent mode) | `code --add-mcp '{"name":"fleet","command":"uvx","args":["agents-fleet","mcp"]}'` | docs |
+| Windsurf / Devin Desktop | `devin mcp add fleet -s user -- uvx agents-fleet mcp` | docs |
+| Jan | `jan cli mcp add fleet --command uvx --arg agents-fleet --arg mcp --active` | docs |
+| Crush | `echo 'mcp add fleet --command uvx --args agents-fleet --args mcp' >> ~/.config/crush/crushrc` | docs |
 
 ## One click
 
 | Agent | Link |
 |---|---|
 | Cursor | [Add to Cursor](https://cursor.com/en/install-mcp?name=fleet&config=eyJjb21tYW5kIjoidXZ4IiwiYXJncyI6WyJhZ2VudC1mbGVldCIsIm1jcCJdfQ%3D%3D) |
-| VS Code | [Install in VS Code](https://insiders.vscode.dev/redirect/mcp/install?name=fleet&config=%7B%22command%22%3A%22uvx%22%2C%22args%22%3A%5B%22agent-fleet%22%2C%22mcp%22%5D%7D) · [VS Code Insiders](https://insiders.vscode.dev/redirect/mcp/install?name=fleet&config=%7B%22command%22%3A%22uvx%22%2C%22args%22%3A%5B%22agent-fleet%22%2C%22mcp%22%5D%7D&quality=insiders) |
-| Visual Studio | [Install in Visual Studio](https://vs-open.link/mcp-install?%7B%22name%22%3A%22fleet%22%2C%22type%22%3A%22stdio%22%2C%22command%22%3A%22uvx%22%2C%22args%22%3A%5B%22agent-fleet%22%2C%22mcp%22%5D%7D) |
-| Kiro | [Add to Kiro](https://kiro.dev/launch/mcp/add?name=fleet&config=%7B%22command%22%3A%22uvx%22%2C%22args%22%3A%5B%22agent-fleet%22%2C%22mcp%22%5D%7D) |
+| VS Code | [Install in VS Code](https://insiders.vscode.dev/redirect/mcp/install?name=fleet&config=%7B%22command%22%3A%22uvx%22%2C%22args%22%3A%5B%22agents-fleet%22%2C%22mcp%22%5D%7D) · [VS Code Insiders](https://insiders.vscode.dev/redirect/mcp/install?name=fleet&config=%7B%22command%22%3A%22uvx%22%2C%22args%22%3A%5B%22agents-fleet%22%2C%22mcp%22%5D%7D&quality=insiders) |
+| Visual Studio | [Install in Visual Studio](https://vs-open.link/mcp-install?%7B%22name%22%3A%22fleet%22%2C%22type%22%3A%22stdio%22%2C%22command%22%3A%22uvx%22%2C%22args%22%3A%5B%22agents-fleet%22%2C%22mcp%22%5D%7D) |
+| Kiro | [Add to Kiro](https://kiro.dev/launch/mcp/add?name=fleet&config=%7B%22command%22%3A%22uvx%22%2C%22args%22%3A%5B%22agents-fleet%22%2C%22mcp%22%5D%7D) |
 | LM Studio | [Add to LM Studio](https://lmstudio.ai/install-mcp?name=fleet&config=eyJjb21tYW5kIjoidXZ4IiwiYXJncyI6WyJhZ2VudC1mbGVldCIsIm1jcCJdfQ%3D%3D) |
-| Goose | `goose://extension?cmd=uvx&arg=agent-fleet&arg=mcp&id=fleet&name=fleet&description=fleet&timeout=300` (paste into a browser) |
+| Goose | `goose://extension?cmd=uvx&arg=agents-fleet&arg=mcp&id=fleet&name=fleet&description=fleet&timeout=300` (paste into a browser) |
 | Claude Desktop | download `fleet.mcpb` from the [latest release](https://github.com/lion-zhang/fleet/releases/latest) and open it ✓ |
 
 These links are built from each agent's documented format; the Claude Desktop bundle was
@@ -92,7 +92,7 @@ For everything else, add fleet to the agent's config. Most agents read the same 
 ```json
 {
   "mcpServers": {
-    "fleet": { "command": "uvx", "args": ["agent-fleet", "mcp"] }
+    "fleet": { "command": "uvx", "args": ["agents-fleet", "mcp"] }
   }
 }
 ```
@@ -119,7 +119,7 @@ For everything else, add fleet to the agent's config. Most agents read the same 
 | Cherry Studio | Settings → MCP Servers → Add → import from JSON | |
 | BoltAI | `~/.boltai/mcp.json` | |
 | Jan | Settings → MCP Servers → **+** | add `"active": true` |
-| Msty Studio | Toolbox → Tools → Add New Tool → *STDIO / JSON* | the inner object only: `{"command": "uvx", "args": ["agent-fleet", "mcp"]}` |
+| Msty Studio | Toolbox → Tools → Add New Tool → *STDIO / JSON* | the inner object only: `{"command": "uvx", "args": ["agents-fleet", "mcp"]}` |
 
 The agents below use their own shapes.
 
@@ -127,7 +127,7 @@ The agents below use their own shapes.
 <summary><b>VS Code</b> — user <code>mcp.json</code> (<i>MCP: Open User Configuration</i>), or <code>.vscode/mcp.json</code> in a project</summary>
 
 ```json
-{ "servers": { "fleet": { "type": "stdio", "command": "uvx", "args": ["agent-fleet", "mcp"] } } }
+{ "servers": { "fleet": { "type": "stdio", "command": "uvx", "args": ["agents-fleet", "mcp"] } } }
 ```
 
 Visual Studio reads the same shape from `%USERPROFILE%\.mcp.json`.
@@ -137,7 +137,7 @@ Visual Studio reads the same shape from `%USERPROFILE%\.mcp.json`.
 <summary><b>OpenCode</b> (<code>~/.config/opencode/opencode.json</code>) and <b>Kilo Code</b> (<code>~/.config/kilo/kilo.json</code>) — ✓</summary>
 
 ```json
-{ "mcp": { "fleet": { "type": "local", "command": ["uvx", "agent-fleet", "mcp"], "enabled": true } } }
+{ "mcp": { "fleet": { "type": "local", "command": ["uvx", "agents-fleet", "mcp"], "enabled": true } } }
 ```
 </details>
 
@@ -145,7 +145,7 @@ Visual Studio reads the same shape from `%USERPROFILE%\.mcp.json`.
 <summary><b>Zed</b> — <code>~/.config/zed/settings.json</code> (Windows <code>%APPDATA%\Zed\settings.json</code>)</summary>
 
 ```json
-{ "context_servers": { "fleet": { "command": "uvx", "args": ["agent-fleet", "mcp"], "env": {} } } }
+{ "context_servers": { "fleet": { "command": "uvx", "args": ["agents-fleet", "mcp"], "env": {} } } }
 ```
 </details>
 
@@ -157,7 +157,7 @@ mcpServers:
   - name: fleet
     type: stdio
     command: uvx
-    args: ["agent-fleet", "mcp"]
+    args: ["agents-fleet", "mcp"]
 ```
 </details>
 
@@ -170,7 +170,7 @@ extensions:
     name: fleet
     type: stdio
     cmd: uvx
-    args: [agent-fleet, mcp]
+    args: [agents-fleet, mcp]
     enabled: true
     timeout: 300
 ```
@@ -182,7 +182,7 @@ extensions:
 ```toml
 [mcp_servers.fleet]
 command = "uvx"
-args = ["agent-fleet", "mcp"]
+args = ["agents-fleet", "mcp"]
 ```
 </details>
 
@@ -190,7 +190,7 @@ args = ["agent-fleet", "mcp"]
 <summary><b>Amp</b> — <code>~/.config/amp/settings.json</code></summary>
 
 ```json
-{ "amp.mcpServers": { "fleet": { "command": "uvx", "args": ["agent-fleet", "mcp"] } } }
+{ "amp.mcpServers": { "fleet": { "command": "uvx", "args": ["agents-fleet", "mcp"] } } }
 ```
 </details>
 
@@ -202,7 +202,7 @@ args = ["agent-fleet", "mcp"]
 name = "fleet"
 transport = "stdio"
 command = "uvx"
-args = ["agent-fleet", "mcp"]
+args = ["agents-fleet", "mcp"]
 ```
 </details>
 

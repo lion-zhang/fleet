@@ -47,7 +47,7 @@ powershell -ExecutionPolicy ByPass -c "irm https://raw.githubusercontent.com/lio
 ```
 
 The installer fetches [uv](https://docs.astral.sh/uv) if it is missing, installs fleet
-(the [agent-fleet](https://pypi.org/project/agent-fleet/) package; the command is
+(the [agents-fleet](https://pypi.org/project/agents-fleet/) package; the command is
 `fleet`), puts it on the PATH of every new shell, and runs `fleet setup`: this machine
 becomes the center of a new fleet (§2), and every supported agent installed here learns to
 use it (§4). Run it again any time to upgrade; it leaves the fleet alone.
@@ -66,8 +66,8 @@ Two options: `--join CODE` installs a member of an existing fleet instead (§3),
 Prefer to do it yourself? Any of these install the same thing:
 
 ```bash
-uv tool install agent-fleet && uv tool update-shell
-pipx install agent-fleet
+uv tool install agents-fleet && uv tool update-shell
+pipx install agents-fleet
 ```
 
 `uv tool update-shell` is not optional everywhere: on Ubuntu, root's shell never has

@@ -224,7 +224,7 @@ yourself: ask the user which of the two modes this machine is for --
   work from), starting a new fleet:
   - macOS / Linux: `curl -LsSf https://raw.githubusercontent.com/lion-zhang/fleet/main/install.sh | sh`
   - Windows: `powershell -ExecutionPolicy ByPass -c "irm https://raw.githubusercontent.com/lion-zhang/fleet/main/install.ps1 | iex"`
-  - or `uv tool install agent-fleet`
+  - or `uv tool install agents-fleet`
 - **member** of a fleet that already exists: `fleet invite` on that fleet's center
   prints the one line to paste here.
 """

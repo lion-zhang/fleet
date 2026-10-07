@@ -369,7 +369,7 @@ def test_a_windows_device_gets_powershell_not_sh():
 
     script = install_script("https://github.com/x/y.git", platform=WINDOWS)
     assert "$ErrorActionPreference" in script
-    assert "uv tool install --force --reinstall-package agent-fleet" in script
+    assert "uv tool install --force --reinstall-package agents-fleet" in script
     assert "crontab" not in script, "Windows never had the timer this cleans up"
 
 
@@ -539,7 +539,7 @@ def test_the_repo_is_found_from_the_clone_an_install_left(tmp_path, monkeypatch)
 
 
 def test_installed_from_pypi_the_repo_is_the_one_it_was_published_from(tmp_path, monkeypatch):
-    """No clone anywhere: installed with `uv tool install agent-fleet` or install.sh."""
+    """No clone anywhere: installed with `uv tool install agents-fleet` or install.sh."""
     from fleet import cli
     from fleet.config import Config
 

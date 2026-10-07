@@ -1,10 +1,10 @@
 name: release
 
-# Publishing a GitHub release (tag vX.Y.Z) puts that version on PyPI as agent-fleet and
+# Publishing a GitHub release (tag vX.Y.Z) puts that version on PyPI as agents-fleet and
 # attaches the wheel, the sdist and the Claude Desktop bundle (fleet.mcpb) to it.
 #
 # PyPI is reached by Trusted Publishing: no token is stored anywhere. pypi.org must list
-# this repository, this file and the `pypi` environment as a publisher of agent-fleet.
+# this repository, this file and the `pypi` environment as a publisher of agents-fleet.
 
 on:
   release:
