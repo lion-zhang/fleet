@@ -191,20 +191,42 @@ def rename_device(conn: sqlite3.Connection, old_id: str, new_id: str) -> None:
     conn.commit()
 
 
-def latest(conn: sqlite3.Connection, device_id: str) -> tuple[dict | None, dict | None]:
-    """Return (state_row, snapshot_dict) -- either may be None."""
-    # First-hand always wins, even when the relayed row is newer. A probe we ran
-    # ourselves is evidence; one the center relayed is hearsay about a machine we may
-    # not be able to reach at all, and quietly preferring it because of a clock would
-    # make `fleet ls` describe someone else's view of the fleet as though it were ours.
-    st = conn.execute(
-        "SELECT * FROM device_state WHERE device_id=? "
-        "ORDER BY CASE source WHEN 'self' THEN 0 ELSE 1 END LIMIT 1", (device_id,)).fetchone()
+# What a member's own probe says when it simply cannot get to a machine -- not when the
+# machine answered and something was wrong with it.
+_CANNOT_REACH = frozenset({Status.TIMEOUT.value, Status.UNREACHABLE.value,
+                           Status.AUTH_FAILED.value, Status.REFUSED.value})
+
+
+def latest(conn: sqlite3.Connection, device_id: str, *,
+           relayed_over_unreachable: bool = False) -> tuple[dict | None, dict | None]:
+    """Return (state_row, snapshot_dict) -- either may be None.
+
+    First-hand wins, even when the relayed row is newer. A probe we ran ourselves is
+    evidence; one the center relayed is hearsay about a machine we may not be able to
+    reach at all, and quietly preferring it because of a clock would make `fleet ls`
+    describe someone else's view of the fleet as though it were ours.
+
+    Except, with `relayed_over_unreachable`, when our own probe only says we could not
+    get there. fleet needs the center to reach every machine, not every machine to reach
+    every other: a member with no route or no key to a machine reported it down while
+    the center had just measured it fine. Then the center's healthy reading, newer than
+    our last success, is shown -- as relayed, with its age. For members only: on the
+    center its own failure is the fact that matters, since it is the one that manages.
+    """
+    rows = {r["source"]: dict(r) for r in conn.execute(
+        "SELECT * FROM device_state WHERE device_id=?", (device_id,)).fetchall()}
+    mine, relayed = rows.get("self"), rows.get("broadcast")
+    st = mine or relayed
+    use = "self" if mine else "broadcast"
+    if (relayed_over_unreachable and mine and relayed
+            and mine["status"] in _CANNOT_REACH and relayed["status"] == Status.OK.value
+            and (relayed["last_probe_at"] or 0) > (mine["last_ok_at"] or 0)):
+        st, use = relayed, "broadcast"
     sn = conn.execute(
         "SELECT payload FROM snapshot WHERE device_id=? "
-        "ORDER BY CASE source WHEN 'self' THEN 0 ELSE 1 END, ts DESC LIMIT 1",
-        (device_id,)).fetchone()
-    return (dict(st) if st else None, json.loads(sn["payload"]) if sn else None)
+        "ORDER BY CASE source WHEN ? THEN 0 ELSE 1 END, ts DESC LIMIT 1",
+        (device_id, use)).fetchone()
+    return (st, json.loads(sn["payload"]) if sn else None)
 
 
 def age_s(state: dict | None) -> int | None:

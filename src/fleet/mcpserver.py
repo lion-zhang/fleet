@@ -226,12 +226,21 @@ def build_server():
         return _run(["invite", *([name] if name else []), "--ttl", valid_for, "--json"])
 
     @server.tool(description="Label a machine, or change what it costs per hour (for the "
-                             "$/HR column and burn rate) or how it is reached. Tags are yours; "
-                             "measured facts such as cuda or vram-24g come from probes.")
+                             "$/HR column and burn rate), how it is reached, or which disks "
+                             "to watch for free space: disk_paths means exactly these paths "
+                             "from now on -- for a container or rental whose `/` is not "
+                             "where the space is -- and autodetect_disks goes back. Tags are "
+                             "yours; measured facts such as cuda or vram-24g come from probes.")
     def edit_machine(name: str, add_tags: list[str] | None = None,
                      remove_tags: list[str] | None = None, cost_per_hour: float | None = None,
-                     ssh_command: str | None = None) -> Any:
+                     ssh_command: str | None = None,
+                     disk_paths: list[str] | None = None,
+                     autodetect_disks: bool = False) -> Any:
         args = ["edit", name, "--json"]
+        for path in disk_paths or []:
+            args += ["--disk-path", path]
+        if autodetect_disks:
+            args += ["--clear-disk-paths"]
         for t in add_tags or []:
             args += ["--tag", t]
         for t in remove_tags or []:

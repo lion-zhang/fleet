@@ -452,3 +452,30 @@ def test_a_relayed_reading_keeps_its_age(tmp_path, monkeypatch):
     assert st["last_probe_at"] == three_days_ago
     assert not store.is_fresh(st, 60)
     assert st["error_class"] == "timeout" and st["error_detail"] == "no answer"
+
+
+def test_a_member_shows_the_centers_reading_of_a_machine_it_cannot_reach(tmp_path, monkeypatch):
+    """fleet needs the center to reach every machine, not members to reach each other. A
+    member with no route or no key to a machine showed it down while the center had
+    just measured it fine. Not on the center, whose own failure is what matters."""
+    import time
+
+    from fleet.models import ProbeResult, Snapshot, Status
+    from fleet.state import store
+
+    monkeypatch.setattr(store, "DB_PATH", tmp_path / "cache.db")
+    conn = store.connect()
+    try:
+        store.record(conn, "id:nas", ProbeResult(status=Status.AUTH_FAILED), source="self")
+        store.record(conn, "id:nas", ProbeResult(status=Status.OK, snapshot=Snapshot(hostname="nas")),
+                     source="broadcast", at=int(time.time()) + 1)
+        on_member, snap = store.latest(conn, "id:nas", relayed_over_unreachable=True)
+        on_center, _ = store.latest(conn, "id:nas")
+        assert on_member["source"] == "broadcast" and on_member["status"] == "ok"
+        assert snap["hostname"] == "nas"
+        assert on_center["source"] == "self" and on_center["status"] == "auth_failed"
+        # a machine that answered and failed is still reported as it answered
+        store.record(conn, "id:nas", ProbeResult(status=Status.PROBE_ERROR), source="self")
+        assert store.latest(conn, "id:nas", relayed_over_unreachable=True)[0]["source"] == "self"
+    finally:
+        conn.close()
