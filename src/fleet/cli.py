@@ -38,7 +38,7 @@ from .install import (NOTHING_TO_UPDATE, build_install_argv, install_script,
                       local_install_argv, payload_for)
 from .mcpserver import McpUnavailable, serve as serve_mcp
 from .models import Device, Kind, Status
-from .onboard import onboard, onboard_self
+from .onboard import derive_id, onboard, onboard_self
 from .ops import FleetError, identity
 from .ops import sync as _sync
 from .ops.enrol import (finish_add as _enrol_after_add,
@@ -423,32 +423,82 @@ def _split_a_clone(devices, dev, res) -> None:
     Dedupe on machine-id is what makes one box reached two ways into one record. But VMs
     and containers cloned from one image share the id too, and on a real fleet the
     second clone was merged into the first as "one device, not two": unreachable by its
-    own name, with two pinned keys claiming one device. A machine's own hostname,
-    measured from inside it, is what tells them apart -- one box answering on two
-    addresses still reports one hostname.
+    own name, with two pinned keys claiming one device.
+
+    Asked of the machines themselves, not of what was recorded: the known machine is
+    measured again now, at its own address. If it answers as the same machine-id but
+    another host -- another hostname, or booted at another time -- there are two of
+    them. One box reached two ways is one host at one boot. Only when the known machine
+    cannot be reached is its last reading used, and then only the hostname can tell.
+
+    The clone gets an id of its own, and that id is written on it (see
+    `identity.assigned_id`), so its own fleet and every later probe agree with the
+    center about which machine it is -- rather than splitting it again on every add,
+    or the clone believing it is the machine it was cloned from.
     """
+    import secrets
+
     from .onboard import slugify
 
     existing = inv.find_exact(devices, dev.id)
-    host = res.snapshot.hostname if res.snapshot else ""
-    if existing is None or not host:
+    new = res.snapshot
+    if existing is None or existing.id != dev.id or new is None:
         return
-    conn = store.connect()
-    try:
-        _, snap = store.latest(conn, existing.id)
-    finally:
-        conn.close()
-    before = (snap or {}).get("hostname") or ""
-    if not before or before == host:
-        return
-    dev.id = f"{dev.id}:{slugify(host)}"
+    new_eps = inv.endpoints_of(dev)
+    old_eps = sorted(inv.endpoints_of(existing), key=lambda e: e.preference)
+    if new_eps and any((e.target, e.port) == (new_eps[0].target, new_eps[0].port)
+                       for e in old_eps):
+        return                              # the same address: the same machine
+    host = new.hostname or ""
+    other, why = None, ""
+    if old_eps:
+        now = run_probe(old_eps[0], mode=existing.probe_mode, timeout=15)
+        if now.snapshot is not None:
+            if derive_id(now.snapshot, old_eps[0]) != dev.id:
+                return                      # its old address is someone else now: moved
+            other = now.snapshot
+    if other is not None:
+        booted = lambda s: (s.ts - s.uptime_s) if s.uptime_s is not None else None
+        b_old, b_new = booted(other), booted(new)
+        if other.hostname and host and other.hostname != host:
+            why = f"calls itself {host!r}, not {other.hostname!r}"
+        elif b_old is not None and b_new is not None and abs(b_old - b_new) > 120:
+            why = "is running at the same time, booted at another moment"
+        else:
+            return                          # one host, one boot: one machine, two routes
+    else:
+        conn = store.connect()
+        try:
+            _, snap = store.latest(conn, existing.id)
+        finally:
+            conn.close()
+        before = (snap or {}).get("hostname") or ""
+        if not before or not host or before == host:
+            return
+        why = f"calls itself {host!r}, not {before!r}"
+
+    taken_ids = {d.id for d in devices}
+    suffix = slugify(host) if host and host != (other.hostname if other else "") else ""
+    new_id = f"{dev.id}:{suffix}" if suffix else ""
+    while not new_id or new_id in taken_ids:
+        new_id = f"{dev.id}:{secrets.token_hex(3)}"
+    dev.id = new_id
     if dev.name == existing.name:
-        dev.name = inv_unique(devices, slugify(host))
+        dev.name = inv_unique(devices, slugify(host) or existing.name)
     console.print(f"  [yellow]![/yellow] {dev.name} shares a machine-id with "
-                  f"{existing.name} but calls itself {host!r}, not {before!r} -- most "
-                  "likely cloned from the same image. Recorded as a separate machine.")
-    console.print("  [dim]give it its own id to make this go away: "
-                  "`systemd-machine-id-setup` (after emptying /etc/machine-id) on it[/dim]")
+                  f"{existing.name} but {why} -- most likely cloned from the same image. "
+                  "Recorded as a separate machine.")
+    from .reconcile import _remote
+    from .ssh.keys import remote_device_id_command
+
+    plat = remote_platform({"uname_s": new.uname_s, "os": new.os})
+    ok, said = _remote(new_eps[0], remote_device_id_command(new_id, platform=plat),
+                       platform=plat, capture=True) if new_eps else (False, "")
+    if not (ok and "ok" in said):
+        console.print("  [dim]its id could not be written on it, so it may be taken for "
+                      f"{existing.name} again; giving it a machine-id of its own fixes "
+                      "that: `systemd-machine-id-setup` (after emptying /etc/machine-id) "
+                      "on it[/dim]")
 
 
 def inv_unique(devices, wanted: str) -> str:

@@ -29,7 +29,43 @@ def local_device_id() -> str:
     fleet key, as joining does (`join._stable_id`): otherwise every such machine was
     `net:localhost:22`, one id for all of them, and none ever recognised its own record.
     """
-    return _machine_id() or _key_id()
+    base = _machine_id() or _key_id()
+    return assigned_id(base) or base
+
+
+def device_id_file() -> Path:
+    """Where fleet keeps the id it gave this machine because it is a clone of another."""
+    from .. import config
+
+    return config.CONFIG_DIR / "device-id"
+
+
+def assigned_id(base: str) -> str:
+    """The id written for this machine as a clone, if it still describes this machine.
+
+    Only an id that extends `base` -- the one derived from this machine's own
+    machine-id -- counts. A file carried over into an image whose machine-id was then
+    regenerated describes the machine it was copied from, not this one.
+    """
+    try:
+        text = device_id_file().read_text(encoding="utf-8").strip()
+    except OSError:
+        return ""
+    return text if base and text.startswith(base + ":") else ""
+
+
+def adopt_id(device_id: str) -> None:
+    """Record the id the fleet knows this machine by, when it differs from the derived
+    one (see `assigned_id`). Removes the file when they agree again."""
+    from ..state.writes import atomic_write
+
+    base = _machine_id() or _key_id()
+    path = device_id_file()
+    if device_id and device_id.startswith(base + ":"):
+        path.parent.mkdir(parents=True, exist_ok=True)
+        atomic_write(path, device_id + "\n", mode=0o644)
+    elif device_id == base and path.exists():
+        path.unlink()
 
 
 def _key_id() -> str:

@@ -37,6 +37,14 @@ if [ -z "$machine_id" ] && [ "$OS" = "Darwin" ] && have ioreg; then
     | awk -F'"' '/IOPlatformUUID/{print $4; exit}' | clean)
 fi
 emit host.machine_id "$machine_id"
+# The id fleet gave this machine when it found it shares its machine-id with another --
+# a clone of the same image. Written by the center (or by `fleet join`) into fleet's
+# config folder here, and read by fleet on this machine too, so all agree which it is.
+device_id=""
+for f in "$HOME/.config/fleet/device-id" "$HOME/Library/Application Support/fleet/device-id"; do
+  if [ -r "$f" ]; then device_id=$(head -n 1 "$f" 2>/dev/null | clean); break; fi
+done
+emit host.device_id "$device_id"
 
 os_pretty=""
 if [ -r /etc/os-release ]; then

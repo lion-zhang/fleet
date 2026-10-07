@@ -462,6 +462,13 @@ def join(code: str, *, name: str = "", ssh_command: str = "") -> dict:
     # Found by key, not id: the center may have given us an id of its own (see
     # `_stable_id`), and the key is the one thing both sides agree this machine is.
     me = next((d for d in inv.live(incoming) if d.pubkey.strip() == pub.strip()), None)
+    if me is not None and not me.id.startswith(("key:", "net:")):
+        # The center may have kept this machine apart from another with the same
+        # machine-id -- a clone of one image -- under an id of its own. Remembered here,
+        # so this machine's fleet agrees about which machine it is.
+        from . import identity
+
+        identity.adopt_id(me.id)
     joined_as = me.name if me else dev.name
     eps = inv.endpoints_of(me) if me else []
     reach = eps[0] if eps else None
