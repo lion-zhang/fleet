@@ -74,7 +74,7 @@ from .ssh.keys import (ensure_keypair, install_key, install_key_over_existing_ac
                        pty_available)
 from .state import access as acl
 from .state import inventory as inv
-from .state import store
+from .state import clock, store
 from .ui import (DOT as _DOT, chatter_to_stderr as _chatter_to_stderr, console,
                  emit as _emit, err)
 
@@ -1224,18 +1224,21 @@ def cmd_sync(serve: bool = typer.Option(False, "--serve",
         pinned = acl.trusted_center_pubkey()
         relayed = []
         url = ""
+        sent_at = 0
         try:
             if pinned:
                 note, signer = acl.unseal_trusting(raw, pinned)
                 if signer != pinned:
                     acl.pin_center_pubkey(signer)     # walked a signed handover to it
                 body, relayed, url = note["inventory"], note["telemetry"], note["center_url"]
+                sent_at = note.get("sent_at", 0)
             else:
                 body = acl.unseal_first_contact(raw)
         except acl.AccessError as exc:
             err.print(f"[red]{exc}[/red]")
             raise typer.Exit(2)
         acl.note_center_seen()
+        clock.note_center_time(sent_at)
         # Learned here, over a payload already signed by the key this machine pinned at
         # enrolment. After this it can refresh itself and stop waiting to be swept.
         acl.note_center_url(url)
@@ -1257,7 +1260,7 @@ def cmd_sync(serve: bool = typer.Option(False, "--serve",
         # timestamp -- and later authoritative pulls, tied on that timestamp, never
         # took them away.
         merged, changes = inv.update(
-            lambda current: inv.merge(current, incoming, authoritative=True))
+            lambda current: inv.merge_from_center(current, incoming, sent_at=sent_at))
         sys.stdout.write(inv.dumps(merged))
         return
 

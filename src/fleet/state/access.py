@@ -470,8 +470,9 @@ def seal(inventory_yaml: str, *, key_path: Path | None = None,
     # `join` reports as having no key at all.
     key_path = key_path or config.FLEET_KEY
     chain = handover_chain() if key_path == config.FLEET_KEY else []
+    # `sent_at`: a member corrects its clock by it (state/clock.py).
     inner = {"inventory": inventory_yaml, "telemetry": telemetry or [],
-             "center_url": center_url}
+             "center_url": center_url, "sent_at": int(time.time())}
     if fleet_id:
         inner["fleet_id"] = fleet_id
     if claims:
@@ -533,7 +534,15 @@ def unseal(payload: str, signer_pubkey: str) -> dict:
             "telemetry": list(inner.get("telemetry") or []),
             "center_url": str(inner.get("center_url") or ""),
             "fleet_id": str(inner.get("fleet_id") or ""),
-            "claims": dict(inner.get("claims") or {})}
+            "claims": dict(inner.get("claims") or {}),
+            "sent_at": _int_or_zero(inner.get("sent_at"))}
+
+
+def _int_or_zero(value) -> int:
+    try:
+        return int(value or 0)
+    except (TypeError, ValueError):
+        return 0
 
 
 def claimed_signer(payload: str) -> str:

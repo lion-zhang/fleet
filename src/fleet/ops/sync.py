@@ -21,7 +21,7 @@ import yaml
 
 from ..state import access as acl
 from ..state import inventory as inv
-from ..state import store
+from ..state import clock, store
 from ..config import DEFAULT_PORT, load_config
 from ..models import Status
 from ..ssh.cmd import build_argv, run as sshrun
@@ -145,26 +145,42 @@ def telemetry_to_relay() -> list[dict]:
         for r in rows:
             _, snap = store.latest(conn, r["device_id"])
             out.append({"device_id": r["device_id"], "status": r["status"],
-                        "probed_at": r["last_probe_at"], "snapshot": snap,
+                        # in the center's clock: a member converts its own
+                        "probed_at": (r["last_probe_at"] or 0) + clock.offset()
+                        if r["last_probe_at"] else r["last_probe_at"],
+                        "snapshot": snap,
                         "error_class": r["error_class"] or "",
                         "error_detail": r["error_detail"] or ""})
         return out
     finally:
         conn.close()
 
-def record_relayed(rows: list) -> None:
-    """Store rows the center measured, marked as second-hand.
+def record_relayed(rows: list, *, sender_id: str | None = None,
+                   by: str = "center") -> None:
+    """Store readings another machine took, marked as second-hand.
 
     Never overwrites a probe we ran: `store.latest` prefers first-hand, so our own
-    reading of a machine we can reach always wins over the center's view of it.
+    reading of a machine we can reach always wins over someone else's view of it.
+
+    `sender_id` is set when the center takes readings from a member. Then a member is
+    believed about itself, and about machines the center has never measured itself --
+    the ones it cannot reach, which is why it would want a member's reading at all. About
+    a machine the center measures, a member's word could only make it look freer or
+    busier than it is, which steers where work goes; that is left out.
     """
     from ..models import ProbeResult, Snapshot
 
-    by = ""
     conn = store.connect()
     try:
+        measured: set[str] = set()
+        if sender_id is not None:
+            measured = {r["device_id"] for r in conn.execute(
+                "SELECT device_id FROM device_state WHERE source='self'").fetchall()}
         for row in rows:
             if not isinstance(row, dict) or not row.get("device_id"):
+                continue
+            if (sender_id is not None and row["device_id"] != sender_id
+                    and row["device_id"] in measured):
                 continue
             snap = None
             if isinstance(row.get("snapshot"), dict):
@@ -179,7 +195,8 @@ def record_relayed(rows: list) -> None:
                                          error_class=str(row.get("error_class") or ""),
                                          error_detail=str(row.get("error_detail") or "")[:200]),
                              source="broadcast", probed_by=by or "center",
-                             at=int(at) if at else None)
+                             # the sender's clock is the center's; ours may not be
+                             at=clock.to_local(int(at)) if at else None)
     finally:
         conn.close()
 
@@ -242,7 +259,9 @@ def _refresh(url: str, pinned: str) -> None:
         return
     if signer != pinned:
         acl.pin_center_pubkey(signer)      # a signed handover led here from our pin
-    inv.update(lambda current: inv.merge(current, incoming, authoritative=True))
+    clock.note_center_time(note.get("sent_at", 0))
+    inv.update(lambda current: inv.merge_from_center(current, incoming,
+                                                     sent_at=note.get("sent_at", 0)))
     if note["telemetry"]:
         record_relayed(note["telemetry"])
     acl.note_center_seen()
@@ -292,8 +311,9 @@ def join(url: str) -> str:
     except Exception as exc:
         raise FleetError(f"unreadable inventory from {url}: {exc}")
 
-    _, changes = inv.update(lambda current: inv.merge(current, incoming,
-                                                     authoritative=True))
+    clock.note_center_time(note.get("sent_at", 0))
+    _, changes = inv.update(lambda current: inv.merge_from_center(
+        current, incoming, sent_at=note.get("sent_at", 0)))
     if note["telemetry"]:
         record_relayed(note["telemetry"])
     acl.note_center_seen()

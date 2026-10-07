@@ -14,6 +14,7 @@ from pathlib import Path
 
 import yaml
 
+from . import clock
 from .writes import QueueTimeout, atomic_write, turn
 
 from ..config import INVENTORY_PATH, ensure_dirs
@@ -252,7 +253,7 @@ def remove(devices: list[Device], dev: Device | None) -> None:
     """Mark a device deleted. The record stays so the deletion can propagate."""
     if dev is None:
         return
-    dev.deleted_at = int(time.time())
+    dev.deleted_at = clock.now()
     touch(dev)
 
 
@@ -265,8 +266,8 @@ def prune_tombstones(devices: list[Device]) -> list[Device]:
 
 def touch(dev: Device) -> None:
     """Stamp a mutation. Every command that edits a device must call this, or the merge
-    has nothing to break a tie with."""
-    dev.updated_at = int(time.time())
+    has nothing to break a tie with. On a member, by the center's clock (see clock.py)."""
+    dev.updated_at = clock.now()
 
 
 def _endpoint_key(e: dict) -> tuple:
@@ -368,6 +369,21 @@ def from_member(current: list[Device], incoming: list[Device], sender_id: str) -
     return out
 
 
+def merge_from_center(local: list[Device], remote: list[Device], *,
+                      sent_at: int = 0) -> tuple[list[Device], list[str]]:
+    """Take the center's signed inventory, on a member.
+
+    Authoritative, and first: nothing here can be newer than the moment the center
+    answered. A record this member stamped with a clock running ahead would otherwise
+    beat every change the center made to it until that clock caught up.
+    """
+    if sent_at:
+        for d in local:
+            if d.updated_at > sent_at:
+                d.updated_at = sent_at
+    return merge(local, remote, authoritative=True)
+
+
 def merge(local: list[Device], remote: list[Device], *,
           authoritative: bool = False) -> tuple[list[Device], list[str]]:
     """Combine two inventories. Returns (merged, human-readable changes).
@@ -451,5 +467,6 @@ def upsert(devices: list[Device], new: Device) -> tuple[list[Device], str]:
             if restored:
                 return devices, "restored"
             return devices, "endpoint_added" if added else "unchanged"
+    touch(new)
     devices.append(new)
     return devices, "added"

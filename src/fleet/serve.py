@@ -137,7 +137,8 @@ def exchange(raw: str) -> tuple[int, str]:
     merged, _ = inv.update(
         lambda current: inv.merge(current, inv.from_member(current, incoming, own)))
     if note["telemetry"]:
-        record_relayed(note["telemetry"])
+        record_relayed(note["telemetry"], sender_id=own,
+                       by=(acc.keys.get(acl.fingerprint(signer)) or {}).get("name", "") or "member")
     if note.get("claims", {}).get("center_key") == "present":
         _note_center_key_present(acc, acl.fingerprint(signer))
     return 200, acl.seal(inv.dumps(merged), telemetry=telemetry_to_relay(),

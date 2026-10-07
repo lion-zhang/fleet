@@ -452,7 +452,11 @@ def join(code: str, *, name: str = "", ssh_command: str = "") -> dict:
                          "update fleet on the center and try again")
 
     acl.pin_center_pubkey(center_pub)
-    _, changes = inv.update(lambda current: inv.merge(current, incoming, authoritative=True))
+    from ..state import clock
+
+    clock.note_center_time(note.get("sent_at", 0))
+    _, changes = inv.update(lambda current: inv.merge_from_center(
+        current, incoming, sent_at=note.get("sent_at", 0)))
     if note["telemetry"]:
         record_relayed(note["telemetry"])
     acl.note_center_seen()
