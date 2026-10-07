@@ -143,16 +143,31 @@ prints the key. It works with nothing reachable, which is the point. Paste it wh
 provider asks for an SSH key; once the machine is up, `fleet add "ssh root@ADDRESS"` needs
 no password at all.
 
-## Machines on other networks
+## Networks: what must reach what
 
-The center must be able to reach every machine it manages, because adding and removing
-keys means connecting to it. A machine needs a public address, a shared LAN with the
-center, or membership of an overlay network. fleet works with any overlay — Tailscale,
-ZeroTier, Nebula, Netbird, plain WireGuard — and needs nothing but an address it can
-route to.
+**fleet does not solve connectivity.** It uses whatever route already exists, and it
+needs only one: **the center must be able to reach every machine over SSH.** The machines
+do not need to reach one another.
+
+| From → to | What it is for | Needed? |
+|---|---|---|
+| center → every machine, SSH | adding, measuring, placing and removing keys, sharing the inventory | **always** |
+| member → center, TCP 7373 | joining with an invite; a member asking for fresh information | for [members](center.md) |
+| one machine → another | using a grant you made between them — running work from one on the other | only if you grant it |
+
+**Machines behind different NATs** — at home, in the office, rentals in a datacenter —
+cannot reach one another directly. Put them on a mesh network such as
+[Tailscale](https://tailscale.com) or [ZeroTier](https://www.zerotier.com) (Nebula,
+Netbird and plain WireGuard work too), and add them by their mesh address or name:
+"add `ssh ubuntu@100.101.102.103`". fleet needs nothing but an address it can route to,
+and recognises mesh addresses (the `mesh` [fact](../reference/facts.md)).
 
 A machine the center cannot reach at all can still [join](#let-the-machine-join-by-itself)
-and report what it has; granting access to it waits until the center can reach it.
+and report what it has, but the center cannot place or remove keys on it until it can.
+
+A member measures the machines it can reach itself. One it cannot reach shows there as
+unreachable *from that member*, even when the center sees it fine — which is accurate for
+running work from that member, since `fleet ssh` connects directly.
 
 **Tailscale SSH and similar** answer ssh themselves and decide who may log in from their
 own access rules, not from `authorized_keys`. fleet measures and connects to such a

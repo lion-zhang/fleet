@@ -278,12 +278,14 @@ Re-point it, keeping its name, tags, cost and history: "gpu-box is now at
 </details>
 
 <details>
-<summary><b>Does it work behind NAT, or across sites?</b></summary>
+<summary><b>My machines are behind different NATs, or at different sites.</b></summary>
 
-The center needs an address it can reach each machine at: a public IP, a LAN, or an
-overlay such as Tailscale, ZeroTier or WireGuard. A machine the center cannot reach can
-still join with an invite and report what it has. See
-[Adding machines](docs/guides/add-machines.md#machines-on-other-networks).
+fleet does not solve connectivity; it uses the routes you have. It needs only one: **the
+center must reach every machine over SSH** (and members must reach the center). The
+machines do not need to reach each other, unless you grant one access to another. For
+machines behind different NATs, put them on a mesh network such as Tailscale or ZeroTier
+and add them by their mesh address. See
+[Networks](docs/guides/add-machines.md#networks-what-must-reach-what).
 </details>
 
 <details>

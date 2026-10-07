@@ -9,8 +9,10 @@ You need:
 
 - a coding agent that can run commands — Claude Code, Codex, Gemini CLI, Copilot CLI,
   OpenCode or [any other](guides/agents.md);
-- one more machine you can already reach with `ssh`: a server, a desktop, a cloud VM or a
-  GPU rental. Nothing has to be installed on it.
+- one more machine you can already reach with `ssh` from the first one: a server, a
+  desktop, a cloud VM or a GPU rental. Nothing has to be installed on it. If the two are
+  behind different NATs, put them on a mesh network such as Tailscale or ZeroTier first
+  ([why](guides/add-machines.md#networks-what-must-reach-what)).
 
 ## 1. Choose the center
 
