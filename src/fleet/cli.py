@@ -876,13 +876,12 @@ def run_installer(ep, script: str, *, forward_agent: bool = True,
 
 @app.command("install")
 def cmd_install(name: str = typer.Argument(None,
-                                          help="defaults to this machine"),
+                                          help="the machine to install fleet on"),
                 repo: str = typer.Option(None, "--repo", metavar="URL",
                                          help="git URL to clone; defaults to config or this checkout"),
                 ref: str = typer.Option("main", "--ref", help="branch or tag to install"),
-                role: str = typer.Option(None, "--role",
-                                         help="none (the only role a device takes here; "
-                                              "move the center with `fleet center`)"),
+                role: str = typer.Option(None, "--role", hidden=True,
+                                         help="kept for old scripts; only `none` is accepted"),
                 forward_agent: bool = typer.Option(True, "--forward-agent/--no-forward-agent",
                                                    help="authenticate the clone as you, "
                                                         "leaving no credential on the device")):
@@ -899,8 +898,19 @@ def cmd_install(name: str = typer.Argument(None,
         # being told it was invalid.
         err.print("[red]Use [bold]fleet center NAME[/bold] to move the role.[/red]")
         raise typer.Exit(2)
+    if role not in (None, "none"):
+        # `backup` and anything else used to be recorded and then meant nothing.
+        err.print(f"[red]There is no {role!r} role.[/red] [dim]A machine is the center or "
+                  "it is not; move the role with fleet center NAME.[/dim]")
+        raise typer.Exit(2)
+    if name is None:
+        # This machine is never an ssh target -- its record has no address -- so
+        # "install here" could only fail with "no endpoint recorded".
+        err.print("[red]Name the machine to install fleet on.[/red] [dim]This one already "
+                  "runs fleet: [bold]fleet update[/bold] updates it.[/dim]")
+        raise typer.Exit(2)
     devices = inv.load()
-    dev = _this_machine(devices, "update") if name is None else inv.find(devices, name)
+    dev = inv.find(devices, name)
     if dev is None:
         err.print(f"[red]No device named {name!r}[/red]")
         raise typer.Exit(1)

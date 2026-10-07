@@ -39,7 +39,6 @@ DEFAULTS: dict = {
     # dead host costs a connect timeout per attempt, and paying it on every `fleet ls`
     # made a machine being off cost seconds on every read, not just freshness.
     "offline_backoff_max_s": 1800,
-    "presence_ttl_s": 10,       # tailscale presence is nearly free, so refresh often
     "probe_timeout_s": 20,
     "connect_timeout_s": 8,
     "max_workers": 8,

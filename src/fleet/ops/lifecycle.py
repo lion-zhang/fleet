@@ -106,6 +106,10 @@ def dissolve(acc, *, force: bool) -> None:
                 console.print(f"[red]✗[/red] {dev.name} [dim]{out[:50]}[/dim]")
     finally:
         conn.close()
+        # Whatever happens next -- a refusal below, Ctrl+C, a machine that hung -- the
+        # removals already done are recorded, or the next attempt reads keys that are
+        # gone as still present.
+        rec.save_ledger(ledger)
 
     # One line per machine, not per edge: a machine holding three grants is one machine
     # to visit, and listing it three times read as three machines.
@@ -126,6 +130,11 @@ def dissolve(acc, *, force: bool) -> None:
                  acl.CHAIN_PATH, acl.INBOX_PATH, acl.HANDING_PATH):
         with suppress(OSError):
             path.unlink()
+    # The listener has no fleet to serve now, and left installed it was restarted by the
+    # service manager for good, exiting each time.
+    from .. import service
+    with suppress(Exception):
+        service.remove()
     console.print(f"\n[green]✓[/green] fleet {acc.fleet_id} dissolved; "
                   f"keys removed from {len(gone)} machine(s).")
     if left:

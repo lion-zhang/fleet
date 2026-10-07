@@ -205,13 +205,12 @@ fleet install machine_A
 
 | Argument | |
 |---|---|
-| `NAME` | defaults to this machine |
+| `NAME` | the machine to install fleet on |
 
 | Option | |
 |---|---|
 | `--repo` `URL` | git URL to clone; defaults to config or this checkout |
 | `--ref` | branch or tag to install (default: `main`) |
-| `--role` | none (the only role a device takes here; move the center with `fleet center`) |
 | `--forward-agent`, `--no-forward-agent` | authenticate the clone as you, leaving no credential on the device |
 
 ## fleet update

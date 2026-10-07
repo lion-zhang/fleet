@@ -169,3 +169,20 @@ def _windows_authorized_keys_stay_in_the_test(monkeypatch):
     # every module that took its own reference at import
     for mod in (authkeys, reconcile, handover, lifecycle, member):
         monkeypatch.setattr(mod, "sync_command", in_the_test_home)
+
+
+@pytest.fixture(autouse=True)
+def _no_real_service_manager(monkeypatch, request):
+    """No test may install, start, stop or remove the developer's real fleet service.
+
+    Dissolving a fleet removes the center's service, and a test that dissolves one ran
+    `systemctl --user disable fleet-center` (or launchctl, or schtasks) on whatever
+    machine ran the suite. test_service.py tests those functions themselves, against
+    mocked commands, and is left alone.
+    """
+    if request.module.__name__.endswith("test_service"):
+        return
+    from fleet import service
+
+    for name in ("install", "remove", "start", "stop"):
+        monkeypatch.setattr(service, name, lambda *a, _n=name, **k: f"{_n} (test: not run)")

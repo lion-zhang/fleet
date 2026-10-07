@@ -302,3 +302,25 @@ def test_a_revoke_that_has_not_landed_is_still_listed(a_fleet, monkeypatch):
     rows = json.loads(r.output)["edges"]
     assert {"from": "laptop", "to": "lin-xps", "user": "lin", "state": "revoking"}.items() \
         <= next(x for x in rows if x["from"] == "laptop").items()
+
+
+def test_a_finished_revoke_leaves_the_ledger(a_fleet):
+    """Every revoked edge stayed in the ledger, and in every sweep's plan, for good."""
+    ledger = rec.load_ledger()
+    ledger["SHA256:a>SHA256:b>root"] = rec.EdgeState(desired="absent", observed="absent")
+    ledger["SHA256:a>SHA256:c>root"] = rec.EdgeState(desired="absent", observed="present")
+    rec.save_ledger(ledger)
+    assert set(rec.load_ledger()) == {"SHA256:a>SHA256:c>root"}, "the pending one stays"
+
+
+def test_dissolving_removes_the_background_service(a_fleet, monkeypatch):
+    """Left installed, the service manager restarted a listener with no fleet to serve,
+    for good, and it exited every time."""
+    from fleet import service
+
+    runner, _ = a_fleet
+    removed = []
+    monkeypatch.setattr(service, "remove", lambda: removed.append(1) or "removed")
+    monkeypatch.setattr(rec, "apply_edge", lambda *a, **k: (True, ""))
+    assert runner.invoke(cli.app, ["center", "--dissolve"], input="y\n").exit_code == 0
+    assert removed == [1]
