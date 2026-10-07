@@ -125,7 +125,7 @@ def _first_run(command: str) -> None:
 
 @app.command("ls")
 def cmd_ls(names: list[str] = typer.Argument(None, help="only these devices"),
-           json_out: bool = typer.Option(False, "--json"),
+           json_out: bool = typer.Option(False, "--json", help="print JSON instead of a table, for scripts and agents"),
            refresh: bool = typer.Option(False, "--refresh", "-r", help="force a live probe"),
            online: bool = typer.Option(False, "--online", help="only reachable devices"),
            tag: list[str] = typer.Option(None, "--tag", metavar="NAME",
@@ -173,8 +173,8 @@ def cmd_ls(names: list[str] = typer.Argument(None, help="only these devices"),
 
 @app.command("show")
 def cmd_show(name: str = typer.Argument(None, help="defaults to this machine"),
-             json_out: bool = typer.Option(False, "--json"),
-             refresh: bool = typer.Option(True, "--refresh/--no-refresh")):
+             json_out: bool = typer.Option(False, "--json", help="print JSON instead of a table, for scripts and agents"),
+             refresh: bool = typer.Option(True, "--refresh/--no-refresh", help="probe it now; --no-refresh shows the last reading")):
     """Full detail for one device.
 
     [dim]Example:[/dim]  fleet show machine_A
@@ -294,15 +294,15 @@ _DID_NOT_ANSWER = (Status.TIMEOUT, Status.UNREACHABLE, Status.REFUSED, Status.CL
 def cmd_add(ssh_command: str = typer.Argument(None, help='e.g. "ssh -p 58418 root@1.2.3.4"'),
             this_machine: bool = typer.Option(False, "--self",
                                               help="record the machine you are on, with no ssh"),
-            name: str = typer.Option(None, "--name"),
+            name: str = typer.Option(None, "--name", help="what to call it; guessed from the host if omitted"),
             alias: str = typer.Option("", "--alias", metavar="SHORT",
                                       help="a short handle to type instead of the name"),
             tag: list[str] = typer.Option(None, "--tag", metavar="NAME",
                                           help="label it; repeatable. `fleet ls --tag NAME` "
                                                "finds it again"),
             kind: str = typer.Option(None, "--kind", help="permanent|rental|shared|appliance|mobile"),
-            json_out: bool = typer.Option(False, "--json"),
-            dry_run: bool = typer.Option(False, "--dry-run")):
+            json_out: bool = typer.Option(False, "--json", help="print JSON instead of a table, for scripts and agents"),
+            dry_run: bool = typer.Option(False, "--dry-run", help="probe and show what would be recorded; record nothing")):
     """Add a machine to the fleet, enrolling it.
 
     [dim]Example:[/dim]  fleet add "ssh -p 58418 root@1.2.3.4"
@@ -510,7 +510,7 @@ def cmd_invite(name: str = typer.Argument(None, help="what the machine will be c
                url_opt: str = typer.Option("", "--url", metavar="URL",
                                            help="the address the machine should dial; "
                                                 "defaults to where the center listens"),
-               json_out: bool = typer.Option(False, "--json")):
+               json_out: bool = typer.Option(False, "--json", help="print JSON instead of a table, for scripts and agents")):
     """Let one machine join by itself: print a code to run there with `fleet join`.
 
     The other way in. `fleet add` has the center dial the machine; an invite has the
@@ -633,7 +633,7 @@ def cmd_join(code: str = typer.Argument(..., help="the code `fleet invite` print
                                              help='how the center reaches this machine, '
                                                   'e.g. "ssh -p 2222 me@10.0.0.5"; '
                                                   "defaults to the address it sees"),
-             json_out: bool = typer.Option(False, "--json")):
+             json_out: bool = typer.Option(False, "--json", help="print JSON instead of a table, for scripts and agents")):
     """Join a fleet with an invite from its center. No password, nothing to approve.
 
     [dim]Example:[/dim]  fleet join fleet1:eyJ1Ijoi...
@@ -690,11 +690,11 @@ def cmd_edit(name: str = typer.Argument(None, help="defaults to this machine"),
                                            help="add a label; repeatable"),
              untag: list[str] = typer.Option(None, "--untag", metavar="NAME",
                                              help="remove a label; repeatable"),
-             role: str = typer.Option(None, "--role", help="none | center | backup"),
+             role: str = typer.Option(None, "--role", help="a label for what the machine is for; the center moves only with `fleet center NAME`"),
              cost: float = typer.Option(None, "--cost", metavar="USD",
                                         help="what it costs per hour, for the $/HR column "
-                                             "and idle-rental alerts; 0 clears it"),
-             json_out: bool = typer.Option(False, "--json")):
+                                             "and the fleet's burn rate; 0 clears it"),
+             json_out: bool = typer.Option(False, "--json", help="print JSON instead of a table, for scripts and agents")):
     """Change a device's address or settings after it was added.
 
     Rentals recycle IPs and ports, so `--ssh` re-points a device without losing its
@@ -886,10 +886,10 @@ def cmd_install(name: str = typer.Argument(None,
                 forward_agent: bool = typer.Option(True, "--forward-agent/--no-forward-agent",
                                                    help="authenticate the clone as you, "
                                                         "leaving no credential on the device")):
-    """Install fleet on a device so it can hold a copy of your state.
+    """Install fleet on a device, so you and its agents can use the fleet from there.
 
-    Every other device needs nothing installed. This is the exception: a backup node has
-    to run fleet, so fleet has to be there. Re-running updates an existing install.
+    A machine only reached *by* fleet needs nothing installed; this is for one you also
+    work on. It installs from git; re-running updates an existing install.
 
     [dim]Example:[/dim]  fleet install machine_A
     """
@@ -1009,7 +1009,7 @@ def _before_any_command(
 def cmd_update(name: str = typer.Argument(None, help="defaults to this machine"),
                everywhere: bool = typer.Option(False, "--all",
                                                help="every device that already runs fleet"),
-               repo: str = typer.Option(None, "--repo", metavar="URL"),
+               repo: str = typer.Option(None, "--repo", metavar="URL", help="git URL to deploy from; defaults to config or this checkout"),
                ref: str = typer.Option("main", "--ref", help="branch or tag")):
     """Deploy the newest fleet from git, to the machines that have it.
 
@@ -1117,7 +1117,7 @@ def cmd_sync(serve: bool = typer.Option(False, "--serve",
              from_url: str = typer.Option(None, "--from", metavar="URL",
                                           help="dial a center at this address and "
                                                "remember it, when it cannot reach you"),
-             json_out: bool = typer.Option(False, "--json")):
+             json_out: bool = typer.Option(False, "--json", help="print JSON instead of a table, for scripts and agents")):
     """Merge this machine's inventory with the center's.
 
     Safe to run anywhere and repeatedly: the merge is a union, the newer record wins,
@@ -1255,9 +1255,8 @@ def cmd_top(name: str = typer.Argument(None, help="one device, instead of the wh
                                            help="seconds between refreshes")):
     """Live view of the fleet, or of one device. Like htop, for your machines.
 
-    Shared hosts keep their own slow cadence (shared_min_interval_s) and are shown as
-    ageing rather than live, and anything unreachable backs off instead of being
-    redialled every couple of seconds.
+    Anything unreachable backs off instead of being redialled every couple of seconds.
+    Shared multi-user hosts are probed only when asked for by name (`fleet ls NAME`).
 
     [dim]Example:[/dim]  fleet top machine_A -i 1
     """
@@ -1362,7 +1361,8 @@ def _key_pressed(timeout: float) -> str | None:
 
 
 @app.command("rm")
-def cmd_rm(name: str, yes: bool = typer.Option(False, "--yes", "-y")):
+def cmd_rm(name: str = typer.Argument(..., help="the exact name; a prefix is never enough"),
+           yes: bool = typer.Option(False, "--yes", "-y", help="do not ask for confirmation")):
     """Remove a device from the inventory.
 
     [dim]Example:[/dim]  fleet rm machine_A
@@ -1477,7 +1477,8 @@ def cmd_probe(name: str = typer.Argument(None, help="defaults to this machine"),
 
 
 @app.command("ssh", context_settings={"allow_extra_args": True, "ignore_unknown_options": True})
-def cmd_ssh(ctx: typer.Context, name: str):
+def cmd_ssh(ctx: typer.Context,
+            name: str = typer.Argument(..., help="a machine's name or alias")):
     """Open a shell on a device, or run a command: `fleet ssh machine_A -- nvidia-smi`.
 
     This exists so credentials never have to reach an agent: the wrapper resolves the
@@ -1585,7 +1586,7 @@ def cmd_access(target: str = typer.Argument(None, help="one machine, instead of 
                user: str = typer.Option("root", "--user", help="whose authorized_keys"),
                migrate: bool = typer.Option(False, "--migrate",
                                             help="spend passwords an older fleet stored"),
-               json_out: bool = typer.Option(False, "--json")):
+               json_out: bool = typer.Option(False, "--json", help="print JSON instead of a table, for scripts and agents")):
     """Who may reach what, and change it.
 
     Granting installs a key; revoking removes one. Both are things the center does to a
@@ -1742,8 +1743,8 @@ def cmd_center(name: str = typer.Argument(None, help="hand the role to this mach
                receive: bool = typer.Option(False, "--receive", hidden=True,
                                             help="store a handover the center delivers "
                                                  "on stdin; run by the center over ssh"),
-               json_out: bool = typer.Option(False, "--json"),
-               force: bool = typer.Option(False, "--force")):
+               json_out: bool = typer.Option(False, "--json", help="print JSON instead of a table, for scripts and agents"),
+               force: bool = typer.Option(False, "--force", help="with --dissolve: do not ask, and finish even if some machines cannot be reached")):
     """Who decides, and handing that over.
 
     Only the current center can name the next one. No machine may promote itself, so an

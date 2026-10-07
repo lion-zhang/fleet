@@ -1,8 +1,8 @@
 # Access: keys the center places, not passwords fleet keeps
 
-Superseded the secrets half of [sync-and-secrets.md](sync-and-secrets.md). The sync half
-of that document is still accurate; everything it says about `secrets.age`, age
-recipients and `fleet identity` describes a subsystem that no longer exists.
+fleet never stores a password. The center places an SSH key once, and from then on
+there is no credential left to keep. This page is how that works and what it does and
+does not protect. How machines share the inventory is in [sync.md](sync.md).
 
 ## The one idea
 
@@ -33,10 +33,10 @@ This is also why the center dials out rather than being dialled: center→member
 is required regardless, so carrying sync over it costs nothing, where members dialling the
 center would need a second guarantee on top.
 
-## Three ways in
+## Ways in
 
 Fleet installs **its own** key. What gets it in the first time is a separate question,
-and `_install_key` tries these in the order that asks least of the user:
+and enrolment (`ops/enrol.py`) tries these in the order that asks least of the user:
 
 1. **A key you already hold works** — the normal case on a cloud VM, where password auth
    is off and the provider injected a key at creation. `build_enroll_argv` omits
@@ -44,10 +44,9 @@ and `_install_key` tries these in the order that asks least of the user:
    `BatchMode=yes` so it can never block on a prompt; `build_argv` keeps IdentitiesOnly
    for everything after. Trying this first is what lets an agent enrol unattended.
 2. **Password auth available** — typed once, spent on one connection, discarded. Needs a
-   human, so it needs a terminal.
+   human, so it needs a terminal (and a pty, which Windows does not have).
 3. **Neither** — the key must be pre-placed. `fleet center --pubkey` prints it and needs
    nothing reachable, because the moment you want it is before the machine exists.
-
 4. **The machine joins** — `fleet invite` on the center prints a code, and `fleet join
    CODE` on the machine dials the listener with it. The machine writes the center's key
    into its own `authorized_keys`, so nothing is installed from outside and no password
@@ -172,8 +171,7 @@ outage.
 Only the current center can name the next one. No machine may promote itself, under any
 condition. A self-promotion path is a hostile-takeover primitive whose guards are
 themselves security-critical code; removing the path removes the attack. `fleet edit
---role center` and `fleet install --role center` both used to do exactly that and now
-refuse.
+--role center` and `fleet install --role center` refuse.
 
 There is no `backup` role. It meant a second machine holding a key on every device
 forever — a standing total-compromise target, to save an occasional manual recovery.
@@ -198,10 +196,7 @@ A handover moves the role in two signed steps, and the fleet follows by itself:
 A member the new center cannot reach learns of the handover only by asking: `fleet sync
 --from` the new center's address once.
 
-This shipped as a single-machine design first and could not complete between two real
-machines: the record stayed on the outgoing center's disk, and no member could check one.
-
-So an unplanned loss of the center means re-configuring by hand. That is the accepted
+An unplanned loss of the center means re-configuring by hand. That is the accepted
 price of there being exactly one machine that can open every door. Hand over before you
 retire a machine, and keep `fleet center --export`.
 

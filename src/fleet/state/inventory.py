@@ -294,9 +294,10 @@ def merge(local: list[Device], remote: list[Device], *,
     changed. Newer updated_at wins the record; endpoints are unioned regardless, because
     a route one machine knows about is still a real route.
 
-    Deletion is deliberately not synced. Telling "deleted here" apart from "not seen
-    here yet" needs tombstones, and guessing wrong either resurrects a device or
-    destroys one. `fleet rm` is local; remove on the center to remove for good.
+    Deletion travels as a tombstone: `fleet rm` keeps the record with `deleted_at` set,
+    and it wins like any newer record, so "deleted here" is never mistaken for "not seen
+    here yet". The listener accepts a member's tombstone only for that member itself
+    (serve.py); tombstones are pruned after TOMBSTONE_TTL_S.
     """
     by_id: dict[str, Device] = {d.id: d for d in local}
     changes: list[str] = []

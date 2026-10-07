@@ -190,13 +190,18 @@ function Install-Fleet {
         }
     }
     if ($isCenter) {
-        Write-Host 'next:  fleet show          this machine, as your agents will see it'
-        Write-Host '       fleet invite NAME   prints one line to run on another machine to add it'
+        Write-Host 'next: add your machines, then ask for what you need. Tell your agent, e.g.:'
+        Write-Host '        "add my GPU server: ssh user@host"     a machine you can SSH into'
+        Write-Host '        "invite my laptop"                     one line to paste on a machine'
+        Write-Host '        "what''s free right now?"               every machine, and what is free'
+        Write-Host '        "run train.py where a 24 GB card is free"'
+        Write-Host '      or yourself: fleet add "ssh user@host", fleet invite NAME, fleet ls'
     } elseif ($setup) {
         Write-Host 'next:  fleet ls            the machines in this fleet'
     } else {
         Write-Host 'next:  fleet setup         start a fleet here and teach your agents (or: fleet join CODE)'
     }
+    if ($setup) { Write-Host "agents load fleet's skill when a session starts: start a new one to use it" }
 }
 
 Install-Fleet

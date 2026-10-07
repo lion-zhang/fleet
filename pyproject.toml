@@ -43,7 +43,7 @@ dependencies = [
 
 [project.urls]
 Homepage = "https://github.com/lion-zhang/fleet"
-Documentation = "https://github.com/lion-zhang/fleet/blob/main/docs/getting-started.md"
+Documentation = "https://github.com/lion-zhang/fleet/blob/main/docs/README.md"
 Issues = "https://github.com/lion-zhang/fleet/issues"
 
 [project.optional-dependencies]

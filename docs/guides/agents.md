@@ -1,34 +1,26 @@
-# fleet in every agent
+# Agents
 
-The quickest way is still the one-line installer on the machine you work from. It installs
-fleet and teaches every agent it finds there, in one step:
+**Most people never need this page.** Asking an agent to install fleet — or running the
+installer — sets up every supported agent on the machine at once, with `fleet setup`.
+This page is for adding fleet from inside one particular agent or app, or to an agent
+`fleet setup` does not know.
 
-```bash
-curl -LsSf https://raw.githubusercontent.com/lion-zhang/fleet/main/install.sh | sh
-```
+Every way in runs the same `fleet` from PyPI ([agents-fleet](https://pypi.org/project/agents-fleet/)),
+so all your agents share one fleet: one inventory, one set of keys
+([why](../design/layers.md)). Two kinds of entry:
 
-**Several agents on one machine is the normal case.** fleet has three layers
-([design](design/layers.md)): the **core** — the `fleet` command and its state, installed
-once per machine — a **skill** per agent, which is only text telling it how to use the
-command, and **MCP** for apps that cannot run commands, which runs the same command for
-them. Claude Code, Codex and a desktop app on one machine all use the same core, at the
-same time: reads never wait, and changes queue and are each applied to the state as it
-is, so two agents changing things at once never undo each other. Installing fleet again
-for another agent keeps the core that is already there. Added an agent later?
-`fleet setup` teaches it.
-
-This page is for adding fleet from inside one agent, or to an agent the installer does not
-know. Every entry runs the same `fleet` from PyPI ([agents-fleet](https://pypi.org/project/agents-fleet/)),
-so all your agents share one fleet. MCP entries need only [uv](https://docs.astral.sh/uv/)
-(`uvx`); skills and plugins also need the `fleet` command, and say how to get it if it is
-missing.
+- **Skills** are for agents that can run commands. A skill is text that tells the agent
+  how to use the `fleet` command, and costs nothing until a task needs a machine. It needs
+  the `fleet` command installed; if it is missing, the skill says how to get it.
+- **MCP** is for apps that cannot run commands. The app launches `uvx agents-fleet mcp`,
+  which runs the same commands for it. It needs only [uv](https://docs.astral.sh/uv/).
 
 > **Center or member.** On a machine in no fleet yet, the first use of fleet makes it the
-> **center** of a new fleet, whichever way it was installed. If this machine should be a
-> **member** of a fleet you already have, paste the line `fleet invite` prints on that
-> fleet's center *first*, then add the agent below.
+> **center** of a new fleet, however it was installed. If this machine should join a
+> fleet you already have, run the line `fleet invite` prints on that fleet's center
+> *first*, then add the agent.
 
-**✓** = the command was run here and the agent registered (or connected to) the server.
+**✓** = run here, and the agent registered (or connected to) the server.
 **docs** = from the agent's official documentation, not run here.
 
 - [Plugins and extensions](#plugins-and-extensions) — the skill, installed by the agent
@@ -74,11 +66,11 @@ These register fleet's MCP server, launched as `uvx agents-fleet mcp`.
 
 | Agent | Link |
 |---|---|
-| Cursor | [Add to Cursor](https://cursor.com/en/install-mcp?name=fleet&config=eyJjb21tYW5kIjoidXZ4IiwiYXJncyI6WyJhZ2VudC1mbGVldCIsIm1jcCJdfQ%3D%3D) |
+| Cursor | [Add to Cursor](https://cursor.com/en/install-mcp?name=fleet&config=eyJjb21tYW5kIjoidXZ4IiwiYXJncyI6WyJhZ2VudHMtZmxlZXQiLCJtY3AiXX0%3D) |
 | VS Code | [Install in VS Code](https://insiders.vscode.dev/redirect/mcp/install?name=fleet&config=%7B%22command%22%3A%22uvx%22%2C%22args%22%3A%5B%22agents-fleet%22%2C%22mcp%22%5D%7D) · [VS Code Insiders](https://insiders.vscode.dev/redirect/mcp/install?name=fleet&config=%7B%22command%22%3A%22uvx%22%2C%22args%22%3A%5B%22agents-fleet%22%2C%22mcp%22%5D%7D&quality=insiders) |
 | Visual Studio | [Install in Visual Studio](https://vs-open.link/mcp-install?%7B%22name%22%3A%22fleet%22%2C%22type%22%3A%22stdio%22%2C%22command%22%3A%22uvx%22%2C%22args%22%3A%5B%22agents-fleet%22%2C%22mcp%22%5D%7D) |
 | Kiro | [Add to Kiro](https://kiro.dev/launch/mcp/add?name=fleet&config=%7B%22command%22%3A%22uvx%22%2C%22args%22%3A%5B%22agents-fleet%22%2C%22mcp%22%5D%7D) |
-| LM Studio | [Add to LM Studio](https://lmstudio.ai/install-mcp?name=fleet&config=eyJjb21tYW5kIjoidXZ4IiwiYXJncyI6WyJhZ2VudC1mbGVldCIsIm1jcCJdfQ%3D%3D) |
+| LM Studio | [Add to LM Studio](https://lmstudio.ai/install-mcp?name=fleet&config=eyJjb21tYW5kIjoidXZ4IiwiYXJncyI6WyJhZ2VudHMtZmxlZXQiLCJtY3AiXX0%3D) |
 | Goose | `goose://extension?cmd=uvx&arg=agents-fleet&arg=mcp&id=fleet&name=fleet&description=fleet&timeout=300` (paste into a browser) |
 | Claude Desktop | download `fleet.mcpb` from the [latest release](https://github.com/lion-zhang/fleet/releases/latest) and open it ✓ |
 

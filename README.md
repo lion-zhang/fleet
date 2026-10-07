@@ -24,68 +24,92 @@ across the room and a rented A100 bills you by the hour. It cannot use what it c
 - **Finding a free GPU is manual.** SSH into five hosts, run `nvidia-smi`, compare in your head.
 - **Handing it a server means pasting credentials** into the chat, and hoping.
 
-## Install once, then just talk to your agent
+## Get started: ask your agent
 
-On the machine you work from:
+Install it on the machine that will be your fleet's **center** — the one that keeps the
+list of your machines and decides which may reach which — so pick one that can reach
+all your devices and is online most of the time, such as a desktop or home server (you
+can move the role later). There, paste this into Claude Code, Codex, Gemini CLI, or any
+agent that can run commands:
 
-```bash
-curl -LsSf https://raw.githubusercontent.com/lion-zhang/fleet/main/install.sh | sh
+```text
+Install fleet from https://github.com/lion-zhang/fleet
 ```
 
-<sub>Windows: `powershell -ExecutionPolicy ByPass -c "irm https://raw.githubusercontent.com/lion-zhang/fleet/main/install.ps1 | iex"`</sub>
+<sub>Agents: the steps are in [INSTALL.md](INSTALL.md).</sub>
 
-That is the whole setup. This machine becomes your fleet's **center**, and every
-[supported agent](docs/agents.md) installed on it learns fleet. From here on you say what you want in plain words —
-no commands to remember. When something is missing, the agent asks (illustrative):
+That is the whole setup. fleet is installed once on this machine, and every
+[supported agent](docs/guides/agents.md) you have here learns it — not only the one you asked.
+From here on you say what you want in plain words, with no commands to remember.
 
-> **You:** add my new GPU server
->
-> **Agent:** Sure — how do you usually connect to it? An SSH command like
-> `ssh -p 40001 root@1.2.3.4` is all I need.
->
-> **You:** `ssh ubuntu@10.0.0.7`
+### Then add your machines
+
+Tell the agent how you reach a machine — the SSH command you already use is enough:
+
+> **You:** add my GPU server, `ssh ubuntu@10.0.0.7`
 >
 > **Agent:** Added as `gpu-box`: 2× RTX 4090, both idle, 46 GB free. It's ready to use.
+
+Each one takes a sentence, whatever the machine is:
+
+| The machine | What you tell the agent |
+|---|---|
+| a server you can already SSH into | "add `ssh ubuntu@10.0.0.7`" — fleet uses the key you already have |
+| one you reach with a particular key file | "add `ssh -i ~/.ssh/my_key ubuntu@1.2.3.4`" — or a `Host` from your `~/.ssh/config` |
+| a new rental (vast.ai, RunPod, Lambda) | "add `ssh -p 40001 root@1.2.3.4`, it costs $1.89/hr" |
+| one that only takes a password | "add it" — then you type the password once yourself; it is stored nowhere |
+| one fleet cannot get into from here | "invite my laptop" — you get one line to paste there, and it joins by itself |
+| one that does not exist yet | "give me the key for a cloud-init template" — it joins with no password at all |
+
+Nothing is installed on the machines you add: they only need SSH, on Linux, macOS or
+Windows. fleet probes each one for its GPUs, memory and disks, and keeps that current.
+
+### Then let the agent pick
+
+You describe the work; the agent finds where it fits. It checks what each machine has
+*and* what is free on it right now, so it will not send a job to a busy card:
 
 > **You:** train `train.py` on whatever has a free 24 GB card
 >
 > **Agent:** `rtx4090` has 23.1 GB free and an idle GPU; `a100-spot` is free too but costs
 > $1.89/hr. Starting on `rtx4090`, logging to `train.log`.
 
-| You say | What happens |
+| You say | How the agent finds it |
 |---|---|
 | "what's free right now?" | every machine checked, the free ones listed |
-| "find me a box with a 24 GB card" | machines matched by what they have, not by name |
-| "run the tests on the Linux box" | run there, results brought back |
+| "find me a box with a 24 GB card" | matched by what machines have — NVIDIA, VRAM, cores, RAM — not by name |
+| "run the tests on the Linux box" | the machine that runs Linux, results brought back |
 | "what's costing me money?" | idle paid rentals flagged, with their hourly price |
 | "let the laptop reach the NAS" | access granted, applied at once |
-| "add a machine without typing its password" | a one-time line to paste there; it joins by itself |
 
 No hostnames, keys or passwords go into the conversation, and anything irreversible
 waits for your yes.
 
-Every machine besides the center is a **member**. A member needs nothing installed —
-just sshd. For machines where you also want to *run* fleet, or that you would rather not
-type a password for, the agent gives you an invite line: pasted there, it installs fleet
-and joins by itself.
+**Only install fleet where you use it.** The machines you add above need nothing but SSH:
+fleet measures them and connects to them from the center. Install fleet on another
+machine only if you also run agents there, or want to check the fleet from it. That
+machine becomes a **member**: ask the center's agent to "invite" it, and paste the line it
+gives you into a terminal there, or give it to the agent there.
 
-### Already in your agent? Install from there
+| | Runs fleet | How it gets there |
+|---|---|---|
+| **center** | yes — one per fleet | the first install |
+| **member** | yes | an invite line from the center |
+| every other machine | no, only SSH | "add `ssh user@host`" on the center |
 
-| Agent | Install |
+### An app that cannot run commands?
+
+Desktop apps and editors get fleet in one click; it runs as an MCP server:
+
+| App | Install |
 |---|---|
-| **Claude Code** | `/plugin marketplace add lion-zhang/fleet` then `/plugin install fleet@fleet` |
-| **Codex** | `codex plugin marketplace add lion-zhang/fleet` then `codex plugin add fleet@fleet` |
-| **Gemini CLI** | `gemini extensions install https://github.com/lion-zhang/fleet` |
-| **GitHub Copilot CLI** | `copilot plugin marketplace add lion-zhang/fleet` then `copilot plugin install fleet@fleet` |
-| **Cursor** | [![Add to Cursor](https://cursor.com/deeplink/mcp-install-dark.svg)](https://cursor.com/en/install-mcp?name=fleet&config=eyJjb21tYW5kIjoidXZ4IiwiYXJncyI6WyJhZ2VudC1mbGVldCIsIm1jcCJdfQ%3D%3D) |
-| **VS Code** | [![Install in VS Code](https://img.shields.io/badge/VS_Code-Install_fleet-0098FF?logo=visualstudiocode&logoColor=white)](https://insiders.vscode.dev/redirect/mcp/install?name=fleet&config=%7B%22command%22%3A%22uvx%22%2C%22args%22%3A%5B%22agents-fleet%22%2C%22mcp%22%5D%7D) |
 | **Claude Desktop** | open `fleet.mcpb` from the [latest release](https://github.com/lion-zhang/fleet/releases/latest) |
+| **Cursor** | [![Add to Cursor](https://cursor.com/deeplink/mcp-install-dark.svg)](https://cursor.com/en/install-mcp?name=fleet&config=eyJjb21tYW5kIjoidXZ4IiwiYXJncyI6WyJhZ2VudHMtZmxlZXQiLCJtY3AiXX0%3D) |
+| **VS Code** | [![Install in VS Code](https://img.shields.io/badge/VS_Code-Install_fleet-0098FF?logo=visualstudiocode&logoColor=white)](https://insiders.vscode.dev/redirect/mcp/install?name=fleet&config=%7B%22command%22%3A%22uvx%22%2C%22args%22%3A%5B%22agents-fleet%22%2C%22mcp%22%5D%7D) |
 
-Plus OpenCode, Amp, Windsurf, Cline, Zed, Qwen Code, Goose, Kiro, Hermes — 35+ agents in all:
-**[every agent →](docs/agents.md)**
-
-On a machine in no fleet yet, these make it a center on first use, like the installer.
-For a member, paste its invite line first.
+Plus plugins for Claude Code, Codex, Copilot CLI and Gemini CLI, and OpenCode, Amp,
+Windsurf, Cline, Zed, Qwen Code, Goose, Kiro, Hermes — 35+ agents in all:
+**[every agent →](docs/guides/agents.md)**
 
 ## Built to be safe
 
@@ -100,8 +124,16 @@ For a member, paste its invite line first.
 
 ## Prefer the command line?
 
-Everything the agent does is a plain `fleet` command, for when you want to drive it
-yourself:
+Everything the agent does is a plain `fleet` command. To install fleet yourself, run this
+on the machine you work from (this is also what your agent runs when you ask it):
+
+```bash
+curl -LsSf https://raw.githubusercontent.com/lion-zhang/fleet/main/install.sh | sh
+```
+
+<sub>Windows: `powershell -ExecutionPolicy ByPass -c "irm https://raw.githubusercontent.com/lion-zhang/fleet/main/install.ps1 | iex"`</sub>
+
+Then drive it yourself:
 
 ```bash
 fleet ls                            # every machine, with what is free right now
@@ -116,7 +148,7 @@ fleet access nas --allow laptop     # let one machine reach another
 <img src="docs/assets/fleet-top.svg" alt="fleet top: a live view of GPU utilisation, free VRAM, CPU, RAM and disk across all machines" width="100%">
 
 Rentals from vast.ai, RunPod or Lambda show their price (`fleet edit a100 --cost 1.89`),
-the fleet's burn rate, and an alert when a paid machine sits idle. On Tailscale, ZeroTier
+the fleet's burn rate, and an alert when a rental sits idle. On Tailscale, ZeroTier
 or WireGuard? fleet just needs an address it can route to.
 
 ## How fleet compares
@@ -133,61 +165,168 @@ fleet is about the machines you already have. It complements tools that launch n
 
 ## FAQ
 
-<details>
-<summary><b>I use Claude Code <i>and</i> Codex (and more) on one machine. Does that work?</b></summary>
+**Setting up**
 
-Yes — that is the normal case. fleet is installed once per machine: one command, one
-inventory, one set of keys. Each agent only gets a small skill or MCP entry pointing at
-it, so Claude Code, Codex, Gemini CLI and a desktop app all see the same machines, and can
-use them at the same time. Install a new agent later? Run `fleet setup` (or ask an agent
-that already has fleet to do it).
+<details>
+<summary><b>Do I need to install fleet on every machine?</b></summary>
+
+No. Install it where you **use** it: the machine you work from (the center), and any
+other machine where you also run agents or want to check the fleet from (a member). The
+machines you only *use* — GPU servers, rentals, a NAS — need SSH and nothing else; fleet
+measures them and connects to them from the center.
 </details>
 
 <details>
-<summary><b>What does my agent actually get?</b></summary>
+<summary><b>What are the center and members?</b></summary>
 
-Agents with a shell (Claude Code, Codex, Gemini CLI, Copilot CLI, OpenCode, …) get a
-skill — text that tells them the `fleet` commands; it costs nothing until a task needs a
-machine. Apps that cannot run commands (Claude Desktop, Cursor, VS Code, …) get an MCP
-server that runs the same commands for them. The installer sets up the supported agents
-you have; [docs/agents.md](docs/agents.md) has the details for each.
+The **center** is the machine you installed fleet on first. It keeps the list of machines,
+holds the key that reaches them, and is the only machine that grants or removes access.
+There is one per fleet. A **member** is any other machine that runs fleet, joined with an
+invite line from the center; its agents see the whole fleet too. Every other machine is
+just *in* the fleet: reachable over SSH, nothing installed. See
+[The center](docs/guides/center.md).
 </details>
 
 <details>
-<summary><b>Does it work behind NAT, or across sites?</b></summary>
+<summary><b>Which machine should be the center?</b></summary>
 
-The center needs an address it can route to: a public IP, a LAN, or an overlay such as
-Tailscale. A machine the center cannot dial can still join with the `fleet invite` line
-and report in; granting access to it waits until the center can reach it.
+One that can reach all your devices and is online most of the time — a desktop or a home
+server. A laptop works too. You can hand the role to another machine later with
+`fleet center NAME`.
 </details>
 
 <details>
 <summary><b>What if the center is off?</b></summary>
 
 Normal — it can be a laptop that is closed half the day. Everything already granted keeps
-working; only changes wait for it. Move the role with `fleet center NAME`.
+working, and members keep listing and connecting from what they know; only *changes* —
+granting, removing, inviting — wait for it.
+</details>
+
+<details>
+<summary><b>I use Claude Code <i>and</i> Codex (and more) on one machine. Does that work?</b></summary>
+
+Yes — that is the normal case. fleet is installed once per machine: one command, one
+inventory, one set of keys. Each agent only gets a small skill or MCP entry pointing at
+it, so Claude Code, Codex, Gemini CLI and a desktop app all see the same machines, and can
+use them at the same time. Install a new agent later? Ask an agent that has fleet to run
+`fleet setup`.
+</details>
+
+<details>
+<summary><b>What does my agent actually get?</b></summary>
+
+Agents that can run commands (Claude Code, Codex, Gemini CLI, Copilot CLI, OpenCode, …)
+get a skill — text that tells them the `fleet` commands; it costs nothing until a task
+needs a machine. Apps that cannot (Claude Desktop, Cursor, VS Code, …) get an MCP server
+that runs the same commands for them. See [Agents](docs/guides/agents.md). After
+installing, start a new session so the agent loads it.
+</details>
+
+**Safety**
+
+<details>
+<summary><b>Does fleet store my passwords? Does my agent see my keys?</b></summary>
+
+No and no. A password is typed by you, once, for a machine that accepts nothing else; it
+is used for one connection and stored nowhere. After that fleet uses its own key. The
+agent runs `fleet ssh NAME` and never sees an address, a key or a password.
+</details>
+
+<details>
+<summary><b>What does fleet leave on the machines I add?</b></summary>
+
+Two things: a block in `~/.ssh/authorized_keys`, marked with your fleet's id, and the
+machine's own fleet key in fleet's folder (`~/.config/fleet` on Linux). No program, no
+service. Your own keys and
+the provider's are never touched, and `fleet rm` takes fleet's block off again.
+</details>
+
+<details>
+<summary><b>Can the agent do something I cannot undo?</b></summary>
+
+It is told not to. Removing a machine, taking the fleet down and moving the center are
+left to you, and are not available to apps over MCP at all. When a request is ambiguous —
+which machine, which user — the agent asks instead of guessing.
+</details>
+
+<details>
+<summary><b>What if a machine is compromised?</b></summary>
+
+Remove it on the center (`fleet rm NAME`): its key comes off every other machine. But a
+key is a key — revoking it does not undo what someone with root on that machine already
+did — and the center is the one machine whose compromise reaches everything. The
+[threat model](docs/design/access.md#threat-model-plainly) spells it out.
+</details>
+
+**Machines**
+
+<details>
+<summary><b>The disk space fleet reports is wrong.</b></summary>
+
+Some systems — containers, GPU rentals — show `/` as a small overlay while the space is on
+another volume. Tell fleet which paths to watch: "on gpu-box, watch /workspace", or
+`fleet edit gpu-box --disk-path /workspace`. See
+[Disks](docs/guides/find-machines.md#disks-tell-fleet-where-the-space-is).
+</details>
+
+<details>
+<summary><b>My rental came back on a new IP or port.</b></summary>
+
+Re-point it, keeping its name, tags, cost and history: "gpu-box is now at
+`ssh -p 40123 root@5.6.7.8`", or `fleet edit gpu-box --ssh "ssh -p 40123 root@5.6.7.8"`.
+</details>
+
+<details>
+<summary><b>My machines are behind different NATs, or at different sites.</b></summary>
+
+fleet does not solve connectivity; it uses the routes you have. It needs only one: **the
+center must reach every machine over SSH** (and members must reach the center). The
+machines do not need to reach each other, unless you grant one access to another. For
+machines behind different NATs, put them on a mesh network such as Tailscale or ZeroTier
+and add them by their mesh address. See
+[Networks](docs/guides/add-machines.md#networks-what-must-reach-what).
 </details>
 
 <details>
 <summary><b>Windows?</b></summary>
 
-Yes, both ways. A Windows machine works as a target with OpenSSH Server and nothing else,
-and fleet runs on Windows too, center included: interactive `fleet ssh`, `fleet top` and
-the background service all work there. See [Windows](docs/getting-started.md#windows).
+Yes, both ways. A Windows machine works in a fleet with OpenSSH Server and nothing else,
+and fleet runs on Windows too, center included. See [Windows](docs/guides/windows.md).
+</details>
+
+<details>
+<summary><b>Does anything keep running in the background?</b></summary>
+
+On the center only: a small service, run as you, that listens on port 7373 so members can
+refresh and new machines can join. Nothing runs on the other machines; members run fleet
+only when you or an agent use it.
+</details>
+
+<details>
+<summary><b>How do I remove fleet?</b></summary>
+
+On a member: `fleet center --leave`, `fleet setup --uninstall`, then
+`uv tool uninstall agents-fleet`. On the center, `fleet center --dissolve` first takes
+every key off every machine. See [Removing fleet](docs/guides/install.md#removing-fleet).
 </details>
 
 ## Learn more
 
-- [Getting started](docs/getting-started.md) — the full walkthrough, every command
-- [Every agent](docs/agents.md) — install commands and config for 35+ agents
-- [Design](docs/design/layers.md) — one core per machine, a skill per agent, MCP for the rest; and [access](docs/design/access.md) — how access is granted, signed and revoked
+- [Getting started](docs/getting-started.md) — your first fleet, in ten minutes
+- [Guides](docs/README.md#guides) — adding machines, finding the right one, access, the center, Windows
+- [Every agent](docs/guides/agents.md) — install commands and config for 35+ agents
+- [Command reference](docs/reference/cli.md) — every command and option
+- [How fleet works](docs/design/how-it-works.md) — what happens, step by step, under the hood
+- [Design](docs/design/layers.md) — one core per machine, a skill per agent, MCP for the rest; [access](docs/design/access.md) and [sync](docs/design/sync.md)
+- [All documentation](docs/README.md)
 
 **Status:** v0.5. The test suite runs on Linux, macOS and Windows, and every command is
 run end to end on a real machine of each OS in CI — from a script, as an agent runs it,
 and at a real terminal, as you do. Multi-machine fleets (key, password, invite, handover)
 are tested on Linux machines built from scratch.
 
-Issues and pull requests are welcome — `uv run pytest -q` runs the tests. If fleet saved
+Issues and pull requests are welcome — see [CONTRIBUTING.md](CONTRIBUTING.md). If fleet saved
 you a GPU-hour, a ⭐ helps other people find it.
 
 [MIT](LICENSE)

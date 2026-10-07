@@ -2,7 +2,7 @@
 
 Everything else fleet touches needs nothing installed -- the probe is a POSIX sh script
 piped over one connection, which is what makes onboarding a single pasted command. This
-is the deliberate exception: a backup node has to run fleet, so fleet has to be there.
+is the deliberate exception: a machine you also work on runs fleet, so fleet has to be there.
 
 The device clones the repo over a forwarded SSH agent by default, so it authenticates to
 GitHub as you and no credential is left behind on a machine you may not fully control.

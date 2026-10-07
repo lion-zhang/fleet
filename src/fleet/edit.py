@@ -135,8 +135,8 @@ def apply_edits(dev: Device, *, endpoint: Endpoint | None = None,
         out.changes.append(f"disk paths {before} -> {dev.disk_paths or ['auto']}")
     if usd_per_hour is not None:
         # What a machine costs to keep, per hour; 0 clears it. It drives the $/HR
-        # column, the fleet's burn rate, and how loudly an idle rental is reported --
-        # and until this flag it could only be set by editing inventory.yaml by hand.
+        # column and the fleet's burn rate (the idle-rental alert goes by kind, not
+        # cost) -- and until this flag it could only be set by editing inventory.yaml.
         if usd_per_hour < 0:
             raise ValueError("a cost cannot be negative")
         before = (dev.cost or {}).get("usd_per_hour")

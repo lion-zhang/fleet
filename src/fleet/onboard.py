@@ -98,12 +98,26 @@ def onboard_self(*, name: str | None = None, kind: str | None = None,
     is not useful, and inventing one would publish a route into the fleet that the design
     says must not exist.
     """
+    import socket
+
+    from .ops import identity
+
     res = run_probe_local(timeout=timeout)
     snap = res.snapshot
     ep = Endpoint(target="localhost", user="", port=22)
+    # Without a reading -- a first probe slower than its timeout, as on a fresh Windows
+    # runner -- derive_id falls back to `net:localhost:22`, the id that means "never
+    # probed". For the machine we are on that is never necessary: its id is read from
+    # the machine itself, and its name from its hostname. A center recorded as
+    # `localhost` was pinned that way for good and never recognised as this machine.
+    dev_id = derive_id(snap, ep)
+    if dev_id.startswith("net:"):
+        dev_id = identity.local_device_id() or dev_id
+    named_by = ep if snap and snap.hostname else Endpoint(
+        target=socket.gethostname() or "localhost", user="", port=22)
     dev = Device(
-        id=derive_id(snap, ep),
-        name=name or suggest_name(snap, ep, taken_names or set()),
+        id=dev_id,
+        name=name or suggest_name(snap, named_by, taken_names or set()),
         kind=classify_kind(snap, ep, override=kind),
         alias=alias,
         endpoints=[],
