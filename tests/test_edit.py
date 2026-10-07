@@ -301,7 +301,7 @@ def test_renaming_to_the_same_name_is_a_no_op():
 
 
 def test_a_cost_can_be_set_and_cleared():
-    """It drives the $/HR column and the idle-rental alert, and could only be set by
+    """It drives the $/HR column and the burn rate, and could only be set by
     editing inventory.yaml by hand."""
     import pytest
 

@@ -226,7 +226,7 @@ def build_server():
         return _run(["invite", *([name] if name else []), "--ttl", valid_for, "--json"])
 
     @server.tool(description="Label a machine, or change what it costs per hour (for the "
-                             "idle-rental alert) or how it is reached. Tags are yours; "
+                             "$/HR column and burn rate) or how it is reached. Tags are yours; "
                              "measured facts such as cuda or vram-24g come from probes.")
     def edit_machine(name: str, add_tags: list[str] | None = None,
                      remove_tags: list[str] | None = None, cost_per_hour: float | None = None,
@@ -269,7 +269,7 @@ def build_server():
         return _run(["access", machine, "--deny", reached_by, "--user", user, "--json"])
 
     @server.tool(description="Bring this machine up to date. On the center: apply "
-                             "pending access changes and collect telemetry. On a member: "
+                             "pending access changes and share the inventory. On a member: "
                              "fetch a fresh copy from the center. Safe to repeat.")
     def sync_fleet() -> Any:
         return _run(["sync", "--json"])
