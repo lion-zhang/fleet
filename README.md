@@ -206,6 +206,7 @@ the background service all work there. See [Windows](docs/guides/windows.md).
 - [Guides](docs/README.md#guides) — adding machines, finding the right one, access, the center, Windows
 - [Every agent](docs/guides/agents.md) — install commands and config for 35+ agents
 - [Command reference](docs/reference/cli.md) — every command and option
+- [How fleet works](docs/design/how-it-works.md) — what happens, step by step, under the hood
 - [Design](docs/design/layers.md) — one core per machine, a skill per agent, MCP for the rest; [access](docs/design/access.md) and [sync](docs/design/sync.md)
 - [All documentation](docs/README.md)
 

@@ -28,11 +28,16 @@ its user, port, key and `ProxyJump`. In one step fleet then:
 1. **connects** with that;
 2. **puts the fleet's own key** in the machine's `authorized_keys`, inside a marked block
    it alone edits — your keys and the provider's are left as they are;
-3. **pins the machine's own key**, so nothing at that address can pose as it later;
+3. **gives the machine a fleet key of its own** (in `~/.config/fleet`, if it has none)
+   and records it: that key is the machine's identity when it is granted access to
+   another machine;
 4. **measures it**: CPU, memory, GPUs, disks, and what is free right now.
 
 After that fleet reaches the machine with its own key, so other machines you
 [grant access](access.md) can reach it too, not only this one.
+
+That is all fleet leaves on the machine: its block in `authorized_keys` and the
+machine's key file. No program, no service.
 
 **The machine has to answer.** One that does not is not recorded at all, and fleet says
 why: a machine the center cannot reach could not be managed anyway.
@@ -148,6 +153,10 @@ route to.
 
 A machine the center cannot reach at all can still [join](#let-the-machine-join-by-itself)
 and report what it has; granting access to it waits until the center can reach it.
+
+**Tailscale SSH and similar** answer ssh themselves and decide who may log in from their
+own access rules, not from `authorized_keys`. fleet measures and connects to such a
+machine as usual, says so when it is added, and leaves access to it to those rules.
 
 ## Adding from a member
 

@@ -73,7 +73,8 @@ The command is `fleet add "ssh ubuntu@10.0.0.7"`. In that one step fleet:
 1. connects with whatever already works for you — your ssh-agent, your `~/.ssh/config`,
    a key file you named with `-i`;
 2. puts the fleet's own key on the machine, so it no longer depends on yours;
-3. records the machine's own key, so nothing else can pose as it later;
+3. gives the machine a fleet key of its own and records it: that key is the machine's
+   identity, which access between machines is granted by;
 4. measures it: CPU, memory, GPUs, disks, and what is free right now.
 
 If the machine only accepts a password, the agent asks you to type it yourself, once. It

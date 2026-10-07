@@ -35,6 +35,8 @@ Exact and complete; generated from the code where it can be.
 
 Why fleet works the way it does.
 
+- [How fleet works](design/how-it-works.md) — what happens, step by step, when you install,
+  add a machine, measure, grant access, sync and join; and which code does it.
 - [Core, skill and MCP](design/layers.md) — one `fleet` per machine, shared by every agent.
 - [Access](design/access.md) — how keys are placed, signed, handed over and revoked; the
   threat model.
