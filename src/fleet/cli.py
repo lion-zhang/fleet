@@ -1322,8 +1322,12 @@ def cmd_top(name: str = typer.Argument(None, help="one device, instead of the wh
 @contextmanager
 def _raw_stdin():
     """cbreak mode so single keys arrive without Enter. Restored no matter how we
-    leave, or the user's shell is left unusable."""
-    if not sys.stdin.isatty():
+    leave, or the user's shell is left unusable.
+
+    Not on Windows, which has no termios (`fleet top` died there on "No module named
+    'termios'"): its console hands single keys to msvcrt without any mode change.
+    """
+    if not sys.stdin.isatty() or sys.platform == "win32":
         yield
         return
     import termios
@@ -1341,6 +1345,16 @@ def _key_pressed(timeout: float) -> str | None:
     """Doubles as the frame delay: waits for a key, or returns when the interval is up."""
     import select as _select
     if not sys.stdin.isatty():
+        return None
+    if sys.platform == "win32":
+        # select() takes only sockets on Windows; the console is polled instead.
+        import msvcrt
+
+        deadline = time.monotonic() + timeout
+        while time.monotonic() < deadline:
+            if msvcrt.kbhit():
+                return msvcrt.getwch()
+            time.sleep(0.05)
         return None
     if _select.select([sys.stdin], [], [], timeout)[0]:
         return sys.stdin.read(1)
