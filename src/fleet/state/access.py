@@ -780,8 +780,12 @@ def center_retry_after(base_s: int, max_s: int, cache_path: Path | None = None) 
         return 0
     if failures <= 0 or not at:
         return 0
-    wait = min(max_s, base_s * 2 ** min(failures - 1, 20)) if max_s else base_s
-    return max(0, at + wait - int(time.time()))
+    from .timing import backoff, since
+
+    elapsed = since(at)
+    if elapsed is None:
+        return 0                           # the clock went back: ask now
+    return max(0, int(backoff(base_s, failures, max_s) - elapsed))
 
 
 # ------------------------------------------------------------ which fleet, on a member

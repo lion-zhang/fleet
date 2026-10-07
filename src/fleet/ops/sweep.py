@@ -18,7 +18,7 @@ from dataclasses import replace
 from ..state import access as acl
 from ..state import inventory as inv
 from .. import reconcile as rec
-from ..state import store
+from ..state import clock, store
 from ..config import load_config
 from ..probe.runner import run_probe
 from ..ssh.cmd import remote_platform
@@ -382,8 +382,8 @@ def retry_due(st, *, interval_s: float, cap_s: float, now: float) -> bool:
     """
     if not st.last_attempt_at:
         return True
-    wait = min(interval_s * 2 ** max(0, st.attempts - 1), cap_s)
-    return now - st.last_attempt_at >= wait
+    elapsed = clock.since(st.last_attempt_at, now)
+    return elapsed is None or elapsed >= clock.backoff(interval_s, st.attempts, cap_s)
 
 
 def retry_pending(*, interval_s: float) -> tuple[int, int]:

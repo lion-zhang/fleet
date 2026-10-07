@@ -47,16 +47,38 @@ def connect(path: Path | None = None) -> sqlite3.Connection:
     # Two fleet processes opening the cache just after an upgrade used to both see the
     # old shape and both alter it; the second died on "duplicate column name". One at a
     # time, and the shape is checked again by whoever goes second.
-    conn.execute("BEGIN IMMEDIATE")
-    try:
-        _migrate(conn)
-    except BaseException:
-        conn.rollback()
-        raise
-    if conn.in_transaction:
-        conn.commit()
-    conn.executescript(SCHEMA)
+    #
+    # Only when there is something to migrate: taken on every open, every `fleet ls`
+    # queued behind whichever process was writing, which is the one thing a read must
+    # never do.
+    if _needs_migration(conn):
+        conn.execute("BEGIN IMMEDIATE")
+        try:
+            _migrate(conn)
+        except BaseException:
+            conn.rollback()
+            raise
+        if conn.in_transaction:
+            conn.commit()
+        conn.executescript(SCHEMA)
     return conn
+
+
+def _needs_migration(conn: sqlite3.Connection) -> bool:
+    try:
+        if conn.execute("PRAGMA user_version").fetchone()[0] != SCHEMA_VERSION:
+            return True
+        tables = {r[0] for r in conn.execute(
+            "SELECT name FROM sqlite_master WHERE type='table'")}
+        if not {"device_state", "snapshot", "meta"} <= tables or not _shape_matches(conn):
+            return True
+        for table, columns in _ADDED_COLUMNS.items():
+            have = {row[1] for row in conn.execute(f"PRAGMA table_info({table})")}
+            if set(columns) - have:
+                return True
+    except sqlite3.Error:
+        return True
+    return False
 
 
 def _migrate(conn: sqlite3.Connection) -> None:
@@ -116,21 +138,32 @@ def _shape_matches(conn: sqlite3.Connection) -> bool:
 
 
 def record(conn: sqlite3.Connection, device_id: str, res: ProbeResult, *,
-           source: str = "self", probed_by: str = "", at: int | None = None) -> None:
+           source: str = "self", probed_by: str = "", at: int | None = None,
+           only_if_newer: bool = False) -> bool:
     """Store a probe result. `source` is 'self' for one we ran, 'broadcast' for one
     relayed by the center for a device we cannot reach ourselves.
 
     `at` is when the probe was taken, for a relayed one: stamped with the time it was
     *received*, a reading days old looked fresh, was never re-probed, and kept an agent
     sending work to a machine that had died. Never later than now.
+
+    `only_if_newer`, for relayed readings: one no newer than what is stored is dropped,
+    so a member syncing late with a day-old reading does not replace a fresh one, and
+    the same reading relayed again does not fill the history with copies. Returns
+    whether anything was written.
     """
     now = int(time.time()) if at is None else min(int(at), int(time.time()))
-    if not conn.in_transaction:
+    started = not conn.in_transaction
+    if started:
         # The read below and the write after it as one step: two processes probing the
         # same machine each read the streak and wrote it +1, losing a failure.
         conn.execute("BEGIN IMMEDIATE")
-    prev = conn.execute("SELECT last_ok_at, fail_streak FROM device_state "
+    prev = conn.execute("SELECT last_ok_at, fail_streak, last_probe_at FROM device_state "
                         "WHERE device_id=? AND source=?", (device_id, source)).fetchone()
+    if only_if_newer and prev and int(prev["last_probe_at"] or 0) >= now:
+        if started:
+            conn.rollback()
+        return False
     # A failed probe degrades a device to "stale but known" -- last_ok_at is preserved
     # so the UI can say "last seen 2h ago" instead of blanking the device.
     last_ok = now if res.ok else (prev["last_ok_at"] if prev else None)
@@ -163,9 +196,10 @@ def record(conn: sqlite3.Connection, device_id: str, res: ProbeResult, *,
         conn.execute(
             """DELETE FROM snapshot WHERE device_id=? AND source=? AND id NOT IN
                  (SELECT id FROM snapshot WHERE device_id=? AND source=?
-                  ORDER BY ts DESC LIMIT ?)""",
+                  ORDER BY id DESC LIMIT ?)""",
             (device_id, source, device_id, source, keep))
     conn.commit()
+    return True
 
 
 def get_meta(conn: sqlite3.Connection, key: str) -> str | None:
@@ -224,7 +258,9 @@ def latest(conn: sqlite3.Connection, device_id: str, *,
         st, use = relayed, "broadcast"
     sn = conn.execute(
         "SELECT payload FROM snapshot WHERE device_id=? "
-        "ORDER BY CASE source WHEN ? THEN 0 ELSE 1 END, ts DESC LIMIT 1",
+        # By arrival, not by `ts`: after the clock jumps back, the newest reading has the
+        # smallest timestamp, and sorting by it showed a stale one forever.
+        "ORDER BY CASE source WHEN ? THEN 0 ELSE 1 END, id DESC LIMIT 1",
         (device_id, use)).fetchone()
     return (st, json.loads(sn["payload"]) if sn else None)
 
@@ -244,13 +280,12 @@ def is_fresh(state: dict | None, ttl: int, *, backoff_max: int = 0) -> bool:
     and every read waited out the connect timeout to learn what it already knew.
     """
     a = age_s(state)
-    if a is None:
-        return False
+    if a is None or a < 0:
+        return False                       # from the future: the clock went back
     return a <= effective_ttl(state, ttl, backoff_max=backoff_max)
 
 
 def effective_ttl(state: dict | None, ttl: int, *, backoff_max: int = 0) -> int:
-    streak = int((state or {}).get("fail_streak") or 0)
-    if not backoff_max or streak <= 1:
-        return ttl
-    return max(ttl, min(backoff_max, ttl * 2 ** min(streak - 1, 20)))
+    from .timing import backoff
+
+    return int(backoff(ttl, int((state or {}).get("fail_streak") or 0), backoff_max))

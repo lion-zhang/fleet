@@ -196,9 +196,16 @@ def record_relayed(rows: list, *, sender_id: str | None = None,
                                          error_detail=str(row.get("error_detail") or "")[:200]),
                              source="broadcast", probed_by=by or "center",
                              # the sender's clock is the center's; ours may not be
-                             at=clock.to_local(int(at)) if at else None)
+                             at=clock.to_local(int(at)) if at else None,
+                             only_if_newer=True)
     finally:
         conn.close()
+
+def _heard_within(seconds: int) -> bool:
+    """Whether the center answered in the last `seconds`. Never, if the clock went back."""
+    elapsed = clock.since(acl.center_last_seen())
+    return elapsed is not None and elapsed < seconds
+
 
 def ensure_fresh(*, force: bool = False) -> None:
     """Refresh this machine's copy of the fleet from the center, if it has gone stale.
@@ -218,7 +225,7 @@ def ensure_fresh(*, force: bool = False) -> None:
     if not url or not pinned:
         return                             # never been told where to ask, or who to trust
     cfg = load_config()
-    if not force and int(time.time()) - acl.center_last_seen() < int(cfg.sync_ttl_s):
+    if not force and _heard_within(int(cfg.sync_ttl_s)):
         return
     # A center that did not answer last time is left alone for a while, doubling per
     # miss. Reads keep working from local state either way; what this saves is the
@@ -234,7 +241,7 @@ def ensure_fresh(*, force: bool = False) -> None:
     with try_turn(STATE_DIR / "refresh") as ours:
         if not ours:
             return
-        if not force and int(time.time()) - acl.center_last_seen() < int(cfg.sync_ttl_s):
+        if not force and _heard_within(int(cfg.sync_ttl_s)):
             return                         # refreshed by another while we got here
         _refresh(url, pinned)
 
