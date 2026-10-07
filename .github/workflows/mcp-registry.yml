@@ -1,0 +1,31 @@
+name: mcp registry
+
+# Lists the released version in the MCP Registry (registry.modelcontextprotocol.io) from
+# server.json, once `release` has put that version on PyPI -- the registry checks the
+# package there. Signed in with this workflow's GitHub identity: no token is stored, and
+# only this repository can publish io.github.lion-zhang/*. Also runnable from the
+# Actions tab, for a release that went out before this workflow existed.
+on:
+  workflow_run:
+    workflows: [release]
+    types: [completed]
+  workflow_dispatch:
+
+jobs:
+  publish:
+    if: github.event_name == 'workflow_dispatch' || github.event.workflow_run.conclusion == 'success'
+    runs-on: ubuntu-latest
+    permissions:
+      id-token: write
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.workflow_run.head_sha || github.sha }}
+      - name: mcp-publisher
+        run: |
+          curl -fsSL "https://github.com/modelcontextprotocol/registry/releases/latest/download/mcp-publisher_linux_amd64.tar.gz" \
+            | tar -xz mcp-publisher
+      - run: ./mcp-publisher validate
+      - run: ./mcp-publisher login github-oidc
+      - run: ./mcp-publisher publish
