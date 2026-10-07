@@ -362,3 +362,120 @@ def test_the_listener_binds_without_a_reverse_name_lookup(monkeypatch):
         assert httpd.server_address[1] > 0
     finally:
         httpd.server_close()
+
+
+def test_a_member_cannot_redirect_or_promote_another_machine(a_center):
+    """Found in review: the listener merged a member's whole inventory. A record for
+    another machine with a future `updated_at` and an endpoint of the member's choosing
+    won outright -- so the center's next sweep "revoked" keys on whatever host answered
+    there, the ledger said done, and the signed result sent every machine's `fleet ssh`
+    to that host. Labels may change; where a machine is, and who is center, may not."""
+    from fleet.models import Device, Kind
+
+    inv.save(inv.load(inv.INVENTORY_PATH) + [Device(
+        id="id:nas", name="nas", kind=Kind.PERMANENT, updated_at=1_000,
+        endpoints=[{"target": "10.0.0.5", "user": "root", "port": 22}])], inv.INVENTORY_PATH)
+    forged = Device(id="id:nas", name="nas", kind=Kind.PERMANENT, role="center",
+                    updated_at=4_000_000_000, tags=["backup"],
+                    endpoints=[{"target": "192.0.2.66", "user": "root", "port": 22,
+                                "preference": -100}])
+    code, _ = serve.exchange(_sealed(a_center["skey"], [forged]))
+    assert code == 200
+    now = {d.id: d for d in inv.load(inv.INVENTORY_PATH)}
+    assert [e["target"] for e in now["id:nas"].endpoints] == ["10.0.0.5"]
+    assert now["id:nas"].role != "center" and now["id:hub"].role == "center"
+    assert now["id:nas"].tags == ["backup"], "a label is the member's to change"
+    assert now["id:nas"].updated_at < 4_000_000_000, "a future clock wins nothing"
+
+
+def test_a_member_cannot_make_itself_the_center(a_center):
+    from fleet.models import Device, Kind
+
+    me = Device(id="id:box", name="box", kind=Kind.PERMANENT, role="center",
+                updated_at=4_000_000_000)
+    serve.exchange(_sealed(a_center["skey"], [me]))
+    now = {d.id: d for d in inv.load(inv.INVENTORY_PATH)}
+    assert now["id:box"].role != "center" and now["id:hub"].role == "center"
+
+
+def test_a_member_may_still_add_a_machine(a_center):
+    """`fleet add` works on a member; the center picks the machine up from its copy."""
+    from fleet.models import Device, Kind
+
+    new = Device(id="id:new", name="new", kind=Kind.PERMANENT, role="center",
+                 endpoints=[{"target": "10.0.0.9", "user": "root", "port": 22}])
+    serve.exchange(_sealed(a_center["skey"], [new]))
+    now = {d.id: d for d in inv.load(inv.INVENTORY_PATH)}
+    assert "id:new" in now and now["id:new"].role == "none"
+
+
+def test_the_sweep_takes_from_a_members_reply_only_what_it_may_change():
+    """The sweep merges what each member prints back -- unsigned. Same rule."""
+    from fleet.models import Device, Kind
+
+    current = [Device(id="id:nas", name="nas", kind=Kind.PERMANENT, updated_at=1_000,
+                      endpoints=[{"target": "10.0.0.5", "user": "root", "port": 22}])]
+    reply = [Device(id="id:nas", name="renamed", kind=Kind.RENTAL, updated_at=9_000,
+                    endpoints=[{"target": "192.0.2.66", "user": "root", "port": 22}],
+                    cost={"usd_per_hour": 1.0})]
+    taken = inv.from_member(current, reply, sender_id="id:box")
+    assert len(taken) == 1
+    assert taken[0].name == "nas" and taken[0].kind is Kind.PERMANENT
+    assert [e["target"] for e in taken[0].endpoints] == ["10.0.0.5"]
+    assert taken[0].cost == {"usd_per_hour": 1.0}
+
+
+def test_a_client_that_sends_nothing_cannot_hold_the_listener():
+    """The handler's socket timeout is what frees a thread from a stalled client."""
+    assert 0 < serve._Handler.timeout <= 60
+
+
+def test_a_relayed_reading_keeps_its_age(tmp_path, monkeypatch):
+    """Found in review: relayed rows were stamped with the time they arrived, so a
+    machine the center last saw three days ago showed `ok`, 0s old, and was never asked
+    again -- every pull re-stamped it."""
+    import time
+
+    from fleet.ops import sync
+    from fleet.state import store
+
+    monkeypatch.setattr(store, "DB_PATH", tmp_path / "cache.db")
+    three_days_ago = int(time.time()) - 3 * 86400
+    sync.record_relayed([{"device_id": "id:nas", "status": "timeout",
+                          "probed_at": three_days_ago, "snapshot": None,
+                          "error_class": "timeout", "error_detail": "no answer"}])
+    conn = store.connect()
+    try:
+        st, _ = store.latest(conn, "id:nas")
+    finally:
+        conn.close()
+    assert st["last_probe_at"] == three_days_ago
+    assert not store.is_fresh(st, 60)
+    assert st["error_class"] == "timeout" and st["error_detail"] == "no answer"
+
+
+def test_a_member_shows_the_centers_reading_of_a_machine_it_cannot_reach(tmp_path, monkeypatch):
+    """fleet needs the center to reach every machine, not members to reach each other. A
+    member with no route or no key to a machine showed it down while the center had
+    just measured it fine. Not on the center, whose own failure is what matters."""
+    import time
+
+    from fleet.models import ProbeResult, Snapshot, Status
+    from fleet.state import store
+
+    monkeypatch.setattr(store, "DB_PATH", tmp_path / "cache.db")
+    conn = store.connect()
+    try:
+        store.record(conn, "id:nas", ProbeResult(status=Status.AUTH_FAILED), source="self")
+        store.record(conn, "id:nas", ProbeResult(status=Status.OK, snapshot=Snapshot(hostname="nas")),
+                     source="broadcast", at=int(time.time()) + 1)
+        on_member, snap = store.latest(conn, "id:nas", relayed_over_unreachable=True)
+        on_center, _ = store.latest(conn, "id:nas")
+        assert on_member["source"] == "broadcast" and on_member["status"] == "ok"
+        assert snap["hostname"] == "nas"
+        assert on_center["source"] == "self" and on_center["status"] == "auth_failed"
+        # a machine that answered and failed is still reported as it answered
+        store.record(conn, "id:nas", ProbeResult(status=Status.PROBE_ERROR), source="self")
+        assert store.latest(conn, "id:nas", relayed_over_unreachable=True)[0]["source"] == "self"
+    finally:
+        conn.close()

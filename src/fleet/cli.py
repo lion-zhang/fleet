@@ -876,13 +876,12 @@ def run_installer(ep, script: str, *, forward_agent: bool = True,
 
 @app.command("install")
 def cmd_install(name: str = typer.Argument(None,
-                                          help="defaults to this machine"),
+                                          help="the machine to install fleet on"),
                 repo: str = typer.Option(None, "--repo", metavar="URL",
                                          help="git URL to clone; defaults to config or this checkout"),
                 ref: str = typer.Option("main", "--ref", help="branch or tag to install"),
-                role: str = typer.Option(None, "--role",
-                                         help="none (the only role a device takes here; "
-                                              "move the center with `fleet center`)"),
+                role: str = typer.Option(None, "--role", hidden=True,
+                                         help="kept for old scripts; only `none` is accepted"),
                 forward_agent: bool = typer.Option(True, "--forward-agent/--no-forward-agent",
                                                    help="authenticate the clone as you, "
                                                         "leaving no credential on the device")):
@@ -899,8 +898,19 @@ def cmd_install(name: str = typer.Argument(None,
         # being told it was invalid.
         err.print("[red]Use [bold]fleet center NAME[/bold] to move the role.[/red]")
         raise typer.Exit(2)
+    if role not in (None, "none"):
+        # `backup` and anything else used to be recorded and then meant nothing.
+        err.print(f"[red]There is no {role!r} role.[/red] [dim]A machine is the center or "
+                  "it is not; move the role with fleet center NAME.[/dim]")
+        raise typer.Exit(2)
+    if name is None:
+        # This machine is never an ssh target -- its record has no address -- so
+        # "install here" could only fail with "no endpoint recorded".
+        err.print("[red]Name the machine to install fleet on.[/red] [dim]This one already "
+                  "runs fleet: [bold]fleet update[/bold] updates it.[/dim]")
+        raise typer.Exit(2)
     devices = inv.load()
-    dev = _this_machine(devices, "update") if name is None else inv.find(devices, name)
+    dev = inv.find(devices, name)
     if dev is None:
         err.print(f"[red]No device named {name!r}[/red]")
         raise typer.Exit(1)
@@ -920,7 +930,8 @@ def cmd_install(name: str = typer.Argument(None,
 
     console.print(f"[dim]installing fleet on {dev.name} from {url} ({ref})[/dim]")
     code, output = run_installer(sorted(eps, key=lambda e: e.preference)[0],
-                                 install_script(url, ref=ref, platform=platform),
+                                 install_script(url, ref=ref, platform=platform,
+                                                from_git=bool(repo) or ref != "main"),
                                  forward_agent=forward_agent, platform=platform)
     if code != 0:
         err.print(f"[red]Install failed[/red] (exit {code})\n{output.strip()[-600:]}")
@@ -1011,11 +1022,12 @@ def cmd_update(name: str = typer.Argument(None, help="defaults to this machine")
                                                help="every device that already runs fleet"),
                repo: str = typer.Option(None, "--repo", metavar="URL", help="git URL to deploy from; defaults to config or this checkout"),
                ref: str = typer.Option("main", "--ref", help="branch or tag")):
-    """Deploy the newest fleet from git, to the machines that have it.
+    """Update fleet on the machines that have it, the way it was installed there.
 
-    `fleet install` already re-runs as an update, but only one device at a time and only
-    over ssh. This adds the two things you actually reach for: updating everything at
-    once, and updating the machine you are standing on without connecting to it.
+    A machine with fleet from PyPI gets `uv tool upgrade` (or `pipx upgrade`), one with
+    fleet's own checkout is updated from git, and your own source install is left as it
+    is. `--repo` or `--ref` asks for git everywhere. Updates this machine without ssh,
+    and `--all` every machine that runs fleet.
 
     A device with no fleet is skipped and named, never given one: most of a fleet is
     meant to have nothing installed, and `fleet install NAME` is how you change that on
@@ -1025,6 +1037,9 @@ def cmd_update(name: str = typer.Argument(None, help="defaults to this machine")
     """
     devices = inv.load()
     url = repo or configured_repo()
+    # Asking for a repo or a ref by name is asking for git. Otherwise each machine is
+    # updated the way fleet was installed there (install.py, _how_installed_posix).
+    from_git = bool(repo) or ref != "main"
     if not url:
         err.print("[red]No repo to update from.[/red]  Pass [bold]--repo "
                   "git@github.com:you/fleet.git[/bold], or set [bold]repo:[/bold] in "
@@ -1055,7 +1070,7 @@ def cmd_update(name: str = typer.Argument(None, help="defaults to this machine")
         # it certainly has fleet -- update_only would be true either way, and saying so
         # keeps one script shape for every path.
         local_script = install_script(url, ref=ref, platform=local_platform(),
-                                      update_only=True)
+                                      update_only=True, from_git=from_git)
         p = subprocess.run(local_install_argv(),
                            input=payload_for(local_script, local_platform()),
                            capture_output=True)
@@ -1085,7 +1100,7 @@ def cmd_update(name: str = typer.Argument(None, help="defaults to this machine")
         console.print(f"[dim]updating {dev.name}[/dim]")
         code, output = run_installer(eps[0],
                                      install_script(url, ref=ref, platform=platform,
-                                                    update_only=True),
+                                                    update_only=True, from_git=from_git),
                                      platform=platform)
         if code == 0:
             console.print(f"[green]✓[/green] {dev.name}")
@@ -1170,7 +1185,13 @@ def cmd_sync(serve: bool = typer.Option(False, "--serve",
             raise typer.Exit(2)
         # merged against whatever the file holds *now*, under the lock: another
         # command on this machine may have committed while we were reading stdin.
-        merged, changes = inv.update(lambda current: inv.merge(current, incoming))
+        # Authoritative: this is the center's list, verified above against the key this
+        # machine pinned, so a route the center removed is removed here too. Unioned
+        # instead, a member kept every route it had ever held, under the center's
+        # timestamp -- and later authoritative pulls, tied on that timestamp, never
+        # took them away.
+        merged, changes = inv.update(
+            lambda current: inv.merge(current, incoming, authoritative=True))
         sys.stdout.write(inv.dumps(merged))
         return
 
@@ -1536,7 +1557,7 @@ def cmd_ssh(ctx: typer.Context,
         argv += ["-i", ep.identity]
     if ep.jump:
         argv += ["-J", ep.jump]
-    argv.append(f"{ep.user}@{ep.target}" if ep.user else ep.target)
+    argv += ["--", f"{ep.user}@{ep.target}" if ep.user else ep.target]
     extra = [a for a in ctx.args if a != "--"]
     if extra:
         argv.append(remote_command(extra, windows=platform == "windows"))
@@ -1583,7 +1604,10 @@ def cmd_access(target: str = typer.Argument(None, help="one machine, instead of 
                                          help="let MACHINE reach the target"),
                deny: str = typer.Option(None, "--deny", metavar="MACHINE",
                                         help="stop MACHINE reaching the target"),
-               user: str = typer.Option("root", "--user", help="whose authorized_keys"),
+               user: str = typer.Option(None, "--user",
+                                        help="whose authorized_keys; a grant defaults to the "
+                                             "account the target is reached as, a revoke "
+                                             "to every account"),
                migrate: bool = typer.Option(False, "--migrate",
                                             help="spend passwords an older fleet stored"),
                json_out: bool = typer.Option(False, "--json", help="print JSON instead of a table, for scripts and agents")):
@@ -1646,12 +1670,22 @@ def cmd_access(target: str = typer.Argument(None, help="one machine, instead of 
             # writer: two agents granting at once each keep their grant.
             dst = _access_fp(acc, target)
             src = _access_fp(acc, allow or deny)
-            done = (acl.grant(acc, src, dst, user=user) if allow
-                    else acl.revoke(acc, src, dst, user=user))
-            return src, dst, done
+            if allow:
+                # The account the center itself reaches the target as -- the one whose
+                # authorized_keys it can write. Defaulting to root left every grant on a
+                # machine added as ubuntu@ pending for good, and the grantee's
+                # `fleet ssh` logs in as that account anyway.
+                who = [user or (acc.keys.get(dst) or {}).get("user") or "root"]
+                done = acl.grant(acc, src, dst, user=who[0])
+            else:
+                # "Stop the laptop reaching the NAS" means as anyone, unless one is named.
+                who = [user] if user else sorted(
+                    {e.user for e in acc.allow if e.src == src and e.dst == dst}) or ["root"]
+                done = any([acl.revoke(acc, src, dst, user=w) for w in who])
+            return src, dst, done, who
 
         try:
-            current, (src, dst, changed) = acl.update(change)
+            current, (src, dst, changed, users) = acl.update(change)
         except acl.AccessError as exc:
             err.print(f"[red]{exc}[/red]")
             raise typer.Exit(2)
@@ -1661,7 +1695,7 @@ def cmd_access(target: str = typer.Argument(None, help="one machine, instead of 
         # it asked for come back unreadable.
         with _chatter_to_stderr(json_out):
             console.print(f"[green]✓[/green] {verb} {current.name_of(src)} -> "
-                          f"{current.name_of(dst)}"
+                          f"{current.name_of(dst)} as {', '.join(users)}"
                           + ("" if changed else "  [dim](already so)[/dim]"))
             if changed:
                 # Applied here rather than left for a sweep. You have just said what you
@@ -1670,9 +1704,11 @@ def cmd_access(target: str = typer.Argument(None, help="one machine, instead of 
                 # waits to be asked would keep the key until it next happened to sync,
                 # which for an idle machine is never, while the peer losing access
                 # carries on using it.
-                _apply_now(current, src, dst, user, install=bool(allow))
+                for who in users:
+                    _apply_now(current, src, dst, who, install=bool(allow))
         change_done = {"change": verb, "from": current.name_of(src),
-                       "to": current.name_of(dst), "user": user, "changed": changed}
+                       "to": current.name_of(dst), "user": ", ".join(users),
+                       "changed": changed}
 
     ledger = rec.load_ledger()
     rows = []
@@ -1686,6 +1722,23 @@ def cmd_access(target: str = typer.Argument(None, help="one machine, instead of 
                      "pending_s": (int(time.time()) - st.pending_since)
                                   if not st.converged and st.pending_since else 0,
                      "last_error": st.last_error})
+    # A revoke that has not reached its machine is still a key in that machine's
+    # authorized_keys. Listing only what the list wants made it vanish from the table the
+    # moment it was asked for -- exactly the "reported as done while the key is still
+    # there" the access design rules out.
+    wanted = set(current.edges())
+    for key, st in sorted(ledger.items()):
+        parts = tuple(key.split(">"))
+        if len(parts) != 3 or parts in wanted or st.desired != "absent" or st.converged:
+            continue
+        src, dst, who = parts
+        if target and dst != _access_fp(current, target):
+            continue
+        rows.append({"from": current.name_of(src), "to": current.name_of(dst),
+                     "user": who, "state": "revoking",
+                     "pending_s": (int(time.time()) - st.pending_since)
+                                  if st.pending_since else 0,
+                     "last_error": st.last_error or "revoke not applied yet -- the key is still there"})
     if _emit({"center": current.name_of(current.center), "edges": rows,
               **(change_done if allow or deny else {})}, json_out):
         return
@@ -1697,7 +1750,8 @@ def cmd_access(target: str = typer.Argument(None, help="one machine, instead of 
         t.add_column(col, no_wrap=(col != "NOTE"))
     for r in rows:
         live = r["state"] == "present"
-        dot = "[green]●[/green]" if live else "[yellow]○[/yellow]"
+        dot = ("[green]●[/green]" if live else
+               "[red]○[/red]" if r["state"] == "revoking" else "[yellow]○[/yellow]")
         note = r["last_error"] or ("" if live else "not applied yet")
         if r["pending_s"]:
             note = f"pending {r['pending_s'] // 60}m · {note}" if note else \
@@ -2118,14 +2172,14 @@ def cmd_setup(
                   "new terminal.[/dim]")
 
 
-@app.command("service", hidden=True)
+@app.command("service")
 def cmd_service(action: str = typer.Argument("status",
                                              help="status | install | remove | start | stop")):
-    """Manage the background service that keeps the center listening.
+    """The background service that keeps the center listening on port 7373.
 
-    Hidden because nobody should have to run it: `fleet center --init` installs it and
-    `fleet update` stops and starts it around the install. It exists so those two have
-    something to call, and so you can look when something is wrong.
+    Starting a fleet installs it and updates restart it, so you rarely need this: it is
+    for looking when something is wrong, putting it back after a handover (the new
+    center's `fleet service install`), or removing it.
 
     [dim]Example:[/dim]  fleet service status
     """
@@ -2210,7 +2264,30 @@ def cmd_paths():
 
 
 def main() -> None:
-    app()
+    """Run the CLI. Failures a person can act on end in one line, not a traceback.
+
+    A malformed inventory or access list, a write that could not get its turn, or a
+    machine that never answered used to surface as a Python traceback -- and under
+    `--json`, an agent got an empty stdout and no reason. Those now print what went
+    wrong (as JSON too, with `--json`) and exit 2. Anything else is a bug, and keeps its
+    traceback, which is what a bug report needs.
+    """
+    import subprocess
+
+    from .state.writes import QueueTimeout
+
+    expected = (inv.InventoryError, acl.AccessError, QueueTimeout,
+                subprocess.TimeoutExpired)
+    try:
+        app()
+    except expected as exc:
+        message = str(exc) or type(exc).__name__
+        if isinstance(exc, subprocess.TimeoutExpired):
+            message = f"a machine did not answer within {exc.timeout:.0f}s"
+        if "--json" in sys.argv:
+            sys.stdout.write(jsonlib.dumps({"ok": False, "error": message}) + "\n")
+        err.print(f"[red]fleet:[/red] {message}")
+        raise SystemExit(2) from None
 
 
 if __name__ == "__main__":

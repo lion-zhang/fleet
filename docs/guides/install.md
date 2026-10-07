@@ -52,8 +52,9 @@ pipx install agents-fleet
 
 `uv tool update-shell` matters: on Ubuntu, root's shell does not have `~/.local/bin` on
 its PATH, so without it `fleet` is installed and "command not found". Then run
-`fleet setup` to teach your agents; the first fleet command on a machine in no fleet
-starts one with this machine as center (set `FLEET_NO_AUTO_CENTER=1` to prevent that).
+`fleet setup` to teach your agents. On a machine in no fleet, the first `fleet ls`, `show`, `top`, `add`, `invite`, `access`, `setup`, or a bare `fleet center`
+(or an MCP tool that runs one) starts a fleet with this machine as center; set
+`FLEET_NO_AUTO_CENTER=1` to prevent that.
 
 To install from inside one particular agent — a plugin, an extension, an MCP entry, a
 one-click button — see [Agents](agents.md).
@@ -84,11 +85,24 @@ fleet update --all             # update every machine that runs fleet
 fleet update                   # update this machine
 ```
 
-These install from git — a checkout of the repository's `main` branch in
-`~/.local/share/fleet`, or `--repo URL` and `--ref BRANCH` — rather than from PyPI.
-They forward your SSH agent for the clone, so the machine fetches as you and no
-credential is left on it (`fleet install --no-forward-agent` turns that off). Each also
-refreshes what the agents on that machine are told.
+`fleet install` needs the machine's name (on the machine itself, use `fleet update`).
+It installs from git: a checkout of the repository's `main` branch in
+`~/.local/share/fleet`, or `--repo URL` and `--ref BRANCH` (a branch or a tag).
+
+`fleet update` updates fleet the way it was installed on that machine, and never
+replaces a copy you installed yourself:
+
+| fleet there was installed | `fleet update` |
+|---|---|
+| with uv from PyPI (the installer's way) | `uv tool upgrade agents-fleet` |
+| with pipx | `pipx upgrade agents-fleet` |
+| by `fleet install` (the checkout in `~/.local/share/fleet`) | fetches the ref and reinstalls from it |
+| from a source checkout of yours, or some other way | kept as it is, and says so |
+
+`--repo` or `--ref` asks for git by name, and then git it is. Both commands forward your
+SSH agent for a clone, so the machine fetches as you and no credential is left on it
+(`--no-forward-agent` turns that off). Each also refreshes what the agents on that
+machine are told, and restarts the center's background service if it ran.
 
 ## Removing fleet
 
@@ -100,7 +114,7 @@ fleet setup --uninstall        # removes the skills and MCP entries fleet instal
 uv tool uninstall agents-fleet # or: pipx uninstall agents-fleet
 ```
 
-On the center, `fleet center --dissolve` takes the whole fleet down first (see
-[The center](center.md#leaving-and-ending)); hand the role over instead if the fleet
+On the center, `fleet center --dissolve` takes the whole fleet down first and removes
+the background service (see [The center](center.md#leaving-and-ending)); hand the role over instead if the fleet
 should live on. `fleet paths` shows where fleet keeps its files, if you want them gone
 too.

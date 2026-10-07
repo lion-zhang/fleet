@@ -6,19 +6,20 @@ revoking takes it off. Only the center can do either.
 
 > **You:** let the laptop reach the NAS
 >
-> **Agent:** Done — `laptop` can now reach `nas` as `root`.
+> **Agent:** Done — `laptop` can now reach `nas` as `admin`, the account fleet reaches it as.
 
 ## Granting
 
 ```bash
-fleet access nas --allow laptop                 # laptop may reach nas, as root
+fleet access nas --allow laptop                 # laptop may reach nas
 fleet access gpu-box --allow laptop --user ubuntu
 ```
 
 The grant is applied on the spot: the center connects to the target and adds the key.
 There is no second command. A grant is **per user** — a machine often answers as both
-`root` and `ubuntu`, and each is a separate grant — which is why the agent asks which one
-you mean when it is not clear.
+`root` and `ubuntu`, and each is a separate grant. Without `--user`, the grant is for
+the account the center itself reaches that machine as (`root` if it has none), which is
+why the agent asks which one you mean when it is not clear.
 
 After that, on the laptop, `fleet ssh nas` works, and so does plain `ssh` with the
 laptop's fleet key: access is enforced by the target's sshd, not by fleet.
@@ -26,7 +27,8 @@ laptop's fleet key: access is enforced by the target's sshd, not by fleet.
 ## Revoking
 
 ```bash
-fleet access nas --deny laptop
+fleet access nas --deny laptop                  # every account laptop was granted on nas
+fleet access nas --deny laptop --user ubuntu    # just this one
 ```
 
 Revoking is pushed to the target at once, rather than waiting for it to check in: a
@@ -41,9 +43,10 @@ fleet access nas        # just this machine
 ```
 
 A change the center could not apply yet — the target is switched off — is shown as
-**pending**, with how long it has waited, and never reported as done. A pending revoke
-means the key is *still there*. The center retries pending changes every time it syncs;
-`fleet sync` on the center does it now.
+**pending** (a grant) or **revoking** (a revoke), with how long it has waited, and never
+reported as done. A revoke still shown as revoking means the key is *still there*. The
+center does not retry by itself: run `fleet sync` on the center once the machine is
+back, and it applies every pending change.
 
 On a member, `fleet access` names the center; changes have to be made there.
 

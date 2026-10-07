@@ -66,9 +66,15 @@ def _probe(conn, due: list, cfg, *, me: str, schedule=None, tolerant: bool = Fal
 
 
 def _render(conn, devices: list, detail: Detail, me: str) -> list[dict]:
+    from ..state import access as acl
+
+    try:
+        member = not acl.is_center(acl.load())
+    except acl.AccessError:
+        member = True                      # no access list: certainly not the center
     out = []
     for d in devices:
-        st, sn = store.latest(conn, d.id)
+        st, sn = store.latest(conn, d.id, relayed_over_unreachable=member)
         out.append(device_view(d, st, sn, detail, self_id=me))
     return out
 

@@ -691,3 +691,19 @@ def test_dialling_refuses_an_answer_it_cannot_trust(tmp_path, monkeypatch):
     with pytest.raises(FleetError):
         sync.join("http://wherever:7373/sync")
     assert "evil" not in {d.name for d in inv.load()}
+
+
+def test_a_route_changed_on_the_center_does_not_come_back():
+    """Found in review: `fleet edit rental --ssh` on the center, then a member still
+    holding the old route synced; the center unioned it back in, signed the result and
+    handed it out. Dead routes piled up, each costing a timeout on every `fleet ls`."""
+    old = _dev("rental", updated_at=100,
+               endpoints=[{"target": "192.0.2.1", "user": "root", "port": 22}])
+    new = _dev("rental", updated_at=200,
+               endpoints=[{"target": "192.0.2.2", "user": "root", "port": 40001}])
+    on_center, _ = merge([new], [old])                    # the member's stale copy arrives
+    assert [e["target"] for e in on_center[0].endpoints] == ["192.0.2.2"]
+    on_member, _ = merge([old], [new], authoritative=True)   # the center's signed push
+    assert [e["target"] for e in on_member[0].endpoints] == ["192.0.2.2"]
+    again, _ = merge(on_member, [new], authoritative=True)  # tied, still the center's
+    assert [e["target"] for e in again[0].endpoints] == ["192.0.2.2"]

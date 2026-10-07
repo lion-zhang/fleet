@@ -24,8 +24,9 @@ fleet show gpu-box          # one machine in full: GPU processes, top CPU users,
 
 A reading is reused for 60 seconds, so asking twice in a row is instant. A machine that
 keeps not answering is asked less often — the wait doubles per miss, up to 30 minutes —
-so one switched-off box never makes `fleet ls` slow. Naming it (`fleet ls NAME`) always
-asks it directly.
+so one switched-off box never makes `fleet ls` slow. Naming it (`fleet ls NAME`) skips
+that wait, though a reading under 60 seconds old is still reused; `-r` always measures
+again.
 
 **A busy GPU is not a free one.** A card counts as busy at 10% utilisation or 1 GiB of
 compute memory in use. VRAM held by processes fleet cannot see — another container,
@@ -56,8 +57,8 @@ fleet ls --tag linux --tag ram-64g       # repeats mean "and"
 
 `gpu` without `cuda` means the card is there but its driver is not answering — often
 after a kernel upgrade — so the machine is kept away from CUDA work. A machine fleet has
-never measured has no facts and matches nothing; `fleet ls --tag` says how many it had
-to leave out.
+never measured has only the facts its record gives it (its kind, `public-ip`) and matches
+nothing else; `fleet ls --tag` says how many it had to leave out.
 
 ## Disks: tell fleet where the space is
 

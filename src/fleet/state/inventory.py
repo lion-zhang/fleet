@@ -50,9 +50,27 @@ def _via(raw: str, target: str = "") -> str:
     return route_of(raw, target)
 
 
+def _usable(e: dict) -> bool:
+    """Whether an endpoint's fields can be handed to ssh as they are.
+
+    The inventory is shared between machines, so its addresses are not only ever typed
+    by you. A host, user or jump that began with `-` would be read by ssh as an option
+    (older OpenSSH, as some Windows builds ship, accepts more of them), and whitespace or
+    a control character has no business in any of the three. Such an endpoint is left
+    out rather than dialled.
+    """
+    for field in ("target", "user", "jump"):
+        v = str(e.get(field, "") or "")
+        if v.startswith("-") or any(c.isspace() or ord(c) < 32 or ord(c) == 127 for c in v):
+            return False
+    return bool(e.get("target"))
+
+
 def endpoints_of(dev: Device) -> list[Endpoint]:
     out: list[Endpoint] = []
     for i, e in enumerate(dev.endpoints):
+        if not _usable(e):
+            continue
         out.append(Endpoint(
             target=e.get("target", ""), user=e.get("user", ""),
             port=int(e.get("port", 22) or 22), identity=_identity(e.get("identity", "")),
@@ -70,24 +88,43 @@ def load(path: Path | None = None) -> list[Device]:
     try:
         raw = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
     except yaml.YAMLError as exc:
-        # Report the line and keep going -- a stray tab must not blank your fleet.
+        # Report the line rather than read it as empty -- a stray tab must not blank
+        # your fleet. `fleet` turns this into one line, not a traceback.
         raise InventoryError(f"{path} is not valid YAML: {exc}") from exc
     return _devices_from(raw)
 
 
 def _devices_from(raw: dict) -> list[Device]:
+    """The records in a parsed inventory. A malformed one stops the load, by name.
+
+    Not skipped: the next write would save the list without it, and a typo in one entry
+    would quietly delete that machine from the fleet.
+    """
+    if not isinstance(raw, dict):
+        raise InventoryError("not an inventory document")
     devices = []
-    for d in raw.get("devices") or []:
-        d = dict(d)
-        d["kind"] = Kind(d.get("kind", "permanent"))
-        # `tags: gpu` -- no brackets -- is the likeliest typo in a file whose docstring
-        # promises it stays fixable in vim, and without this it loads as the string
-        # "gpu", which every consumer then iterates into ["g", "p", "u"].
-        if isinstance(d.get("tags"), str):
-            d["tags"] = [t for t in d["tags"].replace(",", " ").split() if t]
-        known = {f for f in Device.__slots__}
-        devices.append(Device(**{k: v for k, v in d.items() if k in known}))
+    for i, d in enumerate(raw.get("devices") or []):
+        try:
+            devices.append(_device_from(d))
+        except (TypeError, ValueError) as exc:
+            label = d.get("name") if isinstance(d, dict) else None
+            raise InventoryError(
+                f"device {label or f'#{i + 1}'} in the inventory is malformed: {exc}") from exc
     return devices
+
+
+def _device_from(d) -> Device:
+    if not isinstance(d, dict):
+        raise TypeError("expected a mapping of fields")
+    d = dict(d)
+    d["kind"] = Kind(d.get("kind", "permanent"))
+    # `tags: gpu` -- no brackets -- is the likeliest typo in a file whose docstring
+    # promises it stays fixable in vim, and without this it loads as the string
+    # "gpu", which every consumer then iterates into ["g", "p", "u"].
+    if isinstance(d.get("tags"), str):
+        d["tags"] = [t for t in d["tags"].replace(",", " ").split() if t]
+    known = {f for f in Device.__slots__}
+    return Device(**{k: v for k, v in d.items() if k in known})
 
 
 def loads(text: str) -> list[Device]:
@@ -200,7 +237,10 @@ def near_matches(devices: list[Device], name: str, limit: int = 5) -> list[str]:
                   if lowered in h.lower() or h.lower().startswith(lowered))[:limit]
 
 
-TOMBSTONE_TTL_S = 60 * 60 * 24 * 30      # long enough for every machine to have synced
+# A year, not a month. A member that had been off for longer than the tombstone lived
+# still held the machine as live, synced, and the machine came back -- and the sweep then
+# tried to enrol it again, putting the center's key back on a machine you had removed.
+TOMBSTONE_TTL_S = 60 * 60 * 24 * 365
 
 
 def live(devices: list[Device]) -> list[Device]:
@@ -285,14 +325,57 @@ def _one_center(devices: list[Device]) -> None:
             d.role = "none"
 
 
+# What a member may change about a machine other than itself. Labels a person curates,
+# and nothing that decides where fleet connects or who is the center.
+MEMBER_MAY_EDIT = ("tags", "cost", "disk_paths", "notes")
+
+
+def from_member(current: list[Device], incoming: list[Device], sender_id: str) -> list[Device]:
+    """The part of a member's inventory the center takes, before it is merged.
+
+    The center merges what members send -- through its listener and from every sweep --
+    and then signs the result and hands it to everyone as authoritative. Merged as it
+    came, any member could rewrite any machine's record: a future `updated_at` won the
+    whole record, an extra endpoint with a low preference became the route every machine
+    dials for `fleet ssh`, and the sweep then "revoked" keys on whatever host answered
+    there while the ledger reported the revoke as done. So a member is the authority on
+    itself and on machines nobody has recorded yet (adding from a member is allowed),
+    and for the rest may change only the labels in MEMBER_MAY_EDIT. Never a role: no
+    machine makes itself, or anyone, the center. A deletion counts only for itself.
+    """
+    import dataclasses
+
+    now = int(time.time())
+    have = {d.id: d for d in current}
+    out: list[Device] = []
+    for d in incoming:
+        mine = have.get(d.id)
+        if d.deleted_at and d.id != sender_id:
+            continue
+        # A future clock wins nothing: newer than ours counts as newer by a second, not
+        # by however far ahead the member's clock happens to be.
+        cap = max(now, mine.updated_at + 1) if mine is not None else now
+        d.updated_at = min(int(d.updated_at or 0), cap)
+        if d.id == sender_id or mine is None:
+            d.role = mine.role if mine is not None else "none"
+            out.append(d)
+            continue
+        if d.updated_at <= mine.updated_at:
+            continue
+        out.append(dataclasses.replace(
+            mine, updated_at=d.updated_at,
+            **{f: getattr(d, f) for f in MEMBER_MAY_EDIT}))
+    return out
+
+
 def merge(local: list[Device], remote: list[Device], *,
           authoritative: bool = False) -> tuple[list[Device], list[str]]:
     """Combine two inventories. Returns (merged, human-readable changes).
 
     Devices are matched on id, which is why id prefers machine-id over an address: two
     machines may have named the same box differently, and the address may since have
-    changed. Newer updated_at wins the record; endpoints are unioned regardless, because
-    a route one machine knows about is still a real route.
+    changed. Newer updated_at wins the record; an older one changes nothing. When the
+    newer record is not the authority, its endpoints are unioned with ours.
 
     Deletion travels as a tombstone: `fleet rm` keeps the record with `deleted_at` set,
     and it wins like any newer record, so "deleted here" is never mistaken for "not seen
@@ -320,8 +403,18 @@ def merge(local: list[Device], remote: list[Device], *,
                 incoming.endpoints = _union_endpoints(incoming.endpoints, mine.endpoints)
             by_id[incoming.id] = incoming
             changes.append(f"updated {incoming.name}")
-        elif gained and not authoritative:
-            mine.endpoints = endpoints
+        elif incoming.updated_at == mine.updated_at:
+            # The same version of the record, reached two ways. Routes either side
+            # holds are both real -- unless the other side is the center's signed list,
+            # which then says exactly which routes there are.
+            mine.endpoints = list(incoming.endpoints) if authoritative else endpoints
+        else:
+            # An older record adds nothing -- not even a route. Taking its endpoints
+            # anyway was how a route removed or changed on the center came back: a
+            # member still holding the old one synced, the center unioned it into its
+            # newer record, signed the result and handed it to everyone. A real new
+            # route arrives with a newer record (`fleet add` stamps it).
+            gained = 0
         if gained:
             changes.append(f"{by_id[incoming.id].name}: +{gained} endpoint(s)")
 
@@ -354,6 +447,7 @@ def upsert(devices: list[Device], new: Device) -> tuple[list[Device], str]:
                      if (e.get("target"), e.get("user"), int(e.get("port", 22) or 22)) not in known]
             if added:
                 existing.endpoints.extend(added)
+                touch(existing)            # or the new route loses the next merge
             if restored:
                 return devices, "restored"
             return devices, "endpoint_added" if added else "unchanged"

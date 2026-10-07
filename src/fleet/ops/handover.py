@@ -356,7 +356,11 @@ def settle(acc) -> bool:
         return False                       # it answered, but has not taken the role
 
     retired = acl.ACCESS_PATH.with_name("access.retired.yaml")
-    os.replace(acl.ACCESS_PATH, retired)
+    # In the list's own turn: a grant running at this moment loads, changes and saves the
+    # list inside that turn, and outside it could save the list back after the rename --
+    # making this machine a center again beside the successor.
+    with turn(acl.ACCESS_PATH):
+        os.replace(acl.ACCESS_PATH, retired)
     acl.HANDING_PATH.unlink(missing_ok=True)
     acl.pin_center_pubkey(to_pub)
     acl.note_center_url(note["center_url"] or url)

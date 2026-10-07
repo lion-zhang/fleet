@@ -226,12 +226,21 @@ def build_server():
         return _run(["invite", *([name] if name else []), "--ttl", valid_for, "--json"])
 
     @server.tool(description="Label a machine, or change what it costs per hour (for the "
-                             "$/HR column and burn rate) or how it is reached. Tags are yours; "
-                             "measured facts such as cuda or vram-24g come from probes.")
+                             "$/HR column and burn rate), how it is reached, or which disks "
+                             "to watch for free space: disk_paths means exactly these paths "
+                             "from now on -- for a container or rental whose `/` is not "
+                             "where the space is -- and autodetect_disks goes back. Tags are "
+                             "yours; measured facts such as cuda or vram-24g come from probes.")
     def edit_machine(name: str, add_tags: list[str] | None = None,
                      remove_tags: list[str] | None = None, cost_per_hour: float | None = None,
-                     ssh_command: str | None = None) -> Any:
+                     ssh_command: str | None = None,
+                     disk_paths: list[str] | None = None,
+                     autodetect_disks: bool = False) -> Any:
         args = ["edit", name, "--json"]
+        for path in disk_paths or []:
+            args += ["--disk-path", path]
+        if autodetect_disks:
+            args += ["--clear-disk-paths"]
         for t in add_tags or []:
             args += ["--tag", t]
         for t in remove_tags or []:
@@ -255,18 +264,22 @@ def build_server():
     def center_status() -> Any:
         return _run(["center", "--json"])
 
-    @server.tool(description="Let one machine reach another over ssh. Applied on the "
-                             "spot; a machine that is off stays pending and is retried. "
+    @server.tool(description="Let one machine reach another over ssh, as the account the "
+                             "machine is reached as unless `user` names another. Applied on "
+                             "the spot; a machine that is off stays pending until sync_fleet "
+                             "on the center. "
                              "Only the center can do this. Ask before calling it: access "
                              "is the user's decision.")
-    def grant_access(machine: str, may_be_reached_by: str, user: str = "root") -> Any:
+    def grant_access(machine: str, may_be_reached_by: str, user: str | None = None) -> Any:
         return _run(["access", machine, "--allow", may_be_reached_by,
-                     "--user", user, "--json"])
+                     *(["--user", user] if user else []), "--json"])
 
-    @server.tool(description="Take that access away again, applied on the spot. Ask "
-                             "before calling it: the other machine loses its way in.")
-    def revoke_access(machine: str, reached_by: str, user: str = "root") -> Any:
-        return _run(["access", machine, "--deny", reached_by, "--user", user, "--json"])
+    @server.tool(description="Take that access away again, for every account unless "
+                             "`user` names one, applied on the spot. Ask before calling it: "
+                             "the other machine loses its way in.")
+    def revoke_access(machine: str, reached_by: str, user: str | None = None) -> Any:
+        return _run(["access", machine, "--deny", reached_by,
+                     *(["--user", user] if user else []), "--json"])
 
     @server.tool(description="Bring this machine up to date. On the center: apply "
                              "pending access changes and share the inventory. On a member: "

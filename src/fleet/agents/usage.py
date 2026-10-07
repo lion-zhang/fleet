@@ -81,9 +81,10 @@ Only on the center. `{cmd} center --json` says which this machine is: `role` is
 that decides. These refuse anywhere else and say
 where to run them: report that to the user, nothing is queued.
 
-- `{cmd} access NAME --allow MACHINE` -- grant, and it is applied on the spot.
-  `--user` names whose authorized_keys, since a box answers as both root@ and ubuntu@
-- `{cmd} access NAME --deny MACHINE` -- revoke
+- `{cmd} access NAME --allow MACHINE` -- grant, and it is applied on the spot, as the
+  account NAME is reached as. `--user` names another, since a box can answer as both
+  root@ and ubuntu@. A machine that is off stays pending until `{cmd} sync` on the center
+- `{cmd} access NAME --deny MACHINE` -- revoke, for every account unless `--user` names one
 - `{cmd} sync` -- on the center, the sweep: enrol anything not yet enrolled, install and
   remove keys, and collect telemetry. On a member, fetch a fresh copy from the center
   now. Rarely needed: a grant applies itself, and machines refresh on their own. Reach

@@ -235,3 +235,19 @@ def test_what_fleet_says_on_stderr_reaches_the_agent(monkeypatch, tmp_path):
     monkeypatch.setattr(mcpserver, "_fleet", lambda: fake)
     out = mcpserver._run(["ls", "--json", "--tag", "cuda"])
     assert out["result"] == [] and "no telemetry" in out["notes"]
+
+
+def test_an_app_can_set_the_disks_to_watch(monkeypatch):
+    """Apps without a shell had no way to say where a rental's space is."""
+    pytest.importorskip("mcp", reason="the mcp extra is optional")
+    import asyncio
+
+    from fleet import mcpserver
+
+    ran = []
+    monkeypatch.setattr(mcpserver, "_run", lambda args: ran.append(args) or {"ok": True})
+    server = mcpserver.build_server()
+    asyncio.run(server.call_tool("edit_machine", {"name": "gpu", "disk_paths": ["/workspace"]}))
+    asyncio.run(server.call_tool("edit_machine", {"name": "gpu", "autodetect_disks": True}))
+    assert ran == [["edit", "gpu", "--json", "--disk-path", "/workspace"],
+                   ["edit", "gpu", "--json", "--clear-disk-paths"]]

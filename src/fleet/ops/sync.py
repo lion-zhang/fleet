@@ -139,13 +139,15 @@ def telemetry_to_relay() -> list[dict]:
     conn = store.connect()
     try:
         rows = conn.execute(
-            "SELECT device_id, status, last_probe_at FROM device_state "
-            "WHERE source='self'").fetchall()
+            "SELECT device_id, status, last_probe_at, error_class, error_detail "
+            "FROM device_state WHERE source='self'").fetchall()
         out = []
         for r in rows:
             _, snap = store.latest(conn, r["device_id"])
             out.append({"device_id": r["device_id"], "status": r["status"],
-                        "probed_at": r["last_probe_at"], "snapshot": snap})
+                        "probed_at": r["last_probe_at"], "snapshot": snap,
+                        "error_class": r["error_class"] or "",
+                        "error_detail": r["error_detail"] or ""})
         return out
     finally:
         conn.close()
@@ -169,11 +171,15 @@ def record_relayed(rows: list) -> None:
                 with suppress(Exception):
                     snap = Snapshot(**{k: v for k, v in row["snapshot"].items()
                                        if k in Snapshot.__dataclass_fields__})
-            with suppress(ValueError):
+            at = row.get("probed_at")
+            with suppress(ValueError, TypeError):
                 store.record(conn, row["device_id"],
                              ProbeResult(status=Status(row.get("status") or "unknown"),
-                                         snapshot=snap),
-                             source="broadcast", probed_by=by or "center")
+                                         snapshot=snap,
+                                         error_class=str(row.get("error_class") or ""),
+                                         error_detail=str(row.get("error_detail") or "")[:200]),
+                             source="broadcast", probed_by=by or "center",
+                             at=int(at) if at else None)
     finally:
         conn.close()
 

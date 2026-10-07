@@ -25,7 +25,8 @@ say so:
 - Keys go where Windows' sshd actually reads them. For an administrator account that is
   `C:\ProgramData\ssh\administrators_authorized_keys`, with the strict permissions sshd
   insists on (it silently ignores the file otherwise); for other accounts it is
-  `~\.ssh\authorized_keys`. Taking a machine out of the fleet cleans both.
+  `~\.ssh\authorized_keys`. `fleet rm` on the center removes the fleet's keys from the
+file it placed them in; `fleet center --leave` on the machine itself cleans both.
 - `fleet ssh box -- dir` passes the command to the remote shell as it is, rather than
   wrapping it for a shell that is not there. The remote command's exit code comes back.
 
@@ -48,7 +49,7 @@ Open a new terminal afterwards so `fleet` is on your PATH.
 **One limit: a Windows machine cannot type a password for you**, because Windows has no
 pseudo-terminal for ssh to prompt on. So a Windows center adds only machines that already
 accept a key — yours, or the fleet's. For a password-only host, put the fleet's key there
-first (`fleet center --pubkey` prints it), or use an [invite](add-machines.md#let-the-machine-join-by-itself).
+first (`fleet center --pubkey` on the center prints it), or use an [invite](add-machines.md#let-the-machine-join-by-itself).
 
 ## If something does not work
 

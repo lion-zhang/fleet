@@ -259,3 +259,91 @@ def test_rm_takes_the_centers_key_off_last(a_fleet, monkeypatch):
     removed, unreached = sweep.remove_now(acl.load(acl.ACCESS_PATH), dev)
     assert unreached == [], unreached
     assert removed == 3, "the worker's block, and the center's as lin and as root"
+
+
+def test_a_grant_reaches_the_machine_that_was_pinned_not_one_now_using_its_old_name(a_fleet, monkeypatch):
+    """Found in review: lin-xps was renamed, and a new machine was added under the old
+    name. The access list still said lin-xps, apply_now looked the name up, and the grant
+    landed on the new machine while the ledger recorded it as present."""
+    from fleet.ops import sweep
+
+    runner, me = a_fleet
+    devices = inv.load(inv.INVENTORY_PATH)
+    for d in devices:
+        if d.id == "id:xps":
+            d.name = "xps-renamed"
+    devices.append(Device(id="id:imposter", name="lin-xps", kind=Kind.PERMANENT,
+                          endpoints=[{"target": "192.0.2.99", "user": "lin", "port": 22}]))
+    inv.save(devices, inv.INVENTORY_PATH)
+    reached = []
+    monkeypatch.setattr(rec, "converge_edge",
+                        lambda acc, edge, ep, **kw: reached.append(ep.target) or (True, "", True))
+    sweep.apply_now(acl.load(acl.ACCESS_PATH), me, "SHA256:xps", "lin", install=True)
+    assert reached == ["5.6.7.8"], reached
+
+
+def test_a_revoke_that_has_not_landed_is_still_listed(a_fleet, monkeypatch):
+    """Found in review: `fleet access` listed only what the list wants, so a revoke
+    whose machine was off vanished from the table and from --json at once -- while the
+    key was still in that machine's authorized_keys."""
+    import json
+
+    runner, me = a_fleet
+    acc = acl.load(acl.ACCESS_PATH)
+    acc.keys["SHA256:lap"] = {"name": "laptop", "pubkey": "ssh-ed25519 AAAA l",
+                              "device_id": "id:lap"}
+    acl.save(acc, acl.ACCESS_PATH)
+    ledger = rec.load_ledger()
+    ledger["SHA256:lap>SHA256:xps>lin"] = rec.EdgeState(desired="absent", observed="present",
+                                                         last_error="no route")
+    rec.save_ledger(ledger)
+    r = runner.invoke(cli.app, ["access", "--json"])
+    assert r.exit_code == 0, r.output
+    rows = json.loads(r.output)["edges"]
+    assert {"from": "laptop", "to": "lin-xps", "user": "lin", "state": "revoking"}.items() \
+        <= next(x for x in rows if x["from"] == "laptop").items()
+
+
+def test_a_finished_revoke_leaves_the_ledger(a_fleet):
+    """Every revoked edge stayed in the ledger, and in every sweep's plan, for good."""
+    ledger = rec.load_ledger()
+    ledger["SHA256:a>SHA256:b>root"] = rec.EdgeState(desired="absent", observed="absent")
+    ledger["SHA256:a>SHA256:c>root"] = rec.EdgeState(desired="absent", observed="present")
+    rec.save_ledger(ledger)
+    assert set(rec.load_ledger()) == {"SHA256:a>SHA256:c>root"}, "the pending one stays"
+
+
+def test_dissolving_removes_the_background_service(a_fleet, monkeypatch):
+    """Left installed, the service manager restarted a listener with no fleet to serve,
+    for good, and it exited every time."""
+    from fleet import service
+
+    runner, _ = a_fleet
+    removed = []
+    monkeypatch.setattr(service, "remove", lambda: removed.append(1) or "removed")
+    monkeypatch.setattr(rec, "apply_edge", lambda *a, **k: (True, ""))
+    assert runner.invoke(cli.app, ["center", "--dissolve"], input="y\n").exit_code == 0
+    assert removed == [1]
+
+
+def test_a_grant_is_made_as_the_account_the_machine_is_reached_as(a_fleet, monkeypatch):
+    """Found in review: `--user` defaulted to root, so on a machine added as ubuntu@ (or
+    lin@) every grant made the way the docs show it stayed pending for good -- the center
+    had only ever placed its own key in that account's file."""
+    runner, me = a_fleet
+    acc = acl.load(acl.ACCESS_PATH)
+    acc.keys["SHA256:xps"]["user"] = "lin"
+    acc.keys["SHA256:lap"] = {"name": "laptop", "pubkey": "ssh-ed25519 AAAA l",
+                              "device_id": "id:lap", "user": "me"}
+    acl.save(acc, acl.ACCESS_PATH)
+    applied = []
+    monkeypatch.setattr(cli, "_apply_now",
+                        lambda acc, src, dst, user, install: applied.append((user, install)))
+    assert runner.invoke(cli.app, ["access", "lin-xps", "--allow", "laptop"]).exit_code == 0
+    assert ("SHA256:lap", "SHA256:xps", "lin") in acl.load(acl.ACCESS_PATH).edges()
+    runner.invoke(cli.app, ["access", "lin-xps", "--allow", "laptop", "--user", "root"])
+    applied.clear()
+    r = runner.invoke(cli.app, ["access", "lin-xps", "--deny", "laptop"])
+    assert r.exit_code == 0, r.output
+    assert sorted(applied) == [("lin", False), ("root", False)], "every account, by default"
+    assert not [e for e in acl.load(acl.ACCESS_PATH).allow if e.src == "SHA256:lap"]

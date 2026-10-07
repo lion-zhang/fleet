@@ -23,12 +23,14 @@ writing the same state. Many agents on one machine share one core.
    atomically (a unique temporary file, then a rename), so any reader sees a complete
    file, never a half-written one.
 3. **Writes go through one queue.** A write is a small change ("grant A→B", "tag box",
-   "pin this key"). It is appended to the queue and applied, in order, to the state *as
-   it is now* — never by saving a copy loaded earlier. Nobody is blocked: adding to the
-   queue is one atomic file create, and whoever finds nobody applying the queue applies
-   everyone's pending changes along with its own. Work that converges other machines
-   over SSH is queued per machine and de-duplicated, and always reads the desired state
-   fresh.
+   "pin this key"). Each writer takes a ticket in a first-come, first-served queue
+   beside the file; when its turn comes it loads the file *as it is now*, applies its
+   own change and replaces the file — never by saving a copy loaded earlier. A turn
+   holds only local file work, milliseconds, never a network call (network first, then
+   the change), so a writer waits only for the few changes queued ahead of it and nobody
+   waits on a slow machine. A writer that died mid-turn is skipped. Work that changes
+   other machines over SSH reads the desired state again after each edit and redoes the
+   edit if it changed meanwhile, so a slower, older edit cannot undo a newer one.
 4. **The installer never overwrites an existing core.** It detects fleet first (uv tool,
    pipx, an editable or source install, anything on PATH). It keeps what is there,
    upgrades only a uv-installed older copy, and never modifies fleet's state. Installing

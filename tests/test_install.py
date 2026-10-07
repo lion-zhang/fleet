@@ -334,8 +334,30 @@ def test_an_explicit_role_is_still_obeyed(tmp_path, monkeypatch):
 
     monkeypatch.setattr(cli, "configured_repo", lambda: "git@github.com:me/fleet.git")
     monkeypatch.setattr(cli, "run_installer", lambda *a, **k: (0, "fleet 0.1.0"))
-    runner.invoke(app, ["install", "oracle", "--role", "backup"])
-    assert inv.load(path)[0].role == "backup"
+    runner.invoke(app, ["install", "oracle", "--role", "none"])
+    assert inv.load(path)[0].role == "none"
+
+
+def test_a_role_that_does_nothing_is_refused(tmp_path, monkeypatch):
+    """`backup` was recorded and then read by nothing. Refused before any network."""
+    from fleet import cli
+    from fleet.cli import app
+
+    runner, path = _cli(tmp_path, monkeypatch)
+    monkeypatch.setattr(cli, "run_installer",
+                        lambda *a, **k: pytest.fail("refused before the network"))
+    r = runner.invoke(app, ["install", "oracle", "--role", "backup"])
+    assert r.exit_code == 2 and "no 'backup' role" in r.output
+
+
+def test_install_names_the_machine(tmp_path, monkeypatch):
+    """This machine has no address on record, so `fleet install` with no name could only
+    fail with "no endpoint recorded"; it says what to do instead."""
+    from fleet.cli import app
+
+    runner, _ = _cli(tmp_path, monkeypatch)
+    r = runner.invoke(app, ["install"])
+    assert r.exit_code == 2 and "fleet update" in r.output
 
 
 def test_installing_cannot_promote_a_center(tmp_path, monkeypatch):

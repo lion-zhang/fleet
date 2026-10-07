@@ -27,7 +27,8 @@ NO_UV = 90                  # the device could not fetch uv -- probably no inter
 NOTHING_TO_UPDATE = 91      # update-only, and this device has no fleet to update
 
 
-def _posix_script(repo: str, *, ref: str = "main", update_only: bool = False) -> str:
+def _posix_script(repo: str, *, ref: str = "main", update_only: bool = False,
+                  from_git: bool = False) -> str:
     """The sh run on the device. Idempotent: `fleet install` doubles as `fleet update`.
 
     uv is fetched when missing because it also solves the Python problem -- fleet needs
@@ -46,25 +47,37 @@ REPO={shlex.quote(repo)}
 REF={shlex.quote(ref)}
 DIR="{INSTALL_DIR}"
 {_skip_unless_installed(update_only)}
-if ! command -v uv >/dev/null 2>&1; then
-  curl -LsSf https://astral.sh/uv/install.sh | sh >/dev/null 2>&1 || exit 90
-  if [ -f "$HOME/.local/bin/env" ]; then . "$HOME/.local/bin/env"; fi
-  PATH="$HOME/.local/bin:$PATH"
-  export PATH
+PATH="$HOME/.local/bin:$PATH"
+export PATH
+{_how_installed_posix(from_git, update_only)}
+if [ "$MODE" = keep ]; then
+  echo "$KEPT"
+  fleet setup --refresh >/dev/null 2>&1 || true
+  fleet --version
+  exit 0
 fi
 
-if [ -d "$DIR/.git" ]; then
-  # The repo we were given, not the one this clone happened to be made with. Without
-  # this, `--repo` was silently ignored for every machine that already had fleet: the
-  # fetch used whatever `origin` was set to years ago, so an install could not be pointed
-  # at a new remote or moved from ssh to https, and failed with an auth error naming a
-  # URL the caller never asked for.
-  git -C "$DIR" remote set-url origin "$REPO"
-  git -C "$DIR" fetch --quiet origin "$REF"
-  git -C "$DIR" checkout --quiet -B "$REF" "origin/$REF"
-else
-  mkdir -p "$(dirname "$DIR")"
-  git clone --quiet --branch "$REF" "$REPO" "$DIR"
+if [ "$MODE" = git ]; then
+  if ! command -v uv >/dev/null 2>&1; then
+    curl -LsSf https://astral.sh/uv/install.sh | sh >/dev/null 2>&1 || exit 90
+    if [ -f "$HOME/.local/bin/env" ]; then . "$HOME/.local/bin/env"; fi
+  fi
+  if [ -d "$DIR/.git" ]; then
+    # The repo we were given, not the one this clone happened to be made with. Without
+    # this, `--repo` was silently ignored for every machine that already had fleet: the
+    # fetch used whatever `origin` was set to years ago, so an install could not be
+    # pointed at a new remote or moved from ssh to https, and failed with an auth error
+    # naming a URL the caller never asked for.
+    git -C "$DIR" remote set-url origin "$REPO"
+    # Whatever was fetched, checked out as it is: a branch or a tag alike. Checking out
+    # `origin/$REF` worked for branches only -- a tag has no origin/<tag> -- so
+    # `--ref v1.2` failed on every machine that already had a clone.
+    git -C "$DIR" fetch --quiet origin "$REF"
+    git -C "$DIR" checkout --quiet --detach FETCH_HEAD
+  else
+    mkdir -p "$(dirname "$DIR")"
+    git clone --quiet --branch "$REF" "$REPO" "$DIR"
+  fi
 fi
 
 # Stop the center's service before replacing the files it is running from. Not
@@ -79,9 +92,13 @@ PATH="$HOME/.local/bin:$PATH" fleet service stop >/dev/null 2>&1 || true
 # The package was `fleet-broker` until 0.5, then `agent-fleet` until PyPI refused that
 # name. Left installed, either and `agents-fleet` would both claim the `fleet` command,
 # and whichever installed last would win at random.
-uv tool uninstall fleet-broker >/dev/null 2>&1 || true
-uv tool uninstall agent-fleet >/dev/null 2>&1 || true
-uv tool install --force --reinstall-package agents-fleet --quiet "$DIR"
+case "$MODE" in
+  uv)   uv tool upgrade --quiet agents-fleet ;;
+  pipx) pipx upgrade agents-fleet >/dev/null ;;
+  *)    uv tool uninstall fleet-broker >/dev/null 2>&1 || true
+        uv tool uninstall agent-fleet >/dev/null 2>&1 || true
+        uv tool install --force --reinstall-package agents-fleet --quiet "$DIR" ;;
+esac
 
 # Put fleet on the PATH of a terminal the user opens later, not just this script's.
 # Without it fleet installs correctly and then is not there when they type its name --
@@ -101,6 +118,41 @@ PATH="$HOME/.local/bin:$PATH" fleet --version
 # machine that never had one -- `service start` does nothing when none is installed.
 PATH="$HOME/.local/bin:$PATH" fleet service start >/dev/null 2>&1 || true
 {_drop_timer_block()}"""
+
+
+def _how_installed_posix(from_git: bool, update_only: bool) -> str:
+    """Set MODE to how fleet is updated here: git, uv, pipx or keep.
+
+    The rule the installer keeps -- an existing core is never replaced -- holds for
+    `fleet update` too. This script used to clone `main` and reinstall from it on every
+    machine, so updating a machine installed from PyPI swapped the release for whatever
+    the branch held that day, and a machine running your own checkout lost it. Now fleet
+    is updated the way it was installed: a uv tool from PyPI with `uv tool upgrade`, pipx
+    with `pipx upgrade`, and only fleet's own checkout (or `--repo`/`--ref`, asked for by
+    name) from git. A source install of yours is kept and named, and so -- when updating
+    -- is a fleet installed some other way; `fleet install` asked for fleet's checkout
+    by name, so there it is installed beside one.
+    """
+    forced = "1" if from_git else ""
+    other = "1" if update_only else ""
+    return f"""MODE=git
+KEPT=""
+if [ -z "{forced}" ]; then
+  if command -v uv >/dev/null 2>&1 && uv tool list 2>/dev/null | grep -q '^agents-fleet '; then
+    receipt="$(uv tool dir 2>/dev/null)/agents-fleet/uv-receipt.toml"
+    if grep -qF "$DIR" "$receipt" 2>/dev/null; then
+      MODE=git
+    elif grep -qE '(editable|directory) = ' "$receipt" 2>/dev/null; then
+      MODE=keep; KEPT="fleet here is installed from a source checkout; kept as it is"
+    else
+      MODE=uv
+    fi
+  elif command -v pipx >/dev/null 2>&1 && pipx list --short 2>/dev/null | grep -q '^agents-fleet '; then
+    MODE=pipx
+  elif [ -n "{other}" ] && [ ! -d "$DIR/.git" ] && command -v fleet >/dev/null 2>&1; then
+    MODE=keep; KEPT="fleet here was installed another way ($(command -v fleet)); kept as it is"
+  fi
+fi"""
 
 
 def _skip_unless_installed(update_only: bool) -> str:
@@ -177,7 +229,7 @@ def build_install_argv(ep: Endpoint, *, forward_agent: bool = True,
         argv += ["-i", str(config.FLEET_KEY)]
     if ep.jump:
         argv += ["-J", ep.jump]
-    argv.append(f"{ep.user}@{ep.target}" if ep.user else ep.target)
+    argv += ["--", f"{ep.user}@{ep.target}" if ep.user else ep.target]
     # Both read the script from stdin, so nothing long or quoted has to survive a second
     # round of shell parsing on the way in. Windows writes it out and runs the file --
     # see WINDOWS_STDIN_SHELL for the two failures that shape stands between.
@@ -249,7 +301,8 @@ def payload_for(script: str, platform: str = "") -> bytes:
     return script.encode()
 
 
-def _windows_script(repo: str, ref: str = "main", *, update_only: bool = False) -> str:
+def _windows_script(repo: str, ref: str = "main", *, update_only: bool = False,
+                    from_git: bool = False) -> str:
     """The PowerShell run on a Windows device. Same contract as the sh one.
 
     Written out rather than shimmed through Git Bash. `sh.exe` usually exists on a
@@ -274,19 +327,29 @@ $repo = '{repo_lit}'
 $ref  = '{ref_lit}'
 $dir  = "{WINDOWS_INSTALL_DIR}"
 {_skip_unless_installed_ps(update_only)}
-if (-not (Get-Command uv -ErrorAction SilentlyContinue)) {{
-  try {{ irm https://astral.sh/uv/install.ps1 | iex }} catch {{ exit 90 }}
-  $env:PATH = "$env:USERPROFILE\\.local\\bin;$env:PATH"
+$env:PATH = "$env:USERPROFILE\\.local\\bin;$env:PATH"
+{_how_installed_ps(from_git, update_only)}
+if ($mode -eq 'keep') {{
+  Write-Output $kept
+  try {{ fleet setup --refresh 2>&1 | Out-Null }} catch {{ }}
+  fleet --version
+  exit 0
 }}
 
-if (Test-Path (Join-Path $dir '.git')) {{
-  # The repo we were given, not the one this clone happened to be made with.
-  git -C $dir remote set-url origin $repo
-  git -C $dir fetch --quiet origin $ref
-  git -C $dir checkout --quiet -B $ref "origin/$ref"
-}} else {{
-  New-Item -ItemType Directory -Force -Path (Split-Path $dir) | Out-Null
-  git clone --quiet --branch $ref $repo $dir
+if ($mode -eq 'git') {{
+  if (-not (Get-Command uv -ErrorAction SilentlyContinue)) {{
+    try {{ irm https://astral.sh/uv/install.ps1 | iex }} catch {{ exit 90 }}
+  }}
+  if (Test-Path (Join-Path $dir '.git')) {{
+    # The repo we were given, not the one this clone happened to be made with. And
+    # whatever was fetched, checked out as it is: a branch or a tag alike.
+    git -C $dir remote set-url origin $repo
+    git -C $dir fetch --quiet origin $ref
+    git -C $dir checkout --quiet --detach FETCH_HEAD
+  }} else {{
+    New-Item -ItemType Directory -Force -Path (Split-Path $dir) | Out-Null
+    git clone --quiet --branch $ref $repo $dir
+  }}
 }}
 
 # Stop the center before replacing the files it runs from -- and do it here rather than
@@ -323,9 +386,15 @@ $fleet = Join-Path $env:USERPROFILE '.local\\bin\\fleet.exe'
 
 # The package was `fleet-broker` until 0.5, then `agent-fleet`; both would claim the
 # `fleet` command.
-try {{ uv tool uninstall fleet-broker 2>&1 | Out-Null }} catch {{ }}
-try {{ uv tool uninstall agent-fleet 2>&1 | Out-Null }} catch {{ }}
-uv tool install --force --reinstall-package agents-fleet --quiet $dir
+if ($mode -eq 'uv') {{
+  uv tool upgrade --quiet agents-fleet
+}} elseif ($mode -eq 'pipx') {{
+  pipx upgrade agents-fleet | Out-Null
+}} else {{
+  try {{ uv tool uninstall fleet-broker 2>&1 | Out-Null }} catch {{ }}
+  try {{ uv tool uninstall agent-fleet 2>&1 | Out-Null }} catch {{ }}
+  uv tool install --force --reinstall-package agents-fleet --quiet $dir
+}}
 
 # So `fleet` works in a terminal the user opens later, not just in this script. Without
 # it the shim lands in a directory nothing has ever added to PATH, and fleet installs
@@ -342,6 +411,38 @@ if (Test-Path $fleet) {{
   try {{ & $fleet service start 2>&1 | Out-Null }} catch {{ }}
 }}
 """
+
+
+def _how_installed_ps(from_git: bool, update_only: bool) -> str:
+    """The PowerShell half of `_how_installed_posix`: sets $mode and $kept."""
+    forced = "$true" if from_git else "$false"
+    other = "$true" if update_only else "$false"
+    return f"""$mode = 'git'
+$kept = ''
+if (-not {forced}) {{
+  $tools = ''
+  # In try: under 'Stop', Windows PowerShell 5 turns a native command's stderr into a
+  # terminating error, redirected or not (see the service-stop note below).
+  if (Get-Command uv -ErrorAction SilentlyContinue) {{
+    try {{ $tools = (& uv tool list 2>$null) -join "`n" }} catch {{ }}
+  }}
+  if ($tools -match '(?m)^agents-fleet ') {{
+    $tooldir = ''
+    try {{ $tooldir = (& uv tool dir 2>$null).Trim() }} catch {{ }}
+    $receipt = Join-Path $tooldir 'agents-fleet\\uv-receipt.toml'
+    $r = if (Test-Path $receipt) {{ Get-Content -Raw $receipt }} else {{ '' }}
+    $ours = $r.Contains($dir) -or $r.Contains($dir.Replace('\\', '\\\\')) -or $r.Contains($dir.Replace('\\', '/'))
+    if ($ours) {{ $mode = 'git' }}
+    elseif ($r -match '(editable|directory) = ') {{
+      $mode = 'keep'; $kept = 'fleet here is installed from a source checkout; kept as it is'
+    }} else {{ $mode = 'uv' }}
+  }} elseif ((Get-Command pipx -ErrorAction SilentlyContinue) -and
+             $(try {{ ((& pipx list --short 2>$null) -join "`n") -match '(?m)^agents-fleet ' }} catch {{ $false }})) {{
+    $mode = 'pipx'
+  }} elseif ({other} -and -not (Test-Path (Join-Path $dir '.git')) -and (Get-Command fleet -ErrorAction SilentlyContinue)) {{
+    $mode = 'keep'; $kept = "fleet here was installed another way ($((Get-Command fleet).Source)); kept as it is"
+  }}
+}}"""
 
 
 def _skip_unless_installed_ps(update_only: bool) -> str:
@@ -362,7 +463,7 @@ if (-not (Test-Path (Join-Path $dir '.git')) -and
 
 
 def install_script(repo: str, *, ref: str = "main", platform: str = "",
-                   update_only: bool = False) -> str:
+                   update_only: bool = False, from_git: bool = False) -> str:
     """The installer for whichever shell the far side speaks.
 
     `platform` comes from the last probe via `remote_platform`, which is the one place
@@ -370,8 +471,8 @@ def install_script(repo: str, *, ref: str = "main", platform: str = "",
     POSIX script on Windows fails loudly, where the reverse can appear to succeed.
     """
     if platform == WINDOWS:
-        return _windows_script(repo, ref, update_only=update_only)
-    return _posix_script(repo, ref=ref, update_only=update_only)
+        return _windows_script(repo, ref, update_only=update_only, from_git=from_git)
+    return _posix_script(repo, ref=ref, update_only=update_only, from_git=from_git)
 
 
 def install_source() -> Path | None:

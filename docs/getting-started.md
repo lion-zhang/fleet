@@ -96,8 +96,9 @@ Ask for what you need, not for a machine by name:
 > **You:** run `nvidia-smi` on the box with the most free VRAM
 
 The agent picks the machine from what each one has and what is free on it at that moment,
-then runs the command there with `fleet ssh` and brings the result back. Nothing about how
-to log in — hosts, keys, passwords — goes into the conversation.
+then runs the command there with `fleet ssh` and brings the result back. Passwords and
+keys never go into the conversation; the agent may see a machine's address, as
+`fleet show` prints it.
 
 To watch the whole fleet live yourself, run `fleet top` in a terminal (`q` quits).
 
@@ -106,11 +107,12 @@ To watch the whole fleet live yourself, run `fleet top` in a terminal (`q` quits
 The machine you added can be *reached* by fleet; its own agents do not know about the
 fleet yet. If you also work on that machine, ask on the center:
 
-> **You:** invite gpu-box
+> **You:** give me an invite for gpu-box
 
-You get one line. Paste it into a terminal on that machine, or give it to the agent there.
-It installs fleet as a member and joins, with no password; from then on the agents on that
-machine see the whole fleet too.
+The agent runs `fleet invite` (without a name: `gpu-box` is already known, and a machine
+that joins keeps the name it has). You get one line. Paste it into a terminal on that
+machine, or give it to the agent there. It installs fleet as a member and joins, with no
+password; from then on the agents on that machine see the whole fleet too.
 
 ## Next steps
 

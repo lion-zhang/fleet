@@ -39,7 +39,6 @@ DEFAULTS: dict = {
     # dead host costs a connect timeout per attempt, and paying it on every `fleet ls`
     # made a machine being off cost seconds on every read, not just freshness.
     "offline_backoff_max_s": 1800,
-    "presence_ttl_s": 10,       # tailscale presence is nearly free, so refresh often
     "probe_timeout_s": 20,
     "connect_timeout_s": 8,
     "max_workers": 8,
@@ -81,6 +80,9 @@ def ensure_dirs() -> None:
             pass                    # not ours to change; reading must still work
 
 
+_WARNED: set[str] = set()
+
+
 def load_config() -> Config:
     ensure_dirs()
     data = dict(DEFAULTS)
@@ -91,4 +93,17 @@ def load_config() -> Config:
                 data.update(loaded)
         except yaml.YAMLError:
             pass      # a broken config must never stop you from listing devices
+    # A setting that is not a number (`telemetry_ttl_s: 5m`) used to raise on every read
+    # that used it. Fall back to the default, and say so once.
+    for key, default in DEFAULTS.items():
+        if isinstance(default, int) and not isinstance(data.get(key), bool):
+            try:
+                data[key] = int(data[key])
+            except (TypeError, ValueError):
+                if key not in _WARNED:
+                    import sys
+                    _WARNED.add(key)
+                    print(f"fleet: config.yaml: {key}: {data[key]!r} is not a number; "
+                          f"using {default}", file=sys.stderr)
+                data[key] = default
     return Config(data)

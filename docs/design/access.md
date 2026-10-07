@@ -29,9 +29,11 @@ Fleet is neutral about which overlay. Tailscale, ZeroTier, Nebula, Netbird, Head
 hand-rolled WireGuard all work; fleet wants a routable address and nothing more, and
 hard-codes none of them. `Endpoint.via` says `mesh`, never a vendor.
 
-This is also why the center dials out rather than being dialled: center→member reachability
-is required regardless, so carrying sync over it costs nothing, where members dialling the
-center would need a second guarantee on top.
+Keys are always placed by the center dialling out over ssh: center→machine reachability
+is required regardless, so it is the one path fleet depends on. Members also dial the
+center, on port 7373, to fetch fresh information and to join; that is the same pair of
+machines in the other direction, never member to member. A member that cannot dial the
+center keeps working from what it last fetched.
 
 ## Ways in
 
@@ -158,9 +160,9 @@ they are not built.
 ## The center is expected to be offline
 
 Nothing that already works stops working when the center is closed: grants are keys in
-`authorized_keys`, enforced by sshd, with fleet nowhere in the connection path. Queued
-grants and revokes drain when it returns, because the ledger is desired-vs-observed rather
-than a work queue.
+`authorized_keys`, enforced by sshd, with fleet nowhere in the connection path. Grants and
+revokes that could not be applied stay in the ledger as desired-but-not-observed, and
+are applied by the next `fleet sync` on the center; nothing retries them on a timer.
 
 A stale cache **warns and proceeds, never denies**. A center off for a fortnight is a
 laptop on holiday, and treating that as revocation would turn a sync outage into a fleet

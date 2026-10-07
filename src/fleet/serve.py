@@ -36,6 +36,10 @@ MAX_BODY = 8 * 1024 * 1024                 # an inventory, not a payload to be g
 class _Handler(BaseHTTPRequestHandler):
     server_version = "fleet"
     sys_version = ""
+    # Seconds a connection may sit idle. Without it a client that opens a connection and
+    # sends nothing -- or a Content-Length it never delivers -- held a thread on the
+    # center's public port for good. A sync or a join is a few kilobytes.
+    timeout = 30
 
     def log_message(self, fmt, *args):     # noqa: A003 - BaseHTTPRequestHandler's name
         """Silent by default. A center serving a fleet all day should not narrate it."""
@@ -130,8 +134,8 @@ def exchange(raw: str) -> tuple[int, str]:
     # from nobody else: otherwise any member, by syncing, could erase any machine from
     # the fleet while its keys stayed installed with no record left of them.
     own = (acc.keys.get(acl.fingerprint(signer)) or {}).get("device_id", "")
-    incoming = [d for d in incoming if not d.deleted_at or d.id == own]
-    merged, _ = inv.update(lambda current: inv.merge(current, incoming))
+    merged, _ = inv.update(
+        lambda current: inv.merge(current, inv.from_member(current, incoming, own)))
     if note["telemetry"]:
         record_relayed(note["telemetry"])
     if note.get("claims", {}).get("center_key") == "present":

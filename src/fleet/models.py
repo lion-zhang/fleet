@@ -28,7 +28,7 @@ class Kind(StrEnum):
     RENTAL = "rental"
     SHARED = "shared"      # multi-user; polite probe, never claimable
     APPLIANCE = "appliance"
-    MOBILE = "mobile"      # no shell (iOS/Android); presence only
+    MOBILE = "mobile"      # no shell (iOS/Android); listed, never measured
 
 
 class ProcClass(StrEnum):

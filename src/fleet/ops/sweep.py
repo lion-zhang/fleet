@@ -163,11 +163,22 @@ def apply_now(acc, src: str, dst: str, user: str, *, install: bool) -> None:
     a retry count, which is the honest report and what `fleet access` already shows.
     """
 
-    dev = inv.find_exact(inv.load(), acc.name_of(dst))
+    # By the device the key was pinned for, not by name: the access list keeps the name a
+    # machine had when it was pinned, and a renamed machine's old name may by now belong
+    # to another one -- which then received the grant, while the ledger said it landed.
+    devices = inv.live(inv.load())
+    did = (acc.keys.get(dst) or {}).get("device_id", "")
+    dev = next((d for d in devices if did and d.id == did), None)
+    if dev is None and not did:
+        dev = inv.find_exact(devices, acc.name_of(dst))   # a pin from before device ids
     if dev is None:
+        console.print(f"  [yellow]·[/yellow] {acc.name_of(dst)} is not in the inventory "
+                      "[dim]-- it stays pending[/dim]")
         return
     ep = endpoint_for(dev, user)
     if ep is None:
+        console.print(f"  [yellow]·[/yellow] {dev.name} has no address to reach it on "
+                      "[dim]-- it stays pending[/dim]")
         return
     ledger = rec.load_ledger()
     key = ">".join((src, dst, user))
@@ -203,7 +214,10 @@ def enrol_unpinned(acc, devices) -> bool:
     `fleet center --pubkey` prints, rather than to find someone to type a password.
     """
     pinned = {v.get("device_id") for v in acc.keys.values()}
-    named = {v.get("name") for v in acc.keys.values()}
+    # A name only stands in for an id on pins made before ids were recorded. Skipping any
+    # machine whose *name* was pinned meant a new machine that took a renamed one's old
+    # name was never enrolled at all.
+    named = {v.get("name") for v in acc.keys.values() if not v.get("device_id")}
     done = False
     for dev in inv.live(devices):
         if dev.id in pinned or dev.name in named:
@@ -364,7 +378,7 @@ def broadcast(devices) -> None:
 
     mine = inv.dumps(inv.load())
     me = identity.local_device_id()
-    routes = []
+    routes, senders = [], []
     for dev in inv.live(devices):
         # Never the machine this is running on. "No endpoints" used to stand in for "the
         # center", which held only while the center was a laptop nobody could reach: once
@@ -376,6 +390,7 @@ def broadcast(devices) -> None:
         eps = sorted(inv.endpoints_of(dev), key=lambda e: e.preference)
         if eps:
             routes.append(eps[0])
+            senders.append(dev.id)
 
     cfg = load_config()
     # Sealed once, here, before any thread starts. Sealing reads the access list, reads
@@ -388,7 +403,7 @@ def broadcast(devices) -> None:
                                workers=int(cfg.max_workers))
 
     reached = 0
-    for answer, error in answers:
+    for sender, (answer, error) in zip(senders, answers):
         if error is not None:
             # A machine that takes longer than the timeout to answer -- a NAS, a rental
             # that has gone away -- is a machine that did not get the inventory, not a
@@ -405,7 +420,10 @@ def broadcast(devices) -> None:
         # with: the round trips take a while and a `fleet add` may have landed since.
         # Still one at a time, and still here rather than in a worker -- merging is the
         # part that writes.
-        inv.update(lambda current: inv.merge(current, returned, authoritative=False))
+        # Only what that member is the authority on: its reply is not signed, and a
+        # member's word about other machines must not become the fleet's.
+        inv.update(lambda current: inv.merge(
+            current, inv.from_member(current, returned, sender), authoritative=False))
         reached += 1
     if reached:
         console.print(f"[dim]· inventory handed to {reached} machine(s)[/dim]")

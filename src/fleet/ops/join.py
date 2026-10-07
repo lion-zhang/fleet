@@ -264,7 +264,10 @@ def _admit(dev: Device, signer: str, fp: str, invite, *, peer: str,
     devices = inv.load()
     dev.pubkey = signer                    # the key that signed, not whatever it claimed
     stable = _stable_id(dev)
-    known = inv.find_exact(devices, stable) if stable else None
+    # By id only. `find_exact` also matches names and aliases, and the joiner chooses the
+    # id it sends -- so an id equal to another machine's *name* matched that machine, and
+    # the joiner's key was pinned under its name: a later grant to it reached the joiner.
+    known = next((d for d in devices if d.id == stable), None) if stable else None
     if known is not None and _is_a_clone(acc, known, fp, hostname):
         # Same machine-id, a different key and a different hostname: another machine
         # cloned from the same image, not this one rebuilt. Kept apart, as `fleet add`

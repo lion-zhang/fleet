@@ -56,7 +56,7 @@ Each one takes a sentence, whatever the machine is:
 |---|---|
 | a server you can already SSH into | "add `ssh ubuntu@10.0.0.7`" — fleet uses the key you already have |
 | one you reach with a particular key file | "add `ssh -i ~/.ssh/my_key ubuntu@1.2.3.4`" — or a `Host` from your `~/.ssh/config` |
-| a new rental (vast.ai, RunPod, Lambda) | "add `ssh -p 40001 root@1.2.3.4`, it costs $1.89/hr" |
+| a new rental (vast.ai, RunPod, AutoDL) | "add `ssh -p 40001 root@1.2.3.4`, it costs $1.89/hr" |
 | one that only takes a password | "add it" — then you type the password once yourself; it is stored nowhere |
 | one fleet cannot get into from here | "invite my laptop" — you get one line to paste there, and it joins by itself |
 | one that does not exist yet | "give me the key for a cloud-init template" — it joins with no password at all |
@@ -82,8 +82,8 @@ You describe the work; the agent finds where it fits. It checks what each machin
 | "what's costing me money?" | idle paid rentals flagged, with their hourly price |
 | "let the laptop reach the NAS" | access granted, applied at once |
 
-No hostnames, keys or passwords go into the conversation, and anything irreversible
-waits for your yes.
+Keys and passwords never go into the conversation, and anything irreversible waits for
+your yes.
 
 **Only install fleet where you use it.** The machines you add above need nothing but SSH:
 fleet measures them and connects to them from the center. Install fleet on another
@@ -147,7 +147,7 @@ fleet access nas --allow laptop     # let one machine reach another
 
 <img src="docs/assets/fleet-top.svg" alt="fleet top: a live view of GPU utilisation, free VRAM, CPU, RAM and disk across all machines" width="100%">
 
-Rentals from vast.ai, RunPod or Lambda show their price (`fleet edit a100 --cost 1.89`),
+Rentals from vast.ai, RunPod or AutoDL show their price (`fleet edit a100 --cost 1.89`),
 the fleet's burn rate, and an alert when a rental sits idle. On Tailscale, ZeroTier
 or WireGuard? fleet just needs an address it can route to.
 
@@ -230,7 +230,8 @@ installing, start a new session so the agent loads it.
 
 No and no. A password is typed by you, once, for a machine that accepts nothing else; it
 is used for one connection and stored nowhere. After that fleet uses its own key. The
-agent runs `fleet ssh NAME` and never sees an address, a key or a password.
+agent runs `fleet ssh NAME` and never sees a key or a password; it may see a machine's
+address, as `fleet show` prints it.
 </details>
 
 <details>

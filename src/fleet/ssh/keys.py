@@ -137,7 +137,7 @@ def build_password_argv(ep: Endpoint, *, timeout: int = 15) -> list[str]:
     # cannot be bootstrapped at all.
     if ep.jump:
         argv += ["-J", ep.jump]
-    argv.append(f"{ep.user}@{ep.target}" if ep.user else ep.target)
+    argv += ["--", f"{ep.user}@{ep.target}" if ep.user else ep.target]
     return argv
 
 

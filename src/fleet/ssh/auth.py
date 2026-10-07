@@ -65,7 +65,7 @@ def probe_server(ep, *, timeout: int = 8) -> str:
             "-o", "StrictHostKeyChecking=accept-new"]
     if ep.port and ep.port != 22:
         argv += ["-p", str(ep.port)]
-    argv.append(f"{ep.user}@{ep.target}" if ep.user else ep.target)
+    argv += ["--", f"{ep.user}@{ep.target}" if ep.user else ep.target]
     argv.append("true")
     try:
         p = sshrun(argv, text=True, timeout=timeout + 5)

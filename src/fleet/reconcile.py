@@ -98,6 +98,11 @@ def save_ledger(ledger: dict[str, EdgeState], path: Path | None = None) -> None:
         for k in (base or {}):
             if k not in ledger:
                 current.pop(k, None)       # this copy dropped it
+        # A key that should be gone and is gone is nothing left to do. Kept, every edge
+        # ever revoked stayed in the ledger -- and in every sweep's plan -- for good.
+        for k in [k for k, st in current.items()
+                  if st.desired == "absent" and st.observed == "absent"]:
+            del current[k]
         atomic_write(path, yaml.safe_dump(
             {"edges": {k: asdict(v) for k, v in current.items()}}, sort_keys=True))
 

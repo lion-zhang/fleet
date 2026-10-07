@@ -40,10 +40,17 @@ def end_marker(fleet_id: str, from_id: str) -> str:
 
 
 def block(fleet_id: str, from_id: str, user: str, pubkey: str) -> str:
-    """One grant, delimited so it can be found and removed again exactly."""
+    """One grant, delimited so it can be found and removed again exactly.
+
+    The key and the user are checked again here, the last step before the file: a pin
+    made before those checks existed, or a caller that skipped them, must not be able to
+    write more than one line between the markers.
+    """
+    from ..state.access import canonical_pubkey, check_user
+
     return "\n".join([
-        f"{begin_marker(fleet_id, from_id)} user={user}",
-        pubkey.strip(),
+        f"{begin_marker(fleet_id, from_id)} user={check_user(user)}",
+        canonical_pubkey(pubkey),
         end_marker(fleet_id, from_id),
     ])
 

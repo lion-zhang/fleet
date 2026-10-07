@@ -9,7 +9,7 @@ the rest in one step.
 | one you can already SSH into | "add `ssh ubuntu@10.0.0.7`" | [Over SSH](#over-ssh) |
 | one you reach with a particular key file | "add `ssh -i ~/.ssh/my_key ubuntu@1.2.3.4`" | [Over SSH](#over-ssh) |
 | one that only takes a password | "add it", then type the password yourself | [With a password](#with-a-password) |
-| a GPU rental (vast.ai, RunPod, Lambda…) | "add `ssh -p 40001 root@1.2.3.4`, it costs $1.89/hr" | [Rentals](#rentals) |
+| a GPU rental (vast.ai, RunPod, AutoDL…) | "add `ssh -p 40001 root@1.2.3.4`, it costs $1.89/hr" | [Rentals](#rentals) |
 | one fleet cannot get into from here | "invite my laptop" | [Let the machine join by itself](#let-the-machine-join-by-itself) |
 | one that does not exist yet | "give me the key for a cloud-init template" | [Before the machine exists](#before-the-machine-exists) |
 
@@ -83,8 +83,9 @@ fleet add "ssh -p 40001 root@1.2.3.4"
 fleet edit a100 --cost 1.89
 ```
 
-fleet recognises vast.ai, RunPod, AutoDL, Lambda and Paperspace machines as rentals by
-itself; for any other provider add `--kind rental` to `fleet add`. A rental with a GPU
+fleet recognises vast.ai, RunPod and AutoDL machines as rentals by itself, from what it
+finds on them; Lambda and Paperspace only when the address you add by contains
+`lambdalabs` or `paperspace`. For any other provider add `--kind rental` to `fleet add`. A rental with a GPU
 and none of its GPUs busy gets the alert *RENTAL is idle -- this is costing money*. The
 price you set shows in the `$/HR` column and in the fleet's hourly burn rate.
 
@@ -107,7 +108,10 @@ to the center. On the center:
 
 > **You:** invite my laptop
 
-or `fleet invite laptop`. It prints one line to run on the new machine: `fleet join …`
+or `fleet invite laptop`. For a machine the fleet already knows — one you added with
+`fleet add` and now want to run fleet on too — leave the name out: `fleet invite`. A
+machine that joins is recognised and keeps the name it has, and an invite for a name
+already taken is refused. It prints one line to run on the new machine: `fleet join …`
 if fleet is installed there, or the installer with `--join …` if not. Paste it into a
 terminal there, or give it to the agent on that machine. The machine installs fleet as a
 **member**, dials the center, is admitted, and puts the center's key in its own
@@ -136,10 +140,11 @@ For a machine you are about to create — from a cloud console, a template, a cl
 file — put the fleet's key on it at creation:
 
 ```bash
-fleet center --pubkey
+fleet center --pubkey        # on the center
 ```
 
-prints the key. It works with nothing reachable, which is the point. Paste it where the
+prints the key. Run it on the center: on a member it prints that member's own key, which
+is not the one the center uses. It works with nothing reachable, which is the point. Paste it where the
 provider asks for an SSH key; once the machine is up, `fleet add "ssh root@ADDRESS"` needs
 no password at all.
 
@@ -165,9 +170,10 @@ and recognises mesh addresses (the `mesh` [fact](../reference/facts.md)).
 A machine the center cannot reach at all can still [join](#let-the-machine-join-by-itself)
 and report what it has, but the center cannot place or remove keys on it until it can.
 
-A member measures the machines it can reach itself. One it cannot reach shows there as
-unreachable *from that member*, even when the center sees it fine — which is accurate for
-running work from that member, since `fleet ssh` connects directly.
+A member measures the machines it can reach itself. For one it cannot reach, it shows
+the center's latest reading instead, when the center has a newer one — so `fleet ls` on
+the member still says what the machine has. Running work from that member still needs a
+route, since `fleet ssh` connects directly.
 
 **Tailscale SSH and similar** answer ssh themselves and decide who may log in from their
 own access rules, not from `authorized_keys`. fleet measures and connects to such a
@@ -188,4 +194,5 @@ fleet rm gpu-box
 ```
 
 Its keys come off every other machine and the fleet's keys come off it, now. It asks
-first, takes only an exact name, and an agent leaves it to you.
+first, takes only an exact name, alias or id (never a prefix), and an agent leaves it to
+you.
