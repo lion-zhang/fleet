@@ -114,6 +114,10 @@ uv tool update-shell >/dev/null 2>&1 || true
 # What the agents on this machine are told about fleet, rewritten to match the fleet
 # just installed. Only what is already there: never adds fleet to an agent. Without it
 # every update left agents describing commands as they used to be.
+# uv's tool bin directory, which UV_TOOL_BIN_DIR can move off ~/.local/bin.
+if command -v uv >/dev/null 2>&1; then
+  B=$(uv tool dir --bin 2>/dev/null) && [ -n "$B" ] && PATH="$B:$PATH" && export PATH
+fi
 PATH="$HOME/.local/bin:$PATH" fleet setup --refresh >/dev/null 2>&1 || true
 
 PATH="$HOME/.local/bin:$PATH" fleet --version
@@ -382,7 +386,18 @@ while ((Get-Date) -lt $deadline) {{
   Start-Sleep -Milliseconds 400
 }}
 
-$fleet = Join-Path $env:USERPROFILE '.local\\bin\\fleet.exe'
+# Where uv puts fleet.exe: its tool bin directory, which is not always ~/.local/bin --
+# UV_TOOL_BIN_DIR moves it, and on the e2e runner it is elsewhere entirely. Asked of uv
+# again after installing, since the answer is only certain once fleet is there.
+function Find-Fleet {{
+  $b = ''
+  try {{ $b = ((& uv tool dir --bin 2>$null) | Out-String).Trim() }} catch {{ }}
+  if ($b -and (Test-Path (Join-Path $b 'fleet.exe'))) {{ return (Join-Path $b 'fleet.exe') }}
+  $c = Get-Command fleet -ErrorAction SilentlyContinue
+  if ($c) {{ return $c.Source }}
+  return (Join-Path $env:USERPROFILE '.local\\bin\\fleet.exe')
+}}
+$fleet = Find-Fleet
 
 # The package was `fleet-broker` until 0.5, then `agent-fleet`; both would claim the
 # `fleet` command.
@@ -399,6 +414,7 @@ if ($mode -eq 'uv') {{
   uv tool install --force --reinstall-package agents-fleet --quiet $dir
 }}
 }} finally {{
+  $fleet = Find-Fleet
   if (Test-Path $fleet) {{
     try {{ & $fleet service start 2>&1 | Out-Null }} catch {{ }}
   }}
