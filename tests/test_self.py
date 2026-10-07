@@ -139,6 +139,30 @@ def test_the_self_id_matches_what_the_cli_calls_this_machine():
     assert onboard_self()[0].id == local_device_id()
 
 
+def test_a_slow_first_reading_still_gives_the_center_its_identity(monkeypatch):
+    """Found on a fresh Windows CI runner: the first local probe took longer than its
+    20 seconds, so the center was recorded as `localhost` with the never-probed id
+    `net:localhost:22` -- pinned as the center for good, never recognised as this machine
+    (`fleet show` found nothing), and a second state on the same machine could join it.
+    The id does not need a probe: it is read from the machine directly."""
+    import socket
+
+    from fleet import onboard
+    from fleet.models import ProbeResult
+    from fleet.ops import identity
+
+    monkeypatch.setattr(onboard, "run_probe_local", lambda **k: ProbeResult(
+        status=Status.TIMEOUT, error_class="timeout", error_detail="local probe exceeded 20s"))
+    monkeypatch.setattr(identity, "local_device_id", lambda: "linux:machine-id:abc123")
+    monkeypatch.setattr(socket, "gethostname", lambda: "Build-Box.example.org")
+
+    dev, res = onboard.onboard_self()
+    assert not res.ok
+    assert dev.id == "linux:machine-id:abc123", "the identity of the machine, not of an address"
+    assert dev.name == "build-box", "named after the host, not 'localhost'"
+    assert dev.endpoints == []
+
+
 def test_add_refuses_an_ssh_command_together_with_self(tmp_path, monkeypatch):
     from typer.testing import CliRunner
 
