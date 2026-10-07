@@ -23,7 +23,7 @@ def _keypair(tmp_path, name):
     key = tmp_path / name
     subprocess.run(["ssh-keygen", "-t", "ed25519", "-N", "", "-q", "-f", str(key)],
                    check=True)
-    return key, key.with_suffix(".pub").read_text().strip()
+    return key, key.with_suffix(".pub").read_text(encoding="utf-8").strip()
 
 
 @pytest.fixture

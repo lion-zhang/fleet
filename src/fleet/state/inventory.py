@@ -68,7 +68,7 @@ def load(path: Path | None = None) -> list[Device]:
     if not path.exists():
         return []
     try:
-        raw = yaml.safe_load(path.read_text()) or {}
+        raw = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
     except yaml.YAMLError as exc:
         # Report the line and keep going -- a stray tab must not blank your fleet.
         raise InventoryError(f"{path} is not valid YAML: {exc}") from exc

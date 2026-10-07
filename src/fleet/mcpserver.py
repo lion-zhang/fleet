@@ -67,8 +67,12 @@ def _exec(args: list[str]):
     messages."""
     import os
 
-    env = {**os.environ, "NO_COLOR": "1", "TERM": "dumb", "COLUMNS": "200"}
+    # UTF-8 both ways: on Windows a child writing to a pipe uses the ANSI code page,
+    # where a machine name or a ✓ is mangled or cannot be written at all.
+    env = {**os.environ, "NO_COLOR": "1", "TERM": "dumb", "COLUMNS": "200",
+           "PYTHONUTF8": "1", "PYTHONIOENCODING": "utf-8"}
     return subprocess.run([_fleet(), *args], capture_output=True, text=True,
+                          encoding="utf-8", errors="replace",
                           timeout=TIMEOUT_S, stdin=subprocess.DEVNULL, env=env)
 
 

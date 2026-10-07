@@ -103,6 +103,28 @@ def _replace(src: str, dst: Path) -> None:
             time.sleep(0.01)
 
 
+def _remove(path: Path) -> None:
+    """Delete a ticket or mark, patiently on Windows.
+
+    Windows refuses to delete a file another process has open, and every waiting writer
+    opens tickets to read their owner. A ticket whose delete was refused stayed behind
+    with its owner alive and numbered first -- so every later write, its owner's next
+    one included, waited on it until the queue timed out (16 writers on a real Windows
+    runner: all of them). A read holds the file for microseconds; retry until it is gone.
+    """
+    for attempt in range(500):
+        try:
+            os.unlink(path)
+            return
+        except FileNotFoundError:
+            return
+        except PermissionError:
+            if os.name != "nt":
+                raise
+            time.sleep(0.01)
+    os.unlink(path)
+
+
 def _queue_dir(path: Path) -> Path:
     return Path(path).parent / f".{Path(path).name}.queue"
 
@@ -187,7 +209,7 @@ def _take_ticket(qdir: Path) -> tuple[Path, tuple[int, str]]:
         ticket = _publish(qdir, f"{number:020d}-{me}")
     finally:
         with contextlib.suppress(OSError):
-            choosing.unlink()
+            _remove(choosing)
     return ticket, (number, me)
 
 
@@ -232,7 +254,7 @@ def turn(path: Path, *, timeout: float = 60.0):
     finally:
         held.discard(key)
         with contextlib.suppress(OSError):
-            ticket.unlink()
+            _remove(ticket)
 
 
 @contextlib.contextmanager
@@ -261,4 +283,4 @@ def try_turn(path: Path):
             held.discard(key)
     finally:
         with contextlib.suppress(OSError):
-            ticket.unlink()
+            _remove(ticket)

@@ -78,7 +78,7 @@ def load_ledger(path: Path | None = None) -> Ledger:
 
 def _parse(path: Path) -> Ledger:
     try:
-        raw = yaml.safe_load(path.read_text()) or {}
+        raw = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
     except (OSError, yaml.YAMLError):
         return Ledger()
     edges = {k: EdgeState(**v) for k, v in (raw.get("edges") or {}).items()}

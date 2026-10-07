@@ -139,7 +139,7 @@ def load(path: Path | None = None) -> Access:
     """
     path = path or ACCESS_PATH
     try:
-        raw = yaml.safe_load(path.read_text()) or {}
+        raw = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
     except FileNotFoundError as exc:
         raise AccessError(
             f"no access list at {path} -- this machine is not a center") from exc
@@ -273,7 +273,7 @@ def is_center(acc: Access | None = None, *, key_path: Path | None = None) -> boo
     if not acc.center:
         return False
     try:
-        return fingerprint(pub.read_text()) == acc.center
+        return fingerprint(pub.read_text(encoding="utf-8")) == acc.center
     except AccessError:
         return False
 
@@ -343,7 +343,7 @@ def sign(payload: str, key_path: Path | None = None) -> str:
             ) from exc
         if not sig.exists():
             raise AccessError("ssh-keygen wrote no signature")
-        return sig.read_text()
+        return sig.read_text(encoding="utf-8")
 
 
 def verify(payload: str, signature: str, signer_pubkey: str) -> bool:
@@ -354,9 +354,9 @@ def verify(payload: str, signature: str, signer_pubkey: str) -> bool:
         return False
     with tempfile.TemporaryDirectory() as scratch:
         allowed = Path(scratch) / "allowed_signers"
-        allowed.write_text(f"center {signer_pubkey.strip()}\n")
+        allowed.write_text(f"center {signer_pubkey.strip()}\n", encoding="utf-8")
         sig = Path(scratch) / "payload.sig"
-        sig.write_text(signature)
+        sig.write_text(signature, encoding="utf-8")
         try:
             _keygen(["ssh-keygen", "-Y", "verify", "-f", str(allowed), "-I", "center",
                      "-n", SIGN_NAMESPACE, "-s", str(sig)], payload)
@@ -435,7 +435,7 @@ def seal(inventory_yaml: str, *, key_path: Path | None = None,
         "protocol": PROTOCOL,
         # named for the common case; it is simply whoever signed, and a listening center
         # checks it against the keys it has pinned before reading anything else
-        "center_pubkey": key_path.with_suffix(".pub").read_text().strip(),
+        "center_pubkey": key_path.with_suffix(".pub").read_text(encoding="utf-8").strip(),
         # Both, and the protocol number does not move. A peer that has not been updated
         # reads `signature` exactly as it always did and never looks at the other field,
         # so the fleet upgrades one machine at a time instead of all at once -- which
@@ -509,7 +509,7 @@ def is_pinned(acc: Access, pubkey: str) -> bool:
 
 def _read_yaml(path: Path) -> dict:
     try:
-        data = yaml.safe_load(path.read_text()) or {}
+        data = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
     except (OSError, yaml.YAMLError):
         return {}
     return data if isinstance(data, dict) else {}
@@ -537,7 +537,7 @@ def center_url(cache_path: Path | None = None) -> str:
     """Where this machine last learned the center listens, or ""."""
     path = cache_path or CACHE_PATH
     try:
-        return str((yaml.safe_load(path.read_text()) or {}).get("center_url") or "")
+        return str((yaml.safe_load(path.read_text(encoding="utf-8")) or {}).get("center_url") or "")
     except (OSError, yaml.YAMLError):
         return ""
 
@@ -556,7 +556,7 @@ def trusted_center_pubkey(cache_path: Path | None = None) -> str:
     """
     path = cache_path or CACHE_PATH
     try:
-        return str((yaml.safe_load(path.read_text()) or {}).get("center_pubkey") or "")
+        return str((yaml.safe_load(path.read_text(encoding="utf-8")) or {}).get("center_pubkey") or "")
     except (OSError, yaml.YAMLError):
         return ""
 
@@ -606,7 +606,7 @@ def center_last_seen(cache_path: Path | None = None) -> int:
     """When the center last swept this machine. 0 if it never has."""
     path = cache_path or CACHE_PATH
     try:
-        return int((yaml.safe_load(path.read_text()) or {}).get("seen_at") or 0)
+        return int((yaml.safe_load(path.read_text(encoding="utf-8")) or {}).get("seen_at") or 0)
     except (OSError, yaml.YAMLError, TypeError, ValueError):
         return 0
 
@@ -715,7 +715,7 @@ def center_retry_after(base_s: int, max_s: int, cache_path: Path | None = None) 
     """
     path = cache_path or CACHE_PATH
     try:
-        data = yaml.safe_load(path.read_text()) or {}
+        data = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
         failures, at = int(data.get("unanswered") or 0), int(data.get("unanswered_at") or 0)
     except (OSError, yaml.YAMLError, TypeError, ValueError):
         return 0
@@ -741,7 +741,7 @@ def note_fleet_id(fleet_id: str, cache_path: Path | None = None) -> None:
 def member_fleet_id(cache_path: Path | None = None) -> str:
     path = cache_path or CACHE_PATH
     try:
-        return str((yaml.safe_load(path.read_text()) or {}).get("fleet_id") or "")
+        return str((yaml.safe_load(path.read_text(encoding="utf-8")) or {}).get("fleet_id") or "")
     except (OSError, yaml.YAMLError):
         return ""
 
@@ -752,7 +752,7 @@ def handover_chain(path: Path | None = None) -> list[dict]:
     """Every handover from the first center to this one, oldest first. [] if none."""
     path = path or CHAIN_PATH
     try:
-        raw = yaml.safe_load(path.read_text()) or {}
+        raw = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
     except (OSError, yaml.YAMLError):
         return []
     return [e for e in (raw.get("chain") or []) if isinstance(e, dict)]

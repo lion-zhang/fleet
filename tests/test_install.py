@@ -87,7 +87,7 @@ def _run(script: str, tmp_path):
 def test_a_fresh_device_gets_a_clone(tmp_path):
     result = _run(install_script(str(_origin(tmp_path))), tmp_path)
     assert result.returncode == 0, result.stderr
-    assert (tmp_path / ".local" / "share" / "fleet" / "marker.txt").read_text() == "v1\n"
+    assert (tmp_path / ".local" / "share" / "fleet" / "marker.txt").read_text(encoding="utf-8") == "v1\n"
 
 
 def test_running_it_twice_updates_instead_of_failing(tmp_path):
@@ -113,7 +113,7 @@ def test_an_update_picks_up_new_commits(tmp_path):
         subprocess.run(args, cwd=str(clone), env=env, check=True, capture_output=True)
 
     assert _run(install_script(str(origin)), tmp_path).returncode == 0
-    assert (tmp_path / ".local" / "share" / "fleet" / "marker.txt").read_text() == "v2\n"
+    assert (tmp_path / ".local" / "share" / "fleet" / "marker.txt").read_text(encoding="utf-8") == "v2\n"
 
 
 def test_the_installer_hands_the_checkout_to_uv(tmp_path):
@@ -121,7 +121,7 @@ def test_the_installer_hands_the_checkout_to_uv(tmp_path):
     subprocess.run(["sh", "-c", install_script(str(_origin(tmp_path)))],
                    capture_output=True, text=True, timeout=60,
                    env={"HOME": str(tmp_path), "PATH": f"{bin_dir}:/usr/bin:/bin"})
-    assert "tool install" in log.read_text()
+    assert "tool install" in log.read_text(encoding="utf-8")
 
 
 def test_a_repo_url_cannot_inject_shell(tmp_path):
@@ -232,7 +232,7 @@ def test_removing_our_timer_leaves_the_users_own_cron_entries_alone(tmp_path):
     spool = _fake_crontab(tmp_path)
     spool.write_text("0 3 * * * /usr/local/bin/backup.sh\n")
     _run(install_script(str(_origin(tmp_path))), tmp_path)
-    assert "backup.sh" in spool.read_text()
+    assert "backup.sh" in spool.read_text(encoding="utf-8")
 
 
 def test_the_old_sync_timer_is_removed(tmp_path):
@@ -242,7 +242,7 @@ def test_the_old_sync_timer_is_removed(tmp_path):
     spool.write_text('0 3 * * * /usr/local/bin/backup.sh\n'
                      '*/10 * * * * PATH="$HOME/.local/bin:$PATH" fleet sync # fleet-sync\n')
     _run(install_script(str(_origin(tmp_path))), tmp_path)
-    out = spool.read_text()
+    out = spool.read_text(encoding="utf-8")
     assert "fleet sync" not in out
     assert "backup.sh" in out
 
@@ -250,7 +250,7 @@ def test_the_old_sync_timer_is_removed(tmp_path):
 def test_no_timer_is_installed(tmp_path):
     spool = _fake_crontab(tmp_path)
     _run(install_script(str(_origin(tmp_path))), tmp_path)
-    assert "fleet sync" not in spool.read_text()
+    assert "fleet sync" not in spool.read_text(encoding="utf-8")
 
 
 def test_a_device_without_cron_still_installs_successfully(tmp_path):

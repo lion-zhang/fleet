@@ -153,7 +153,7 @@ def test_the_sweep_refuses_to_strip_everything_at_once(fleet_at, monkeypatch):
     acl.save(acl.Access(fleet_id="7f3a9c"), acl.ACCESS_PATH)   # an empty list
     r = runner.invoke(cli.app, ["sync"])
     assert r.exit_code == 2
-    assert "refusing to remove everything" in r.output
+    assert "refusing to remove everything" in " ".join(r.output.split())   # any wrap width
 
 
 def test_a_machine_that_is_not_the_center_does_not_sweep(fleet_at, monkeypatch):

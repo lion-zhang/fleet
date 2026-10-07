@@ -160,7 +160,7 @@ def test_the_wire_format_is_the_file_format(tmp_path):
 
     path = tmp_path / "inventory.yaml"
     inv.save([_dev("a")], path)
-    assert inv.dumps(inv.load(path)).strip() == path.read_text().strip()
+    assert inv.dumps(inv.load(path)).strip() == path.read_text(encoding="utf-8").strip()
 
 
 # --------------------------------------------------------------- the server side
@@ -624,7 +624,7 @@ def test_a_machine_the_center_cannot_reach_can_dial_it_instead(tmp_path, monkeyp
     assert acl.center_url() == "http://hub.example:7373/sync", \
         "it must remember where to ask next time, as the center names it"
     assert acl.trusted_center_pubkey().strip() == \
-        centre_key.with_suffix(".pub").read_text().strip(), "the center was not pinned"
+        centre_key.with_suffix(".pub").read_text(encoding="utf-8").strip(), "the center was not pinned"
     assert "machine" in summary
 
 
@@ -682,7 +682,7 @@ def test_dialling_refuses_an_answer_it_cannot_trust(tmp_path, monkeypatch):
     for k in (real, impostor):
         subprocess.run(["ssh-keygen", "-t", "ed25519", "-N", "", "-q", "-f", str(k)],
                        check=True)
-    acl.pin_center_pubkey(real.with_suffix(".pub").read_text())
+    acl.pin_center_pubkey(real.with_suffix(".pub").read_text(encoding="utf-8"))
 
     forged = acl.seal(inv.dumps([Device(id="id:evil", name="evil", kind=Kind.PERMANENT)]),
                       key_path=impostor)

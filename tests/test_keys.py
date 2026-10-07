@@ -48,7 +48,7 @@ def test_the_remote_command_appends_rather_than_overwriting(tmp_path):
     out of their own machine."""
     _run_remote_command(authorized_keys_command("ssh-ed25519 FIRST"), tmp_path)
     _run_remote_command(authorized_keys_command("ssh-ed25519 SECOND"), tmp_path)
-    lines = (tmp_path / ".ssh" / "authorized_keys").read_text().split()
+    lines = (tmp_path / ".ssh" / "authorized_keys").read_text(encoding="utf-8").split()
     assert "FIRST" in lines and "SECOND" in lines
 
 
@@ -69,7 +69,7 @@ def test_a_hostile_key_string_cannot_execute_anything(tmp_path):
     hostile = f"ssh-ed25519 AAAA'; touch {marker}; echo '"
     _run_remote_command(authorized_keys_command(hostile), tmp_path)
     assert not marker.exists(), "the injected command must never have run"
-    assert hostile in (tmp_path / ".ssh" / "authorized_keys").read_text()
+    assert hostile in (tmp_path / ".ssh" / "authorized_keys").read_text(encoding="utf-8")
 
 
 # --------------------------------------------------------------- the ssh invocation
@@ -91,6 +91,9 @@ def test_the_fleet_keypair_is_never_regenerated(tmp_path):
     assert second == first
 
 
+@pytest.mark.skipif(sys.platform == "win32", reason="Windows has no POSIX modes: "
+                    "ssh-keygen sets the key's ACL, and ssh refuses a key others can read "
+                    "-- exercised end to end by tests/e2e/host.py on Windows")
 def test_the_private_half_is_not_readable_by_other_users(tmp_path):
     import stat
 
@@ -224,7 +227,7 @@ def _cli(tmp_path, monkeypatch, **devkw):
     key = tmp_path / "center_ed25519"
     subprocess.run(["ssh-keygen", "-t", "ed25519", "-N", "", "-q", "-f", str(key)],
                    check=True)
-    pub = key.with_suffix(".pub").read_text().strip()
+    pub = key.with_suffix(".pub").read_text(encoding="utf-8").strip()
     import fleet.config
     monkeypatch.setattr(fleet.config, "FLEET_KEY", key)
     acl.save(acl.bootstrap("macbook", pub, "id:me"), acl.ACCESS_PATH)
@@ -252,7 +255,11 @@ def test_enrolling_refuses_to_prompt_without_a_terminal(tmp_path, monkeypatch):
 
     result = runner.invoke(cli.app, ["add", "ssh -p 2222 root@5.6.7.8"])
     assert result.exit_code != 0
-    assert "terminal" in result.output.lower() or "tty" in result.output.lower()
+    said = result.output.lower()
+    # Windows refuses sooner -- it cannot type a password at all -- and points at the
+    # key to pre-place instead. Either way: no prompt.
+    assert "terminal" in said or "tty" in said or (sys.platform == "win32"
+                                                     and "pubkey" in said)
 
 
 def test_key_install_rejects_an_unknown_device(tmp_path, monkeypatch):
@@ -278,6 +285,7 @@ def test_key_install_uses_the_fleet_key_not_a_personal_one(tmp_path, monkeypatch
                         lambda *a, **k: (False, "Permission denied (publickey)."))
     monkeypatch.setattr(enrol.getpass, "getpass", lambda *a: "hunter2")
     monkeypatch.setattr(cli.sys.stdin, "isatty", lambda: True, raising=False)
+    monkeypatch.setattr(enrol, "pty_available", lambda: True)   # a machine that can type it
     # _install_key re-probes on success, to prove the key actually works rather than
     # trusting an append that exited 0. That probe is a real connection, and unlike the
     # sweep's it is not wrapped in suppress() -- so it has to return, not raise.
@@ -356,7 +364,7 @@ def test_a_key_written_by_an_older_fleet_is_moved_not_replaced(tmp_path):
     legacy.mkdir(parents=True)
     subprocess.run(["ssh-keygen", "-t", "ed25519", "-N", "", "-q",
                     "-f", str(legacy / "id_ed25519")], check=True)
-    before = (legacy / "id_ed25519.pub").read_text().split()[1]
+    before = (legacy / "id_ed25519.pub").read_text(encoding="utf-8").split()[1]
 
     env = {"HOME": str(tmp_path), "PATH": "/usr/bin:/bin:/usr/local/bin"}
     p = subprocess.run(["sh", "-c", ensure_remote_keypair_command()], env=env,

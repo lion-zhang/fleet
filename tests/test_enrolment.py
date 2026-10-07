@@ -43,7 +43,7 @@ def _keypair(tmp_path, monkeypatch, name="center_ed25519"):
     key = tmp_path / name
     subprocess.run(["ssh-keygen", "-t", "ed25519", "-N", "", "-q", "-f", str(key)],
                    check=True)
-    pub = key.with_suffix(".pub").read_text().strip()
+    pub = key.with_suffix(".pub").read_text(encoding="utf-8").strip()
     import fleet.config
     monkeypatch.setattr(fleet.config, "FLEET_KEY", key)
     monkeypatch.setattr(enrol, "ensure_keypair", lambda *a, **k: (key, pub))
@@ -215,7 +215,7 @@ def test_nothing_still_offers_an_enrol_command():
     targets = (list((root / "src").rglob("*.py"))
                + list((root / "docs").rglob("*.md")) + [root / "README.md"])
     for path in targets:
-        text = path.read_text()
+        text = path.read_text(encoding="utf-8")
         assert "--enroll" not in text, f"{path} still names a deleted flag"
         assert "--no-key-prompt" not in text, f"{path} still names a deleted flag"
 

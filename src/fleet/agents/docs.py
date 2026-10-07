@@ -92,7 +92,7 @@ def installed_targets(root: Path, *, project: bool = False) -> list[str]:
     out = []
     for target, path in plan(root, project=project).items():
         try:
-            text = path.read_text()
+            text = path.read_text(encoding="utf-8")
         except OSError:
             text = None
         if text is not None and (path.name == "SKILL.md" or BEGIN in text):
@@ -111,13 +111,13 @@ def _left_behind(root: Path, target: str) -> bool:
         return False
     for path in agent.stray_paths(root):
         try:
-            if path.is_file() and "name: fleet" in path.read_text().split("---", 2)[1]:
+            if path.is_file() and "name: fleet" in path.read_text(encoding="utf-8").split("---", 2)[1]:
                 return True
         except (OSError, IndexError):
             continue
     for path in legacy_paths(root).get(target, []):
         try:
-            if BEGIN in path.read_text():
+            if BEGIN in path.read_text(encoding="utf-8"):
                 return True
         except OSError:
             continue
@@ -131,7 +131,7 @@ def stale_targets(root: Path, cmd: str, *, project: bool = False) -> list[str]:
     for target in installed_targets(root, project=project):
         path = paths[target]
         try:
-            if path.read_text() != _desired(target, path, cmd):
+            if path.read_text(encoding="utf-8") != _desired(target, path, cmd):
                 out.append(target)
         except OSError:
             continue
@@ -146,7 +146,7 @@ def _desired(target: str, path: Path, cmd: str) -> str:
         agent = BY_NAME.get(target)
         return (hermes_skill_text(cmd) if agent and agent.skill == "hermes"
                 else skill_text(cmd))
-    existing = path.read_text() if path.exists() else ""
+    existing = path.read_text(encoding="utf-8") if path.exists() else ""
     return apply_block(existing, agents_block(cmd))
 
 
@@ -167,7 +167,7 @@ def install(root: Path, targets: list[str], cmd: str, *,
             changes += _drop_legacy(root, target, seen, dry_run=dry_run)
             continue
         seen.add(path)
-        current = path.read_text() if path.exists() else None
+        current = path.read_text(encoding="utf-8") if path.exists() else None
         desired = _desired(target, path, cmd)
         action = ("unchanged" if current == desired
                   else "created" if current is None else "updated")
@@ -197,7 +197,7 @@ def _drop_legacy(root: Path, target: str, seen: set[Path], *, dry_run: bool) -> 
         if path in seen or not path.is_file():
             continue
         try:
-            text = path.read_text()
+            text = path.read_text(encoding="utf-8")
         except OSError:
             continue
         front = text.split("---", 2)[1] if text.startswith("---") else ""
@@ -212,7 +212,7 @@ def _drop_legacy(root: Path, target: str, seen: set[Path], *, dry_run: bool) -> 
     for path in legacy_paths(root).get(target, []):
         if path in seen or not path.exists():
             continue
-        current = path.read_text()
+        current = path.read_text(encoding="utf-8")
         stripped = remove_block(current)
         if stripped == current:
             continue
@@ -262,7 +262,7 @@ def uninstall(root: Path, targets: list[str], *,
             changes += [c for c in _drop_legacy(root, target, seen, dry_run=dry_run)
                         if c.path.name == "SKILL.md"]
             continue
-        current = path.read_text()
+        current = path.read_text(encoding="utf-8")
         stripped = remove_block(current)
         action = "removed" if stripped != current else "unchanged"
         if action == "removed" and not dry_run:

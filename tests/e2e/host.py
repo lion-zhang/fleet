@@ -279,7 +279,7 @@ def main() -> int:
     expect("ssh still works after the edits", ["ssh", name, "--", "echo", "still-in"],
            r"still-in")
 
-    interactive_checks(name)
+    interactive_checks(name, a.ssh_user)
 
     # agents
     expect("setup --dry-run --target all", ["setup", "--dry-run", "--target", "all"], r".")
@@ -304,7 +304,7 @@ def main() -> int:
     return 1 if any(s == "FAIL" for s, _, _ in RESULTS) else 0
 
 
-def interactive_checks(machine: str) -> None:
+def interactive_checks(machine: str, user: str) -> None:
     """`fleet top` and `fleet ssh` at a real terminal, typed into as a person types.
 
     Everything above runs fleet the way an agent does: no terminal. That never reached
@@ -322,6 +322,15 @@ def interactive_checks(machine: str) -> None:
     sixty = "echo fleet-ok-4^2" if WINDOWS else 'echo fleet-ok-$((40+2))'
     long_wait = "ping -n 30 127.0.0.1" if WINDOWS else "sleep 30"
 
+    if WINDOWS:
+        # The harness first: an exit code it misreads would fail fleet for nothing.
+        h = Term(["cmd", "/c", "exit 5"], env=env)
+        try:
+            got = h.wait(20)
+        finally:
+            h.close()
+        check("terminal harness reads exit codes", got == 5, f"cmd /c exit 5 -> {got}")
+
     t = Term([FLEET, "top", "-i", "1"], env=env)
     try:
         drew = t.expect(re.escape(machine) + "|online", 30)
@@ -338,14 +347,14 @@ def interactive_checks(machine: str) -> None:
         check("ssh: an interactive session stays open", t.alive(), t.tail())
         at = t.mark()
         t.send(sixty + "\r", per_key=0.03)
-        check("ssh: what is typed runs there", t.expect(r"fleet-ok-42\s*$", 20, since=at),
-              t.tail())
+        check("ssh: what is typed runs there", t.expect(OUTPUT_42, 20, since=at), t.tail())
         at = t.mark()
         typed = "echo the-quick-brown-fox-jumps-0123456789"
         t.send(typed + "\r", per_key=0.02)
         # The far side's echo of it, alone on its line: a key lost, doubled or reordered
         # on the way would make it anything else.
-        whole = t.expect(r"^the-quick-brown-fox-jumps-0123456789\s*$", 20, since=at)
+        whole = t.expect(r"(?<!echo )the-quick-brown-fox-jumps-0123456789(?![\w-])", 20,
+                         since=at)
         check("ssh: every key arrives, in order, once", whole,
               clean_text(t.text[at:])[-800:])
         t.send(long_wait + "\r")
@@ -355,12 +364,33 @@ def interactive_checks(machine: str) -> None:
         at = t.mark()
         t.send(sixty + "\r", per_key=0.03)
         check("ssh: Ctrl+C stops the remote command, not the session",
-              t.alive() and t.expect(r"fleet-ok-42\s*$", 20, since=at), t.tail())
+              t.alive() and t.expect(OUTPUT_42, 20, since=at), t.tail())
         t.send("exit 7\r")
         code = t.wait(20)
-        check("ssh: the session's exit code comes back", code == 7, f"exit {code}: {t.tail()}")
     finally:
         t.close()
+
+    # What plain ssh returns for the same session is the bar: fleet must pass on exactly
+    # that. On POSIX it is the shell's 7.
+    from fleet.config import FLEET_KEY
+    plain = Term(["ssh", "-tt", "-i", str(FLEET_KEY), "-o", "StrictHostKeyChecking=accept-new",
+                  f"{user}@localhost"], env=env)
+    try:
+        time.sleep(4)
+        plain.send("exit 7\r")
+        bar = plain.wait(20)
+    finally:
+        plain.close()
+    check("ssh: the session's exit code is plain ssh's", code == bar and code is not None,
+          f"fleet ssh exit {code}, plain ssh exit {bar}")
+    if not WINDOWS:
+        check("ssh: and it is the shell's own", code == 7, f"exit {code}")
+
+
+# The far side's output of `echo fleet-ok-4^2` / `$((40+2))`: 42, which the typed line
+# (4^2, $((40+2))) never contains. Not anchored to a line: a ConPTY draws lines with
+# cursor moves, so after cleaning an output can run straight into the next prompt.
+OUTPUT_42 = r"fleet-ok-42(?!\d)"
 
 
 def clean_text(text: str) -> str:

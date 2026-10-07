@@ -1950,7 +1950,7 @@ def _refuse_while_handing_over(acc) -> None:
     if not acl.HANDING_PATH.exists() or _stepped_down(acc):
         return
     try:
-        to = (yaml.safe_load(acl.HANDING_PATH.read_text()) or {}).get("to_name", "the successor")
+        to = (yaml.safe_load(acl.HANDING_PATH.read_text(encoding="utf-8")) or {}).get("to_name", "the successor")
     except (OSError, yaml.YAMLError):
         to = "the successor"
     err.print(f"[red]The role is being handed to {to},[/red] so this machine makes no "

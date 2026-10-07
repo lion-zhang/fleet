@@ -8,6 +8,10 @@ did not write, and that running setup twice is not different from running it onc
 
 from __future__ import annotations
 
+from pathlib import Path
+
+import os
+
 from fleet.agents import (
     BEGIN,
     END,
@@ -125,7 +129,7 @@ def test_on_our_path_but_not_a_fresh_shells_gets_the_full_path(tmp_path, monkeyp
     real = _fake_binary(tmp_path / "bin").parent
     monkeypatch.setenv("PATH", _path_with(real))
     _a_fresh_shell_finds_it(monkeypatch, False)
-    assert fleet_command().startswith("/")
+    assert os.path.isabs(fleet_command())
 
 
 def test_fleet_command_uses_the_bare_name_when_a_real_install_is_on_path(tmp_path, monkeypatch):
@@ -142,7 +146,7 @@ def test_fleet_command_rejects_a_binary_that_only_exists_in_the_active_venv(monk
     from pathlib import Path
 
     monkeypatch.setenv("PATH", _path_with(Path(sys.prefix) / "bin"))
-    assert fleet_command().startswith("/")
+    assert os.path.isabs(fleet_command())
     assert fleet_command() != "fleet"
 
 
@@ -161,7 +165,7 @@ def test_fleet_command_looks_past_a_venv_that_shadows_a_real_install(tmp_path, m
 def test_fleet_command_falls_back_to_an_absolute_path_when_nothing_is_on_path(tmp_path, monkeypatch):
     monkeypatch.setenv("PATH", str(tmp_path / "empty"))
     resolved = fleet_command()
-    assert resolved.startswith("/"), "fallback must be absolute to be runnable anywhere"
+    assert os.path.isabs(resolved), "fallback must be absolute to be runnable anywhere"
 
 
 # --------------------------------------------------------------- target detection
@@ -184,16 +188,16 @@ def test_install_writes_a_skill_file_carrying_the_resolved_command(tmp_path):
     install(tmp_path, ["claude"], "/opt/bin/fleet")
     skill = tmp_path / ".claude" / "skills" / "fleet" / "SKILL.md"
     assert skill.exists()
-    assert "/opt/bin/fleet ls --json" in skill.read_text()
+    assert "/opt/bin/fleet ls --json" in skill.read_text(encoding="utf-8")
 
 
 def test_installing_twice_changes_nothing_the_second_time(tmp_path):
     """Re-running setup after an upgrade must be safe and silent, not duplicative."""
     (tmp_path / ".claude").mkdir()
     install(tmp_path, ["claude"], "fleet")
-    before = (tmp_path / ".claude" / "skills" / "fleet" / "SKILL.md").read_text()
+    before = (tmp_path / ".claude" / "skills" / "fleet" / "SKILL.md").read_text(encoding="utf-8")
     changes = install(tmp_path, ["claude"], "fleet")
-    after = (tmp_path / ".claude" / "skills" / "fleet" / "SKILL.md").read_text()
+    after = (tmp_path / ".claude" / "skills" / "fleet" / "SKILL.md").read_text(encoding="utf-8")
     assert before == after
     assert [c.action for c in changes] == ["unchanged"]
 
@@ -206,7 +210,7 @@ def test_install_preserves_a_users_existing_agents_file(tmp_path):
     agents = tmp_path / "GEMINI.md"
     agents.write_text("# My rules\n\nPrefer small commits.\n")
     install(tmp_path, ["gemini"], "fleet", project=True)
-    text = agents.read_text()
+    text = agents.read_text(encoding="utf-8")
     assert "Prefer small commits." in text
     assert BEGIN in text
 
@@ -217,7 +221,7 @@ def test_a_project_agents_file_is_still_a_shared_region(tmp_path):
     agents = tmp_path / "AGENTS.md"
     agents.write_text("# House style\n")
     changes = install(tmp_path, ["codex", "hermes"], "fleet", project=True)
-    text = agents.read_text()
+    text = agents.read_text(encoding="utf-8")
     assert "House style" in text and BEGIN in text
     assert len([c for c in changes if c.path == agents]) == 1, "one file, one change"
 
@@ -231,12 +235,12 @@ def test_moving_codex_to_a_skill_takes_the_old_block_back_out(tmp_path):
     old = tmp_path / ".codex" / "AGENTS.md"
     # exactly what the previous version of fleet left there
     old.write_text(apply_block("# Mine\n", agents_block("fleet")))
-    assert BEGIN in old.read_text()
+    assert BEGIN in old.read_text(encoding="utf-8")
 
     install(tmp_path, ["codex"], "fleet")
     assert (tmp_path / ".agents" / "skills" / "fleet" / "SKILL.md").exists()
-    assert BEGIN not in old.read_text(), "the old region is gone"
-    assert "# Mine" in old.read_text(), "and the user's own text is not"
+    assert BEGIN not in old.read_text(encoding="utf-8"), "the old region is gone"
+    assert "# Mine" in old.read_text(encoding="utf-8"), "and the user's own text is not"
 
 
 def test_codex_reads_the_shared_skill_once(tmp_path):
@@ -263,7 +267,7 @@ def test_an_agent_sharing_the_skill_still_loses_its_old_copy(tmp_path):
     gemini_md = tmp_path / ".gemini" / "GEMINI.md"
     gemini_md.write_text(apply_block("# mine\n", agents_block("fleet")))
     install(tmp_path, ["codex", "gemini"], "fleet")
-    assert BEGIN not in gemini_md.read_text() and "# mine" in gemini_md.read_text()
+    assert BEGIN not in gemini_md.read_text(encoding="utf-8") and "# mine" in gemini_md.read_text(encoding="utf-8")
 
 
 def test_one_shared_skill_for_every_agent_that_reads_the_shared_folder(tmp_path):
@@ -275,7 +279,7 @@ def test_one_shared_skill_for_every_agent_that_reads_the_shared_folder(tmp_path)
     changes = install(tmp_path, targets, "fleet")
     shared = tmp_path / ".agents" / "skills" / "fleet" / "SKILL.md"
     assert [c.path for c in changes].count(shared) == 1, "written once, not six times"
-    assert shared.read_text().startswith("---\nname: fleet\n")
+    assert shared.read_text(encoding="utf-8").startswith("---\nname: fleet\n")
 
 
 def test_dry_run_reports_the_change_without_touching_the_disk(tmp_path):
@@ -307,7 +311,7 @@ def test_uninstall_leaves_the_rest_of_a_shared_agents_file_intact(tmp_path):
     agents.write_text("# My rules\n\nPrefer small commits.\n")
     install(tmp_path, ["codex"], "fleet")
     uninstall(tmp_path, ["codex"])
-    text = agents.read_text()
+    text = agents.read_text(encoding="utf-8")
     assert "Prefer small commits." in text
     assert BEGIN not in text and "fleet ls --json" not in text
 
@@ -358,7 +362,9 @@ def test_hermes_installs_as_a_skill_not_into_the_system_prompt(tmp_path):
     """SOUL.md is Hermes's system prompt -- a block there costs tokens in every
     conversation. Skills load only when a task needs them."""
     path = plan(tmp_path)["hermes"]
-    assert path == tmp_path / ".hermes" / "skills" / "devops" / "fleet" / "SKILL.md"
+    # where Hermes keeps skills: ~/.hermes, or %LOCALAPPDATA%\hermes on Windows
+    assert path.parts[-4:] == ("skills", "devops", "fleet", "SKILL.md")
+    assert path.name != "SOUL.md"
 
 
 def test_hermes_project_scope_uses_the_shared_agents_file(tmp_path):
@@ -413,7 +419,7 @@ def test_hermes_never_touches_the_system_prompt(tmp_path):
     soul = tmp_path / ".hermes" / "SOUL.md"
     soul.write_text("You are Hermes Agent.\n")
     install(tmp_path, ["hermes"], "fleet")
-    assert soul.read_text() == "You are Hermes Agent.\n"
+    assert soul.read_text(encoding="utf-8") == "You are Hermes Agent.\n"
 
 
 def test_codex_and_hermes_share_one_file_in_a_project_and_are_reported_once(tmp_path):
@@ -588,7 +594,8 @@ def test_every_flag_is_either_listed_or_deliberately_excluded():
     from fleet.agents import skill_text
 
     text = skill_text("fleet")
-    env = {"COLUMNS": "200", "PATH": os.environ["PATH"], "HOME": os.environ["HOME"]}
+    # The whole environment: Windows cannot start Python without SYSTEMROOT and friends.
+    env = {**os.environ, "COLUMNS": "200"}
     missing = []
     for name in sorted(c.name for c in app.registered_commands):
         if name in NOT_FOR_AGENTS:
@@ -614,7 +621,8 @@ def test_the_flag_exclusions_do_not_outlive_their_flags():
 
     from fleet.cli import app
 
-    env = {"COLUMNS": "200", "PATH": os.environ["PATH"], "HOME": os.environ["HOME"]}
+    # The whole environment: Windows cannot start Python without SYSTEMROOT and friends.
+    env = {**os.environ, "COLUMNS": "200"}
     seen = set()
     for name in (c.name for c in app.registered_commands):
         out = subprocess.run(["fleet", name, "--help"], capture_output=True, text=True,
@@ -703,7 +711,7 @@ def test_a_legacy_file_with_the_users_own_text_survives(tmp_path):
     old = tmp_path / ".codex" / "AGENTS.md"
     old.write_text(apply_block("# Mine\n", agents_block("fleet")))
     install(tmp_path, ["codex"], "fleet")
-    assert old.exists() and "# Mine" in old.read_text()
+    assert old.exists() and "# Mine" in old.read_text(encoding="utf-8")
 
 
 # ------------------------------------------------------- hermes on Windows
@@ -735,7 +743,7 @@ def test_the_copy_hermes_could_not_see_is_taken_away(tmp_path, monkeypatch):
     changes = install(tmp_path, ["hermes"], "fleet")
     assert not stray.exists() and mine.exists()
     assert {c.action for c in changes} == {"created", "removed"}
-    assert plan(tmp_path)["hermes"].read_text() == hermes_skill_text("fleet")
+    assert plan(tmp_path)["hermes"].read_text(encoding="utf-8") == hermes_skill_text("fleet")
 
 
 def test_an_older_windows_hermes_with_only_the_dot_dir_keeps_it(tmp_path, monkeypatch):
@@ -768,7 +776,7 @@ def test_run_from_uvx_and_installed_nowhere_the_skill_says_uvx(monkeypatch, tmp_
     assert registry.fleet_command() == "uvx agent-fleet"
     assert registry.config_command() == registry.UVX
     entry = clients.mcp_entry(registry.config_command())
-    assert entry["args"] == ["agent-fleet", "mcp"] and entry["command"].endswith("uvx")
+    assert entry["args"] == ["agent-fleet", "mcp"] and Path(entry["command"]).stem.lower() == "uvx"
 
 
 def test_an_installed_fleet_is_never_swapped_for_uvx(monkeypatch, tmp_path):

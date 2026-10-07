@@ -32,7 +32,7 @@ def _keypair(where, name):
     key = where / name
     subprocess.run(["ssh-keygen", "-t", "ed25519", "-N", "", "-q", "-f", str(key)],
                    check=True)
-    return key, key.with_suffix(".pub").read_text().strip()
+    return key, key.with_suffix(".pub").read_text(encoding="utf-8").strip()
 
 
 def _paths(root):
@@ -138,7 +138,7 @@ def test_the_join_address_sits_beside_the_sync_one():
 def test_the_secret_is_not_written_down(tmp_path):
     path = tmp_path / "invites.yaml"
     _, secret = invites.create(path=path)
-    assert secret not in path.read_text()
+    assert secret not in path.read_text(encoding="utf-8")
 
 
 def test_an_invite_is_good_once_and_for_one_key(tmp_path):
@@ -394,7 +394,7 @@ def test_joining_leaves_a_machine_the_center_can_manage(joining):
     # the fleet arrived
     assert {d.name for d in inv.live(inv.load())} >= {"hub", "box", "newbox"}
     # the center's key is in our own authorized_keys, as the block the reconciler writes
-    keys = (f["home"] / ".ssh" / "authorized_keys").read_text()
+    keys = (f["home"] / ".ssh" / "authorized_keys").read_text(encoding="utf-8")
     assert f"# fleet:{f['fleet_id']}:begin from={f['cfp']} user=alice" in keys
     assert f["cpub"] in keys
 
@@ -404,7 +404,7 @@ def test_joining_twice_keeps_one_block(joining):
     code = _code(f)
     join_mod.join(code)
     join_mod.join(code)
-    keys = (f["home"] / ".ssh" / "authorized_keys").read_text()
+    keys = (f["home"] / ".ssh" / "authorized_keys").read_text(encoding="utf-8")
     assert keys.count(f["cpub"]) == 1
 
 

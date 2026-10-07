@@ -93,7 +93,7 @@ def installed_mcp_clients(root: Path, platform: str = "") -> list[str]:
         if not path or not path.exists():
             continue
         try:
-            doc = json.loads(path.read_text() or "{}")
+            doc = json.loads(path.read_text(encoding="utf-8") or "{}")
         except (OSError, ValueError):
             continue
         if isinstance(doc, dict) and isinstance(doc.get(c.key), dict) \
@@ -110,7 +110,7 @@ def stale_mcp_clients(root: Path, cmd: str, platform: str = "") -> list[str]:
         if c.name not in installed_mcp_clients(root, platform):
             continue
         path = c.path(root, platform)
-        current = path.read_text()
+        current = path.read_text(encoding="utf-8")
         if apply_mcp(current, c.key, cmd) != current:
             out.append(c.name)
     return out
@@ -127,7 +127,7 @@ def install_mcp(root: Path, clients: list[str], cmd: str, *,
         path = client.path(root, platform)
         if path is None:
             continue
-        current = path.read_text() if path.exists() else ""
+        current = path.read_text(encoding="utf-8") if path.exists() else ""
         desired = apply_mcp(current, client.key, cmd)
         if desired == current and current.strip() and "fleet" not in current:
             # apply_mcp returns the file untouched when it cannot parse it, which is the
@@ -155,7 +155,7 @@ def uninstall_mcp(root: Path, clients: list[str], *,
         path = client.path(root, platform)
         if path is None or not path.exists():
             continue
-        current = path.read_text()
+        current = path.read_text(encoding="utf-8")
         desired = remove_mcp(current, client.key)
         action = "removed" if desired != current else "unchanged"
         if action == "removed" and not dry_run:

@@ -42,10 +42,11 @@ def fleet_of(tmp_path, monkeypatch):
     return CliRunner(), remote, local
 
 
-def test_updating_this_machine_does_not_go_over_ssh(fleet_of):
+def test_updating_this_machine_does_not_go_over_ssh(fleet_of, monkeypatch):
     """The center is never an ssh target, so connecting to ourselves would fail on
     exactly the machine most likely to be running the command."""
     runner, remote, local = fleet_of
+    monkeypatch.setattr(install, "local_platform", lambda: "posix")   # Windows: powershell
     r = runner.invoke(cli.app, ["update"])
     assert r.exit_code == 0, r.output
     assert not remote, "it dialled out to update the machine it was already on"
@@ -149,6 +150,7 @@ def test_this_machine_is_updated_in_the_shell_it_actually_runs(fleet_of, monkeyp
     is git's sh.exe, where the POSIX script half-runs. The script goes over stdin so the
     payload is bytes either way -- text mode rewrites \\n to \\r\\n on Windows."""
     runner, _, local = fleet_of
+    monkeypatch.setattr(install, "local_platform", lambda: "posix")
     assert runner.invoke(cli.app, ["update"]).exit_code == 0
     assert local[0] == ["sh", "-s"], "posix: the script arrives on stdin, not as argv"
 

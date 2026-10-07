@@ -82,7 +82,7 @@ def test_leaving_removes_this_fleets_blocks_and_nothing_else(member):
         "# fleet:otherf:end from=SHA256:x\n")
     r = CliRunner().invoke(cli.app, ["center", "--leave"])
     assert r.exit_code == 0, r.output
-    left = keys.read_text()
+    left = keys.read_text(encoding="utf-8")
     assert "AAAA mine" in left and "AAAA other" in left
     assert "AAAA c" not in left and "AAAA p" not in left
     assert acl.trusted_center_pubkey() == ""

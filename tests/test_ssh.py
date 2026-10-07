@@ -20,6 +20,15 @@ from fleet.state import store
 from fleet.models import Device, Kind
 
 
+@pytest.fixture(autouse=True)
+def _posix_handoff(monkeypatch):
+    """These describe the POSIX handoff (exec into ssh); the Windows one -- wait for ssh,
+    pass its code on -- has its own tests below, which set the platform themselves."""
+    import sys
+
+    monkeypatch.setattr(sys, "platform", "linux")
+
+
 @pytest.fixture
 def box(tmp_path, monkeypatch):
     monkeypatch.setattr(inv, "INVENTORY_PATH", tmp_path / "inventory.yaml")

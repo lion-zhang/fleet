@@ -27,7 +27,7 @@ def two_machines(tmp_path, monkeypatch):
     key = tmp_path / "id_ed25519"
     subprocess.run(["ssh-keygen", "-t", "ed25519", "-N", "", "-q", "-f", str(key)],
                    check=True)
-    pub = key.with_suffix(".pub").read_text()
+    pub = key.with_suffix(".pub").read_text(encoding="utf-8")
     # Patched on every module that *reads* the name, not only on the one that defines
     # it: these import it at module scope, so rebinding `fleet.ssh.keys.ensure_keypair`
     # alone leaves them holding the original and generating a real key.
@@ -123,6 +123,6 @@ def test_no_code_path_produces_a_backup_role():
     # console script names it -- and not something a test about roles should assert.
     src = pathlib.Path(fleet.__path__[0])
     for f in src.rglob("*.py"):
-        text = f.read_text()
+        text = f.read_text(encoding="utf-8")
         assert 'role = "backup"' not in text, f"{f.name} still assigns the role"
         assert 'role="backup"' not in text, f"{f.name} still assigns the role"

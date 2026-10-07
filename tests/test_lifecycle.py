@@ -30,7 +30,7 @@ def a_fleet(tmp_path, monkeypatch):
     key = tmp_path / "id_ed25519"
     subprocess.run(["ssh-keygen", "-t", "ed25519", "-N", "", "-q", "-f", str(key)],
                    check=True)
-    pub = key.with_suffix(".pub").read_text()
+    pub = key.with_suffix(".pub").read_text(encoding="utf-8")
     import fleet.config
     import fleet.ssh.keys
     monkeypatch.setattr(fleet.config, "FLEET_KEY", key)

@@ -88,7 +88,7 @@ def blocks_on_disk() -> list[tuple[str, str]]:
     found = []
     for path in _authorized_keys_files():
         try:
-            text = path.read_text(errors="replace")
+            text = path.read_text(encoding="utf-8", errors="replace")
         except OSError:
             continue
         for line in text.splitlines():

@@ -47,7 +47,7 @@ def local_device_id() -> str:
             pass
     for candidate in ("/etc/machine-id", "/var/lib/dbus/machine-id"):
         try:
-            value = Path(candidate).read_text().strip()
+            value = Path(candidate).read_text(encoding="utf-8").strip()
         except OSError:
             continue
         if value:

@@ -386,7 +386,7 @@ def install_source() -> Path | None:
         if not receipt.is_file():
             continue
         try:
-            reqs = tomllib.loads(receipt.read_text()).get("tool", {}).get("requirements", [])
+            reqs = tomllib.loads(receipt.read_text(encoding="utf-8")).get("tool", {}).get("requirements", [])
         except (OSError, tomllib.TOMLDecodeError):
             return None
         for req in reqs:

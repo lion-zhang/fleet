@@ -41,7 +41,8 @@ MANUAL = ("run [bold]fleet center --listen[/bold] under whatever keeps processes
 
 def _run(argv: list[str], **kw) -> subprocess.CompletedProcess:
     try:
-        return subprocess.run(argv, capture_output=True, text=True, **kw)
+        return subprocess.run(argv, capture_output=True, text=True, encoding="utf-8",
+                              errors="replace", **kw)
     except FileNotFoundError as exc:
         return subprocess.CompletedProcess(argv, 127, "", str(exc))
 
@@ -92,7 +93,7 @@ def _plist(cmd: str, port: int) -> str:
 def _darwin_install(cmd: str, port: int) -> str:
     path = _plist_path()
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(_plist(cmd, port))
+    path.write_text(_plist(cmd, port), encoding="utf-8")
     target = f"gui/{os.getuid()}"
     _run(["launchctl", "bootout", target, str(path)])      # idempotent: ignore failure
     p = _run(["launchctl", "bootstrap", target, str(path)])
@@ -164,7 +165,7 @@ def _linux_install(cmd: str, port: int) -> str:
         return f"no service manager for this user here, so nothing to install -- {MANUAL}"
     path = _unit_path()
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(_unit(cmd, port))
+    path.write_text(_unit(cmd, port), encoding="utf-8")
     _run(["systemctl", "--user", "daemon-reload"])
     p = _run(["systemctl", "--user", "enable", "--now", UNIT])
     if p.returncode != 0:

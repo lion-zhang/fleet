@@ -190,7 +190,7 @@ def test_no_operation_raises_typer_exit():
            "_enrol_unpinned", "_broadcast", "_apply_now", "_install_key",
            "_register_identity", "_enrol_after_add", "ensure_fresh", "run_sync"}
     tree = ast.parse((pathlib.Path(__file__).resolve().parent.parent
-                      / "src" / "fleet" / "cli.py").read_text())
+                      / "src" / "fleet" / "cli.py").read_text(encoding="utf-8"))
     offenders = []
     for node in tree.body:
         if not isinstance(node, ast.FunctionDef) or node.name not in ops:
@@ -209,7 +209,7 @@ def test_the_consoles_live_in_a_leaf():
     import pathlib
 
     tree = ast.parse((pathlib.Path(__file__).resolve().parent.parent
-                      / "src" / "fleet" / "ui.py").read_text())
+                      / "src" / "fleet" / "ui.py").read_text(encoding="utf-8"))
     for node in ast.walk(tree):
         if isinstance(node, ast.ImportFrom):
             assert not (node.level or (node.module or "").startswith("fleet")), \
@@ -231,7 +231,7 @@ def test_nothing_but_the_cli_imports_the_cli():
         # same exemption in test_layering.py.
         if path.name in ("cli.py", "__main__.py"):
             continue
-        tree = ast.parse(path.read_text())
+        tree = ast.parse(path.read_text(encoding="utf-8"))
         for node in ast.walk(tree):
             if isinstance(node, ast.ImportFrom) and (node.module or "").endswith("cli"):
                 offenders.append(f"{path.relative_to(root)}:{node.lineno}")
@@ -252,7 +252,7 @@ def test_operations_do_not_import_a_surface():
     surfaces = {"cli", "serve", "mcpserver"}
     offenders = []
     for path in ops.rglob("*.py"):
-        for node in ast.walk(ast.parse(path.read_text())):
+        for node in ast.walk(ast.parse(path.read_text(encoding="utf-8"))):
             if isinstance(node, ast.ImportFrom):
                 tail = (node.module or "").rsplit(".", 1)[-1]
                 if tail in surfaces:
