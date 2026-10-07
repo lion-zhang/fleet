@@ -36,6 +36,10 @@ MAX_BODY = 8 * 1024 * 1024                 # an inventory, not a payload to be g
 class _Handler(BaseHTTPRequestHandler):
     server_version = "fleet"
     sys_version = ""
+    # Seconds a connection may sit idle. Without it a client that opens a connection and
+    # sends nothing -- or a Content-Length it never delivers -- held a thread on the
+    # center's public port for good. A sync or a join is a few kilobytes.
+    timeout = 30
 
     def log_message(self, fmt, *args):     # noqa: A003 - BaseHTTPRequestHandler's name
         """Silent by default. A center serving a fleet all day should not narrate it."""

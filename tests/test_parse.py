@@ -211,3 +211,21 @@ def test_the_windows_payload_does_not_use_posix_env_syntax():
     src = inspect.getsource(runner._run_probe_once)
     assert "env=None" in src, "the Windows branch must not pass env through build_argv"
     assert "$env:" in src, "it sets the environment inside the script instead"
+
+
+def test_a_quote_in_a_windows_disk_path_cannot_end_the_string(monkeypatch):
+    """Disk paths are set inside the PowerShell script as '...' strings. A path with a
+    quote in it -- C:\\Users\\O'Brien -- ended the string and ran the rest as code."""
+    from fleet.probe import runner
+    from fleet.ssh.cmd import Endpoint
+
+    sent = {}
+
+    def spawn(argv, payload, timeout, popen_kw):
+        sent["payload"] = payload.decode()
+        return 0, b"", b""
+    monkeypatch.setattr(runner, "_spawn", spawn)
+    runner._run_probe_once(Endpoint(target="192.0.2.10", user="me"), windows=True,
+                           disk_paths=["C:\\Users\\O'Brien'; Remove-Item x; '"])
+    line = next(ln for ln in sent["payload"].splitlines() if "FLEET_DISK_PATHS" in ln)
+    assert line == "$env:FLEET_DISK_PATHS='C:\\Users\\O''Brien''; Remove-Item x; '''"

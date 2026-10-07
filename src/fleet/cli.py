@@ -1536,7 +1536,7 @@ def cmd_ssh(ctx: typer.Context,
         argv += ["-i", ep.identity]
     if ep.jump:
         argv += ["-J", ep.jump]
-    argv.append(f"{ep.user}@{ep.target}" if ep.user else ep.target)
+    argv += ["--", f"{ep.user}@{ep.target}" if ep.user else ep.target]
     extra = [a for a in ctx.args if a != "--"]
     if extra:
         argv.append(remote_command(extra, windows=platform == "windows"))

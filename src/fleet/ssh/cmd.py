@@ -382,7 +382,7 @@ def build_enroll_argv(ep: Endpoint, *, connect_timeout: int = 8) -> list[str]:
         argv += ["-p", str(ep.port)]
     if ep.jump:
         argv += ["-J", ep.jump]
-    argv.append(f"{ep.user}@{ep.target}" if ep.user else ep.target)
+    argv += ["--", f"{ep.user}@{ep.target}" if ep.user else ep.target]
     return argv
 
 
@@ -418,7 +418,7 @@ def build_argv(ep: Endpoint, *, connect_timeout: int = 8, multiplex: bool = True
     if multiplex and (cdir := control_dir()):
         argv += ["-o", "ControlMaster=auto", "-o", f"ControlPath={cdir}/%C",
                  "-o", "ControlPersist=120"]
-    argv.append(f"{ep.user}@{ep.target}" if ep.user else ep.target)
+    argv += ["--", f"{ep.user}@{ep.target}" if ep.user else ep.target]
     prefix = " ".join(f"{k}={shlex.quote(v)}" for k, v in (env or {}).items())
     argv.append(f"{prefix} {remote}".strip())
     return argv

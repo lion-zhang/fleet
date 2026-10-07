@@ -177,7 +177,7 @@ def build_install_argv(ep: Endpoint, *, forward_agent: bool = True,
         argv += ["-i", str(config.FLEET_KEY)]
     if ep.jump:
         argv += ["-J", ep.jump]
-    argv.append(f"{ep.user}@{ep.target}" if ep.user else ep.target)
+    argv += ["--", f"{ep.user}@{ep.target}" if ep.user else ep.target]
     # Both read the script from stdin, so nothing long or quoted has to survive a second
     # round of shell parsing on the way in. Windows writes it out and runs the file --
     # see WINDOWS_STDIN_SHELL for the two failures that shape stands between.

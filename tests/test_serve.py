@@ -423,3 +423,8 @@ def test_the_sweep_takes_from_a_members_reply_only_what_it_may_change():
     assert taken[0].name == "nas" and taken[0].kind is Kind.PERMANENT
     assert [e["target"] for e in taken[0].endpoints] == ["10.0.0.5"]
     assert taken[0].cost == {"usd_per_hour": 1.0}
+
+
+def test_a_client_that_sends_nothing_cannot_hold_the_listener():
+    """The handler's socket timeout is what frees a thread from a stalled client."""
+    assert 0 < serve._Handler.timeout <= 60

@@ -294,7 +294,11 @@ def _run_probe_once(ep: Endpoint, *, mode: str = "full", timeout: float = 20.0,
         # program to run -- producing the very "not recognized" error that sent us here,
         # so the retry failed exactly like the attempt it was retrying. Set it inside the
         # script instead, where PowerShell understands it.
-        prelude = "".join(f"$env:{k}='{v}'\n" for k, v in env.items())
+        # Single-quoted, so the one character to escape is the quote itself -- doubled,
+        # PowerShell's escape. Unescaped, a disk path such as C:\Users\O'Brien ended the
+        # string and ran the rest as code, on a Windows machine, under the center's key.
+        prelude = "".join(f"$env:{k}='{str(v).replace(chr(39), chr(39) * 2)}'\n"
+                          for k, v in env.items())
         payload = prelude + PAYLOAD_PS1.read_text(encoding="utf-8")
         argv = build_argv(ep, connect_timeout=connect_timeout, multiplex=multiplex,
                           remote="powershell -NoProfile -Command -", env=None)

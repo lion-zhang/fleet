@@ -644,3 +644,16 @@ def test_a_name_that_will_not_resolve_does_not_stall_the_invite(monkeypatch):
         assert time.monotonic() - started < 2
     finally:
         release.set()
+
+
+def test_an_id_that_is_another_machines_name_does_not_make_the_joiner_that_machine(fleet_of_two):
+    """The joiner chooses the id it sends, and matching it with find_exact also matched
+    names: an id of "box" made the joiner box, and its key went under box's name."""
+    f = fleet_of_two
+    invite, secret = _invite(f)
+    code, body = _ask(f, _request(f, invite, secret, dev=_me("newbox", "box")))
+    assert code == 200, body
+    with being(f["c"]):
+        assert acl.load().name_of(acl.fingerprint(f["jpub"])) == "newbox"
+        box = inv.find_exact(inv.load(), "box")
+        assert box.id == "id:box", "the machine called box is still itself"
