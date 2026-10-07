@@ -22,9 +22,12 @@
 # fleet_id and center. Never starts a fleet to answer. Fleets before `role` existed
 # answered with is_center / member, which are read too.
 function Get-FleetRole($fleet) {
+    # The caller's own setting is put back after: `irm | iex` runs in their session,
+    # and removing it outright undid an opt-out they had set themselves.
+    $was = $env:FLEET_NO_AUTO_CENTER
     $env:FLEET_NO_AUTO_CENTER = '1'
     try { $j = (& $fleet center --json 2>$null) -join "`n" | ConvertFrom-Json } catch { $j = $null }
-    Remove-Item Env:FLEET_NO_AUTO_CENTER -ErrorAction SilentlyContinue
+    $env:FLEET_NO_AUTO_CENTER = $was
     if (-not $j) { return @{ role = ''; fleet_id = ''; center = '' } }
     $role = if ($j.role) { $j.role } elseif ($j.is_center) { 'center' } elseif ($j.member) { 'member' } else { '' }
     return @{ role = $role; fleet_id = "$($j.fleet_id)"; center = "$($j.center)" }
@@ -188,10 +191,11 @@ function Install-Fleet {
     # 3. Into a fleet, and every agent here taught to use it.
     if ($setup) {
         if ($join) {
+            $was = $env:FLEET_NO_AUTO_CENTER
             $env:FLEET_NO_AUTO_CENTER = '1'
             & $fleet join $join
             $code = $LASTEXITCODE
-            Remove-Item Env:FLEET_NO_AUTO_CENTER
+            $env:FLEET_NO_AUTO_CENTER = $was
             if ($code -ne 0) { throw 'could not join the fleet (see above)' }
         }
         # On a machine in no fleet this also starts one, with this machine as its center.

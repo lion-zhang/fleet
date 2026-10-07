@@ -176,7 +176,15 @@ def _linux_install(cmd: str, port: int) -> str:
         return f"could not start it: {(lines[-1] if lines else 'no reason given')[:200]}"
     # Without this the unit stops when the last session for this user ends, which on a
     # headless box is the moment you close the ssh connection that installed it.
-    _run(["loginctl", "enable-linger", os.environ.get("USER", "")])
+    import getpass
+
+    linger = _run(["loginctl", "enable-linger", getpass.getuser()])
+    if linger.returncode != 0:
+        # Said, not swallowed: without lingering it stops at logout and does not come
+        # back at boot, which "again at boot" would have promised anyway.
+        return (f"running ({path}), but only while you are logged in: lingering could "
+                f"not be enabled -- ask an admin for `loginctl enable-linger "
+                f"{getpass.getuser()}`")
     return f"running, and again at boot ({path})"
 
 

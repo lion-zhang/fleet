@@ -199,7 +199,13 @@ def _posix_remote(env: dict | None) -> str:
     return (
         'f=$(mktemp 2>/dev/null || echo /tmp/.fleet-probe.$$); '
         'cat > "$f" || { echo "fleet: cannot write $f" >&2; exit 127; }; '
-        f'{prefix} sh "$f" > "$f.out" 2> "$f.err"; rc=$?; '
+        # And a limit on the far side. The probe is detached from the channel by design,
+        # so when the local timeout drops the connection nothing tells it to stop: a `df`
+        # stuck on a dead NFS mount, or a wedged `nvidia-smi`, stayed behind -- one more
+        # on every refresh, on exactly the shared clusters most likely to have them.
+        # `timeout` where one takes `-s KILL N` (GNU and busybox both do); else as before.
+        'T=; timeout -s KILL 5 true >/dev/null 2>&1 && T="timeout -s KILL 90"; '
+        f'{prefix} $T sh "$f" > "$f.out" 2> "$f.err"; rc=$?; '
         'cat "$f.out"; cat "$f.err" >&2; '
         'rm -f "$f" "$f.out" "$f.err"; exit $rc'
     ).replace("  ", " ").strip()

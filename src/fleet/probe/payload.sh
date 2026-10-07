@@ -237,7 +237,9 @@ if [ "$OS" = "Darwin" ] && have lsof; then
 elif have ss; then
   ss -tlnH 2>/dev/null || ss -tln 2>/dev/null | tail -n +2
 elif have netstat; then
-  netstat -tlnp 2>/dev/null | tail -n +3 || netstat -tln 2>/dev/null | tail -n +3
+  # The exit status of `netstat`, not of `tail`: piped, the fallback never ran.
+  ns=$(netstat -tlnp 2>/dev/null) || ns=$(netstat -tln 2>/dev/null)
+  printf '%s\n' "$ns" | tail -n +3
 elif have lsof; then
   lsof +c 0 -nP -iTCP -sTCP:LISTEN 2>/dev/null | tail -n +2 \
     | awk '{n=split($9,a,":"); printf "LISTEN 0 0 %s:%s x users:((\"%s\",pid=%s,fd=0))\n", (n>1?a[n-1]:"*"), a[n], $1, $2}'
