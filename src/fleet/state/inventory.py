@@ -352,8 +352,8 @@ def merge(local: list[Device], remote: list[Device], *,
 
     Devices are matched on id, which is why id prefers machine-id over an address: two
     machines may have named the same box differently, and the address may since have
-    changed. Newer updated_at wins the record; endpoints are unioned regardless, because
-    a route one machine knows about is still a real route.
+    changed. Newer updated_at wins the record; an older one changes nothing. When the
+    newer record is not the authority, its endpoints are unioned with ours.
 
     Deletion travels as a tombstone: `fleet rm` keeps the record with `deleted_at` set,
     and it wins like any newer record, so "deleted here" is never mistaken for "not seen
@@ -381,8 +381,18 @@ def merge(local: list[Device], remote: list[Device], *,
                 incoming.endpoints = _union_endpoints(incoming.endpoints, mine.endpoints)
             by_id[incoming.id] = incoming
             changes.append(f"updated {incoming.name}")
-        elif gained and not authoritative:
-            mine.endpoints = endpoints
+        elif incoming.updated_at == mine.updated_at:
+            # The same version of the record, reached two ways. Routes either side
+            # holds are both real -- unless the other side is the center's signed list,
+            # which then says exactly which routes there are.
+            mine.endpoints = list(incoming.endpoints) if authoritative else endpoints
+        else:
+            # An older record adds nothing -- not even a route. Taking its endpoints
+            # anyway was how a route removed or changed on the center came back: a
+            # member still holding the old one synced, the center unioned it into its
+            # newer record, signed the result and handed it to everyone. A real new
+            # route arrives with a newer record (`fleet add` stamps it).
+            gained = 0
         if gained:
             changes.append(f"{by_id[incoming.id].name}: +{gained} endpoint(s)")
 
@@ -415,6 +425,7 @@ def upsert(devices: list[Device], new: Device) -> tuple[list[Device], str]:
                      if (e.get("target"), e.get("user"), int(e.get("port", 22) or 22)) not in known]
             if added:
                 existing.endpoints.extend(added)
+                touch(existing)            # or the new route loses the next merge
             if restored:
                 return devices, "restored"
             return devices, "endpoint_added" if added else "unchanged"

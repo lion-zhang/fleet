@@ -428,3 +428,27 @@ def test_the_sweep_takes_from_a_members_reply_only_what_it_may_change():
 def test_a_client_that_sends_nothing_cannot_hold_the_listener():
     """The handler's socket timeout is what frees a thread from a stalled client."""
     assert 0 < serve._Handler.timeout <= 60
+
+
+def test_a_relayed_reading_keeps_its_age(tmp_path, monkeypatch):
+    """Found in review: relayed rows were stamped with the time they arrived, so a
+    machine the center last saw three days ago showed `ok`, 0s old, and was never asked
+    again -- every pull re-stamped it."""
+    import time
+
+    from fleet.ops import sync
+    from fleet.state import store
+
+    monkeypatch.setattr(store, "DB_PATH", tmp_path / "cache.db")
+    three_days_ago = int(time.time()) - 3 * 86400
+    sync.record_relayed([{"device_id": "id:nas", "status": "timeout",
+                          "probed_at": three_days_ago, "snapshot": None,
+                          "error_class": "timeout", "error_detail": "no answer"}])
+    conn = store.connect()
+    try:
+        st, _ = store.latest(conn, "id:nas")
+    finally:
+        conn.close()
+    assert st["last_probe_at"] == three_days_ago
+    assert not store.is_fresh(st, 60)
+    assert st["error_class"] == "timeout" and st["error_detail"] == "no answer"

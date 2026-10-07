@@ -1170,7 +1170,13 @@ def cmd_sync(serve: bool = typer.Option(False, "--serve",
             raise typer.Exit(2)
         # merged against whatever the file holds *now*, under the lock: another
         # command on this machine may have committed while we were reading stdin.
-        merged, changes = inv.update(lambda current: inv.merge(current, incoming))
+        # Authoritative: this is the center's list, verified above against the key this
+        # machine pinned, so a route the center removed is removed here too. Unioned
+        # instead, a member kept every route it had ever held, under the center's
+        # timestamp -- and later authoritative pulls, tied on that timestamp, never
+        # took them away.
+        merged, changes = inv.update(
+            lambda current: inv.merge(current, incoming, authoritative=True))
         sys.stdout.write(inv.dumps(merged))
         return
 

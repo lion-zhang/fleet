@@ -116,10 +116,15 @@ def _shape_matches(conn: sqlite3.Connection) -> bool:
 
 
 def record(conn: sqlite3.Connection, device_id: str, res: ProbeResult, *,
-           source: str = "self", probed_by: str = "") -> None:
+           source: str = "self", probed_by: str = "", at: int | None = None) -> None:
     """Store a probe result. `source` is 'self' for one we ran, 'broadcast' for one
-    relayed by the center for a device we cannot reach ourselves."""
-    now = int(time.time())
+    relayed by the center for a device we cannot reach ourselves.
+
+    `at` is when the probe was taken, for a relayed one: stamped with the time it was
+    *received*, a reading days old looked fresh, was never re-probed, and kept an agent
+    sending work to a machine that had died. Never later than now.
+    """
+    now = int(time.time()) if at is None else min(int(at), int(time.time()))
     if not conn.in_transaction:
         # The read below and the write after it as one step: two processes probing the
         # same machine each read the streak and wrote it +1, losing a failure.
