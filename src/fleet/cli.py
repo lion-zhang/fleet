@@ -4,6 +4,7 @@ universal interface: cron jobs, Makefiles, and non-MCP agents can all use it."""
 from __future__ import annotations
 
 import contextlib
+import dataclasses
 import copy
 import getpass
 import json as jsonlib
@@ -2441,6 +2442,82 @@ def cmd_mcp():
 
         err.print(f"[red]{escape(str(exc))}[/red]")
         raise typer.Exit(2)
+
+
+@app.command("uninstall")
+def cmd_uninstall(purge: bool = typer.Option(False, "--purge",
+                                             help="also delete fleet's files here: its key, "
+                                                  "inventory, cache and logs"),
+                  yes: bool = typer.Option(False, "--yes", "-y",
+                                           help="do not ask; needed without a terminal"),
+                  json_out: bool = typer.Option(False, "--json", help="print JSON instead of a table, for scripts and agents")):
+    """Take fleet off this machine: out of its fleet, out of your agents, service removed.
+
+    In order: a member leaves its fleet (the fleet's keys come off this machine), the
+    skills and MCP entries fleet gave your agents are removed, and so is the background
+    service. With --purge, fleet's own files go too. The program itself is removed last,
+    by you: the command to run is printed at the end.
+
+    The center of a fleet with other machines in it cannot uninstall: hand the role on
+    (`fleet center NAME`) or end the fleet (`fleet center --dissolve`) first.
+
+    [dim]Example:[/dim]  fleet uninstall --purge
+    """
+    from .ops import uninstall as _un
+
+    if why := _un.refusal():
+        if not _emit({"ok": False, "error": why}, json_out):
+            err.print(f"[red]Not uninstalling: {why}.[/red]")
+            err.print("  [dim]its key is on every one of them, and only it can take it "
+                      "off: hand the role on with [bold]fleet center NAME[/bold], or end "
+                      "the fleet with [bold]fleet center --dissolve[/bold], then run this "
+                      "again[/dim]")
+        raise typer.Exit(2)
+    if not yes:
+        if not sys.stdin.isatty():
+            err.print("[red]This removes fleet from this machine; run it in a terminal, "
+                      "or pass --yes.[/red]")
+            raise typer.Exit(2)
+        where = _fleet_membership()
+        steps = (["leave its fleet (the fleet's keys come off this machine)"]
+                 if where == "member" else
+                 ["forget the empty fleet it is the center of"] if where == "center" else [])
+        steps += ["remove fleet from your agents (skills, MCP entries)",
+                  "remove the background service"]
+        if purge:
+            steps.append("delete fleet's files here: its key, inventory, cache and logs")
+        console.print("This will:\n" + "\n".join(f"  - {x}" for x in steps))
+        if not typer.confirm("Uninstall fleet from this machine?"):
+            raise typer.Exit(1)
+    try:
+        out = _un.uninstall(purge=purge)
+    except FleetError as exc:
+        if not _emit({"ok": False, "error": str(exc)}, json_out):
+            err.print(f"[red]{exc}[/red]")
+        raise typer.Exit(exc.code)
+    if _emit({"ok": True, **dataclasses.asdict(out)}, json_out):
+        return
+    if out.left == "member":
+        console.print(f"[green]✓[/green] left fleet {out.fleet_id or '(unknown)'}: removed "
+                      f"{out.key_blocks_removed} key block(s) from this machine")
+        console.print(f"  [dim]{out.center or 'the center'} still lists this machine: "
+                      f"[bold]fleet rm NAME[/bold] there[/dim]")
+    elif out.left:
+        console.print(f"[green]✓[/green] forgot fleet {out.fleet_id}, which had no other "
+                      "machines")
+    for path in out.agents:
+        console.print(f"[green]✓[/green] removed {path}")
+    if out.service:
+        console.print(f"[green]✓[/green] background service: {out.service}")
+    if out.files_removed:
+        console.print(f"[green]✓[/green] deleted {len(out.files_removed)} of fleet's files")
+    elif out.files_kept:
+        console.print("[dim]· fleet's files are kept (--purge deletes them):[/dim]")
+        for path in out.files_kept:
+            console.print(f"    [dim]{path}[/dim]")
+    console.print("\nLast, remove the program itself:")
+    for line in out.remove_program:
+        console.print(f"  [bold]{line}[/bold]")
 
 
 @app.command("paths")

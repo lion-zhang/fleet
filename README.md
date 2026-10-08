@@ -307,9 +307,11 @@ only when you or an agent use it.
 <details>
 <summary><b>How do I remove fleet?</b></summary>
 
-On a member: `fleet center --leave`, `fleet setup --uninstall`, then
-`uv tool uninstall agents-fleet`. On the center, `fleet center --dissolve` first takes
-every key off every machine. See [Removing fleet](docs/guides/install.md#removing-fleet).
+`fleet uninstall` (`--purge` to delete its files too): it leaves the fleet, removes fleet
+from your agents and the background service, and prints the last step,
+`uv tool uninstall agents-fleet`. On the center of a fleet with other machines,
+`fleet center --dissolve` comes first -- it takes every key off every machine. See
+[Removing fleet](docs/guides/install.md#removing-fleet).
 </details>
 
 ## Learn more

@@ -106,15 +106,26 @@ machine are told, and restarts the center's background service if it ran.
 
 ## Removing fleet
 
-On a member, take the machine out of the fleet first, then remove the program:
-
 ```bash
-fleet center --leave           # removes this fleet's keys from this machine
-fleet setup --uninstall        # removes the skills and MCP entries fleet installed
-uv tool uninstall agents-fleet # or: pipx uninstall agents-fleet
+fleet uninstall            # leave the fleet, remove fleet from your agents and the service
+fleet uninstall --purge    # ...and delete fleet's files here: key, inventory, cache, logs
 ```
 
-On the center, `fleet center --dissolve` takes the whole fleet down first and removes
-the background service (see [The center](center.md#leaving-and-ending)); hand the role over instead if the fleet
-should live on. `fleet paths` shows where fleet keeps its files, if you want them gone
-too.
+In order, it:
+
+1. takes this machine out of its fleet: on a member, the fleet's keys come off this
+   machine (the center still lists it until `fleet rm NAME` there); an empty center
+   just forgets its fleet;
+2. removes the skills and MCP entries fleet gave your agents;
+3. removes the background service;
+4. with `--purge`, deletes fleet's own files, by name -- nothing else in those folders.
+
+It asks first (`--yes` skips that, and is needed without a terminal), and ends by
+printing the command that removes the program itself -- `uv tool uninstall agents-fleet`,
+or `pipx uninstall agents-fleet` -- for you to run: a program cannot reliably remove
+itself while it runs.
+
+The center of a fleet with other machines in it refuses: its key is on every one of
+them and only it can take it off. Hand the role on (`fleet center NAME`) or end the
+fleet (`fleet center --dissolve`, which removes every key first; see
+[The center](center.md#leaving-and-ending)), then run `fleet uninstall`.

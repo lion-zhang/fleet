@@ -50,6 +50,10 @@ Anywhere. A name may be omitted where the obvious subject is the machine you are
 - `{cmd} center --leave` -- take this machine out of the fleet (a member; the center
   refuses -- it hands the role on or dissolves). Needs nobody's permission: you own the
   machine you are on
+- `{cmd} uninstall` -- only when the user asks to remove fleet from this machine: leaves
+  its fleet, removes fleet from the agents here (this skill included) and the service;
+  `--purge` deletes fleet's files too. It refuses on the center of a fleet with other
+  machines in it. It prints the last step -- removing the program -- for the user to run
 - `{cmd} top` -- live view; needs a terminal, so not for an agent
 - `{cmd} update [NAME]` / `--all` -- deploy the newest fleet from git. It also
   rewrites this description on each machine, so what you read here stays current;
@@ -141,8 +145,8 @@ where to run them: report that to the user, nothing is queued.
 - **Ask rather than guess.** These commands need a machine name, sometimes a user,
   sometimes a whole ssh command. If the request does not say, ask -- do not infer a
   machine from a partial name or from whatever was being discussed. `{cmd} rm`,
-  `{cmd} access --deny`, `{cmd} center --dissolve` and `{cmd} update --all` are not
-  undone by running them again.
+  `{cmd} access --deny`, `{cmd} center --dissolve`, `{cmd} uninstall` and
+  `{cmd} update --all` are not undone by running them again.
 - A row in `{cmd} access` has `state` present, pending or revoking. `pending`: a grant
   that has not reached its machine yet, not one that failed. `revoking`: the key is
   still on the machine. A listening center retries both by itself; say so rather than

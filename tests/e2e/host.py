@@ -303,6 +303,12 @@ def main() -> int:
 
     # Last, because it replaces the installed fleet and stops anything running from it.
     local_update_check()
+    # And then take it off again: the fleet was dissolved above, so this is the plain
+    # case -- agents unregistered, service removed, files deleted, the last step named.
+    ok, out = expect("uninstall --purge", ["uninstall", "--yes", "--purge"],
+                     r"uninstall agents-fleet|the way it was installed")
+    check("uninstall: the agents no longer hear about fleet",
+          not (Path.home() / ".agents/skills/fleet/SKILL.md").exists(), out)
 
     report(a.report)
     return 1 if any(s == "FAIL" for s, _, _ in RESULTS) else 0

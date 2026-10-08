@@ -25,6 +25,7 @@ command accepts `--help`. For what to use when, start with the
 | [`fleet center`](#fleet-center) | Who decides, and handing that over. |
 | [`fleet setup`](#fleet-setup) | Teach your coding agents to use fleet. |
 | [`fleet service`](#fleet-service) | The background service that keeps the center listening on port 7373. |
+| [`fleet uninstall`](#fleet-uninstall) | Take fleet off this machine: out of its fleet, out of your agents, service removed. |
 | [`fleet paths`](#fleet-paths) | Show where fleet keeps its state. |
 
 ## fleet ls
@@ -437,6 +438,30 @@ fleet service status
 | Argument | |
 |---|---|
 | `ACTION` | status \| install \| remove \| start \| stop |
+
+## fleet uninstall
+
+Take fleet off this machine: out of its fleet, out of your agents, service removed.
+
+In order: a member leaves its fleet (the fleet's keys come off this machine), the skills and MCP entries fleet gave your agents are removed, and so is the background service. With --purge, fleet's own files go too. The program itself is removed last, by you: the command to run is printed at the end.
+
+The center of a fleet with other machines in it cannot uninstall: hand the role on (`fleet center NAME`) or end the fleet (`fleet center --dissolve`) first.
+
+```
+fleet uninstall [OPTIONS]
+```
+
+Example:
+
+```bash
+fleet uninstall --purge
+```
+
+| Option | |
+|---|---|
+| `--purge` | also delete fleet's files here: its key, inventory, cache and logs |
+| `--yes`, `-y` | do not ask; needed without a terminal |
+| `--json` | print JSON instead of a table, for scripts and agents |
 
 ## fleet paths
 
