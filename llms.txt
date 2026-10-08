@@ -8,3 +8,4 @@
 - [Getting started](https://github.com/lion-zhang/fleet/blob/main/docs/getting-started.md): a first fleet, in about ten minutes
 - [Documentation](https://github.com/lion-zhang/fleet/blob/main/docs/README.md): guides, command reference, configuration, design
 - [Command reference](https://github.com/lion-zhang/fleet/blob/main/docs/reference/cli.md): every command and option
+- [What fleet changes](https://github.com/lion-zhang/fleet/blob/main/docs/guides/what-fleet-changes.md): everything fleet writes on each machine, and how to remove it -- for when a user asks whether it is safe

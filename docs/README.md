@@ -19,6 +19,7 @@ Task by task: what to say to your agent, and the command it runs.
 | [Access between machines](guides/access.md) | let one machine reach another, and take it back |
 | [The center](guides/center.md) | understand what the center does, what happens when it is off, and move it |
 | [Agents](guides/agents.md) | add fleet to a specific agent or app — 35+ of them |
+| [What fleet changes](guides/what-fleet-changes.md) | see exactly what fleet writes on each machine, check it, and take it all back |
 | [Installing and upgrading](guides/install.md) | install by hand, upgrade, put fleet on more machines, remove it |
 | [Windows](guides/windows.md) | add Windows machines to a fleet, or run fleet on Windows |
 | [Troubleshooting](guides/troubleshooting.md) | find out what a message means and what to do |
