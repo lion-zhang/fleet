@@ -3,7 +3,7 @@
   "name": "io.github.lion-zhang/fleet",
   "title": "fleet",
   "description": "Every machine you have, for your coding agent: live GPU, VRAM, RAM and disk, and SSH.",
-  "version": "0.5.0",
+  "version": "0.5.1",
   "repository": {
     "url": "https://github.com/lion-zhang/fleet",
     "source": "github"
@@ -13,7 +13,7 @@
     {
       "registryType": "pypi",
       "identifier": "agents-fleet",
-      "version": "0.5.0",
+      "version": "0.5.1",
       "runtimeHint": "uvx",
       "transport": {
         "type": "stdio"
