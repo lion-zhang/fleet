@@ -13,7 +13,7 @@ No account, no cloud service, nothing installed on the machines you add: just th
 ![Linux | macOS | Windows](https://img.shields.io/badge/platform-linux%20%7C%20macos%20%7C%20windows-lightgrey.svg)
 ![MCP server](https://img.shields.io/badge/MCP-server-8A2BE2.svg)
 
-<img src="docs/assets/fleet-ls.svg" alt="fleet ls: free GPU, VRAM, CPU, RAM and disk across seven machines — an A100 rental with one busy and one idle card, an idle H100 rental flagged as costing money, a busy RTX 3090 box with a nearly full disk, a laptop, a NAS and a machine that is switched off" width="100%">
+<img src="docs/assets/fleet-demo.svg" alt="A 40-second demo. Asked to train on whatever has a free 24 GB card, the agent runs fleet ls --tag cuda --tag vram-24g, picks the idle RTX 4090 over two paid rentals and a busy box, starts train.py there detached, and confirms the card is now in use. Asked what is costing money, it flags an idle H100 rental at $2.49 an hour and leaves stopping it to you." width="100%">
 
 </div>
 
@@ -154,6 +154,8 @@ fleet ssh gpu-box -- nvidia-smi     # run something there
 fleet add "ssh ubuntu@10.0.0.7"     # add a machine; fleet invite NAME for a join line
 fleet access nas --allow laptop     # let one machine reach another
 ```
+
+<img src="docs/assets/fleet-ls.svg" alt="fleet ls: free GPU, VRAM, CPU, RAM and disk across seven machines — an A100 rental with one busy and one idle card, an idle H100 rental flagged as costing money, a busy RTX 3090 box with a nearly full disk, a laptop, a NAS and a machine that is switched off" width="100%">
 
 <img src="docs/assets/fleet-top.svg" alt="fleet top: a live view of GPU utilisation, free VRAM, CPU, RAM and disk across all machines" width="100%">
 

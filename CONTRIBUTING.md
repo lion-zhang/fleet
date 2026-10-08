@@ -76,6 +76,7 @@ These are written by scripts and checked by tests; edit the source, then regener
 | `skills/fleet/SKILL.md`, the plugin and extension manifests, `server.json`, `mcpb/` | `src/fleet/agents/usage.py`, `pyproject.toml` | `uv run python scripts/build_dist.py` |
 | `docs/reference/cli.md` | the commands' help text in `src/fleet/cli.py` | `uv run python scripts/build_dist.py` |
 | the screenshots in `docs/assets/` | the renderer | `uv run python scripts/readme_screenshots.py` |
+| the demo, `docs/assets/fleet-demo.svg` | the renderer and its script | `uv run python scripts/readme_demo.py` |
 
 `tests/test_dist.py` fails when a committed copy differs from what the script writes.
 

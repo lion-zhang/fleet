@@ -26,5 +26,6 @@ Consequences:
   agents run fleet with no terminal, people with one, and both must be tested.
 - Generated files, never hand-edited: `skills/fleet/SKILL.md`, the plugin/extension
   manifests and `docs/reference/cli.md` (`uv run python scripts/build_dist.py`), the README screenshots
-  (`uv run python scripts/readme_screenshots.py`).
+  (`uv run python scripts/readme_screenshots.py`) and the demo
+  (`uv run python scripts/readme_demo.py`).
 - The two install modes are **center** and **member**; use those words.
