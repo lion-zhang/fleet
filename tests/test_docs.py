@@ -10,7 +10,7 @@ from pathlib import Path
 import pytest
 
 REPO = Path(__file__).resolve().parent.parent
-DOCS = sorted([REPO / "README.md", REPO / "CONTRIBUTING.md", REPO / "INSTALL.md", *(REPO / "docs").rglob("*.md")])
+DOCS = sorted([REPO / "README.md", REPO / "CONTRIBUTING.md", REPO / "INSTALL.md", REPO / "SECURITY.md", *(REPO / "docs").rglob("*.md")])
 LINK = re.compile(r"\[[^\]]*\]\(([^)\s]+)\)|href=\"([^\"]+)\"")
 
 

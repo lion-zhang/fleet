@@ -6,6 +6,8 @@
 **Claude Code, Codex and Gemini see one machine: the one they run on.<br>
 fleet shows them all of yours — every GPU, how much is free, and how to get there.**
 
+No account, no cloud service, nothing installed on the machines you add: just the SSH you already use.
+
 [![tests](https://github.com/lion-zhang/fleet/actions/workflows/test.yml/badge.svg)](https://github.com/lion-zhang/fleet/actions/workflows/test.yml)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 ![Linux | macOS | Windows](https://img.shields.io/badge/platform-linux%20%7C%20macos%20%7C%20windows-lightgrey.svg)
@@ -26,17 +28,18 @@ across the room and a rented A100 bills you by the hour. It cannot use what it c
 
 ## Get started: ask your agent
 
-Install it on the machine that will be your fleet's **center** — the one that keeps the
-list of your machines and decides which may reach which — so pick one that can reach
-all your devices and is online most of the time, such as a desktop or home server (you
-can move the role later). There, paste this into Claude Code, Codex, Gemini CLI, or any
-agent that can run commands:
+Paste this into Claude Code, Codex, Gemini CLI, or any agent that can run commands, on
+the machine you work from:
 
 ```text
 Install fleet from https://github.com/lion-zhang/fleet
 ```
 
 <sub>Agents: the steps are in [INSTALL.md](INSTALL.md).</sub>
+
+That machine becomes your fleet's **center**: it keeps the list of your machines and
+decides which may reach which. A desktop or home server that is usually on suits it
+best, but a laptop works too, and you can move the role later.
 
 That is the whole setup. fleet is installed once on this machine, and every
 [supported agent](docs/guides/agents.md) you have here learns it — not only the one you asked.
@@ -114,13 +117,20 @@ Windsurf, Cline, Zed, Qwen Code, Goose, Kiro, Hermes — 35+ agents in all:
 ## Built to be safe
 
 - **Nothing to install on your machines.** fleet probes with one script over one SSH
-  connection — Linux, macOS or Windows. A NAS or a fresh rental works as it is.
+  connection — Linux, macOS or Windows. A NAS or a fresh rental works as it is. What
+  it does leave there, a marked block in `authorized_keys` and a key of the machine's
+  own, is listed in full in
+  [What fleet changes](docs/guides/what-fleet-changes.md), with how to remove it,
+  with fleet or by hand.
 - **Keys, not passwords.** A password, if needed at all, is typed once by you. Nothing
   that could be stolen is stored, and the agent never sees a credential.
 - **Access you control.** The center decides which machine may reach which, and a revoke
   is pushed at once. `fleet access gpu-box --allow laptop`, `--deny` to take it back.
 - **The agent asks, not guesses.** It is told to ask which machine you mean, and to leave
   irreversible commands to you.
+- **Nothing phones home.** Apart from installing and updating itself, fleet talks to your
+  machines and nothing else: no account, no telemetry, no update check. Found a flaw? [SECURITY.md](SECURITY.md) says how to
+  report it privately.
 
 ## Prefer the command line?
 
@@ -162,6 +172,14 @@ fleet is about the machines you already have. It complements tools that launch n
 | Nothing installed on target machines | ✓ | ✗ | ✗ | ✓ |
 | Manages SSH access between machines | ✗ | ✗ | for its own clusters | ✓ |
 | Launches new cloud VMs | ✗ | ✗ | ✓ | ✗ |
+
+**Why not just Tailscale, Ansible, or an `~/.ssh/config`?** Use them with fleet, not
+instead of it. Tailscale connects your machines, and fleet runs over it happily, but it
+does not tell your agent which machine has a free GPU. Ansible changes machines to match
+a playbook you write, and has no idea what is busy right now. An `~/.ssh/config` names
+your hosts, but has to be copied to every machine and edited by hand. fleet is the part
+in between: what you have, what is free on it, and who may reach it, in a form your
+agent can use without you.
 
 ## FAQ
 
@@ -237,10 +255,11 @@ address, as `fleet show` prints it.
 <details>
 <summary><b>What does fleet leave on the machines I add?</b></summary>
 
-Two things: a block in `~/.ssh/authorized_keys`, marked with your fleet's id, and the
-machine's own fleet key in fleet's folder (`~/.config/fleet` on Linux). No program, no
-service. Your own keys and
-the provider's are never touched, and `fleet rm` takes fleet's block off again.
+A block in `~/.ssh/authorized_keys`, marked with your fleet's id, and the machine's own
+fleet key in fleet's folder (`~/.config/fleet` on Linux). No program, no service. Your
+own keys and the provider's are never touched, and `fleet rm` takes fleet's blocks off
+again. [What fleet changes](docs/guides/what-fleet-changes.md) has the full list, how to
+check it, and how to remove it by hand.
 </details>
 
 <details>
