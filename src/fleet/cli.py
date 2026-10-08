@@ -2501,7 +2501,7 @@ def cmd_uninstall(purge: bool = typer.Option(False, "--purge",
         console.print(f"[green]✓[/green] left fleet {out.fleet_id or '(unknown)'}: removed "
                       f"{out.key_blocks_removed} key block(s) from this machine")
         console.print(f"  [dim]{out.center or 'the center'} still lists this machine: "
-                      f"[bold]fleet rm NAME[/bold] there[/dim]")
+                      f"[bold]fleet rm {out.name or 'NAME'}[/bold] there[/dim]")
     elif out.left:
         console.print(f"[green]✓[/green] forgot fleet {out.fleet_id}, which had no other "
                       "machines")

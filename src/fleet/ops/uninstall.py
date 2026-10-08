@@ -35,6 +35,7 @@ class Outcome:
     files_kept: list[str] = field(default_factory=list)
     remove_program: list[str] = field(default_factory=list)
     center: str = ""                   # the center that still lists this machine
+    name: str = ""                     # what that center calls it
 
 
 def refusal() -> str:
@@ -78,7 +79,12 @@ def uninstall(*, purge: bool) -> Outcome:
         lifecycle.retire_empty_center(acc)
         out.left = "empty center"
     elif where == "member":
+        from ..state import inventory as inv
+        from . import identity
+
         out.center = member.center_name() or ""
+        me = next((d for d in inv.live(inv.load()) if d.id == identity.local_device_id()), None)
+        out.name = me.name if me else ""
         out.fleet_id, out.key_blocks_removed = member.leave()
         out.left = "member"
 
@@ -89,7 +95,7 @@ def uninstall(*, purge: bool) -> Outcome:
     out.agents = [str(c.path) for c in changes if c.action == "removed"]
 
     with suppress(Exception):
-        if service.status(0) != service.ABSENT:     # said only when there was one
+        if service.status(0).startswith((service.INSTALLED, service.RUNNING)):  # one there
             out.service = service.remove()
 
     for path in _fleet_files():
