@@ -30,7 +30,20 @@ from .config import DEFAULT_PORT
 from .ops.join import MAX_JOIN_BODY, handle as join_handle
 from .ops.sync import record_relayed, telemetry_to_relay
 
-MAX_BODY = 8 * 1024 * 1024                 # an inventory, not a payload to be generous to
+# An inventory and the readings of every machine: about 4 KB a machine, so this is room
+# for a thousand. Read before anyone is known to be who they say, so not more.
+MAX_BODY = 4 * 1024 * 1024
+# Requests being handled at once. A sync takes milliseconds; anything past this is
+# answered "busy" at once rather than given a thread of its own.
+MAX_IN_FLIGHT = 16
+# The whole request, not each read: `timeout` alone let a client that sent a byte every
+# 29 seconds hold a thread for as long as it liked.
+REQUEST_DEADLINE_S = 60
+# Who signed the body, said before it is sent: a fingerprint this fleet has not pinned
+# is refused before a byte of the body is read or parsed. Optional, for members from
+# before it -- their bodies are still read with untrusted.load's limits.
+SIGNER_HEADER = "X-Fleet-Signer"
+_IN_FLIGHT = threading.BoundedSemaphore(MAX_IN_FLIGHT)
 
 
 class _Handler(BaseHTTPRequestHandler):
@@ -45,6 +58,15 @@ class _Handler(BaseHTTPRequestHandler):
         """Silent by default. A center serving a fleet all day should not narrate it."""
 
     def _reply(self, code: int, body: str, kind: str = "text/plain") -> None:
+        if code >= 400 and self.command == "POST":
+            # Refusals are worth a line: a member re-imaged with a new key is refused
+            # here for good, and looked from its side like a center that was off.
+            import time as _t
+            from .ui import err
+
+            err.print(f"[dim]{_t.strftime('%Y-%m-%d %H:%M:%S')} {self.client_address[0]} "
+                      f"{self.path} -> {code} {body.strip()[:80]} "
+                      f"(signer {self.headers.get(SIGNER_HEADER, '?')})[/dim]")
         raw = body.encode()
         self.send_response(code)
         self.send_header("Content-Type", kind)
@@ -77,7 +99,34 @@ class _Handler(BaseHTTPRequestHandler):
         if length <= 0 or length > limit:
             self._reply(413, "body too large\n")
             return
-        raw = self.rfile.read(length).decode(errors="replace")
+        if path == "/sync" and (claimed := (self.headers.get(SIGNER_HEADER) or "").strip()):
+            if not _pinned_fingerprint(claimed):
+                self._reply(403, "not a machine this fleet knows\n")
+                return
+        if not _IN_FLIGHT.acquire(blocking=False):
+            self._reply(503, "busy, try again shortly\n")
+            return
+        try:
+            self._handle(path, length)
+        finally:
+            _IN_FLIGHT.release()
+
+    def _handle(self, path: str, length: int) -> None:
+        import time
+
+        deadline = time.monotonic() + REQUEST_DEADLINE_S
+        chunks, left = [], length
+        while left > 0:
+            if time.monotonic() > deadline:
+                self._reply(408, "request took too long\n")
+                return
+            chunk = self.rfile.read(min(left, 65536))
+            if not chunk:
+                self._reply(400, "body shorter than its length\n")
+                return
+            chunks.append(chunk)
+            left -= len(chunk)
+        raw = b"".join(chunks).decode(errors="replace")
 
         if path == "/join":
             # The one door a stranger may knock on, and only with an invite. Everything
@@ -88,6 +137,16 @@ class _Handler(BaseHTTPRequestHandler):
         else:
             code, body = self.server.exchange(raw)      # type: ignore[attr-defined]
         self._reply(code, body, "text/yaml" if code == 200 else "text/plain")
+
+
+def _pinned_fingerprint(fp: str) -> bool:
+    """Whether a fingerprint is one this fleet pinned. Reads only the access list."""
+    from .state import access as acl
+
+    try:
+        return fp in acl.load().keys
+    except acl.AccessError:
+        return False
 
 
 def exchange(raw: str) -> tuple[int, str]:
@@ -137,7 +196,8 @@ def exchange(raw: str) -> tuple[int, str]:
     merged, _ = inv.update(
         lambda current: inv.merge(current, inv.from_member(current, incoming, own)))
     if note["telemetry"]:
-        record_relayed(note["telemetry"])
+        record_relayed(note["telemetry"], sender_id=own,
+                       by=(acc.keys.get(acl.fingerprint(signer)) or {}).get("name", "") or "member")
     if note.get("claims", {}).get("center_key") == "present":
         _note_center_key_present(acc, acl.fingerprint(signer))
     return 200, acl.seal(inv.dumps(merged), telemetry=telemetry_to_relay(),

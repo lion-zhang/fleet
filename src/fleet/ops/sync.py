@@ -21,7 +21,7 @@ import yaml
 
 from ..state import access as acl
 from ..state import inventory as inv
-from ..state import store
+from ..state import clock, store
 from ..config import DEFAULT_PORT, load_config
 from ..models import Status
 from ..ssh.cmd import build_argv, run as sshrun
@@ -113,8 +113,14 @@ def post(url: str, payload: str, timeout: float = 8.0, *, errors: bool = False):
     import urllib.error
     import urllib.request
 
-    req = urllib.request.Request(url, data=payload.encode(),
-                                 headers={"Content-Type": "text/yaml"}, method="POST")
+    headers = {"Content-Type": "text/yaml"}
+    # Say who signed it up front, so the center can refuse a stranger without reading
+    # the body (serve.SIGNER_HEADER).
+    try:
+        headers["X-Fleet-Signer"] = acl.fingerprint(acl.claimed_signer(payload))
+    except Exception:
+        pass
+    req = urllib.request.Request(url, data=payload.encode(), headers=headers, method="POST")
     try:
         with urllib.request.urlopen(req, timeout=timeout) as resp:
             return resp.read().decode(errors="replace")
@@ -136,6 +142,7 @@ def telemetry_to_relay() -> list[dict]:
     between machines with nothing to say how far it had travelled or how old it really
     was.
     """
+    live = {d.id for d in inv.live(inv.load())}
     conn = store.connect()
     try:
         rows = conn.execute(
@@ -143,28 +150,46 @@ def telemetry_to_relay() -> list[dict]:
             "FROM device_state WHERE source='self'").fetchall()
         out = []
         for r in rows:
+            if live and r["device_id"] not in live:
+                continue                       # no longer in the fleet: nobody's business
             _, snap = store.latest(conn, r["device_id"])
             out.append({"device_id": r["device_id"], "status": r["status"],
-                        "probed_at": r["last_probe_at"], "snapshot": snap,
+                        # in the center's clock: a member converts its own
+                        "probed_at": (r["last_probe_at"] or 0) + clock.offset()
+                        if r["last_probe_at"] else r["last_probe_at"],
+                        "snapshot": snap,
                         "error_class": r["error_class"] or "",
                         "error_detail": r["error_detail"] or ""})
         return out
     finally:
         conn.close()
 
-def record_relayed(rows: list) -> None:
-    """Store rows the center measured, marked as second-hand.
+def record_relayed(rows: list, *, sender_id: str | None = None,
+                   by: str = "center") -> None:
+    """Store readings another machine took, marked as second-hand.
 
     Never overwrites a probe we ran: `store.latest` prefers first-hand, so our own
-    reading of a machine we can reach always wins over the center's view of it.
+    reading of a machine we can reach always wins over someone else's view of it.
+
+    `sender_id` is set when the center takes readings from a member. Then a member is
+    believed about itself, and about machines the center has never measured itself --
+    the ones it cannot reach, which is why it would want a member's reading at all. About
+    a machine the center measures, a member's word could only make it look freer or
+    busier than it is, which steers where work goes; that is left out.
     """
     from ..models import ProbeResult, Snapshot
 
-    by = ""
     conn = store.connect()
     try:
+        measured: set[str] = set()
+        if sender_id is not None:
+            measured = {r["device_id"] for r in conn.execute(
+                "SELECT device_id FROM device_state WHERE source='self'").fetchall()}
         for row in rows:
             if not isinstance(row, dict) or not row.get("device_id"):
+                continue
+            if (sender_id is not None and row["device_id"] != sender_id
+                    and row["device_id"] in measured):
                 continue
             snap = None
             if isinstance(row.get("snapshot"), dict):
@@ -179,9 +204,17 @@ def record_relayed(rows: list) -> None:
                                          error_class=str(row.get("error_class") or ""),
                                          error_detail=str(row.get("error_detail") or "")[:200]),
                              source="broadcast", probed_by=by or "center",
-                             at=int(at) if at else None)
+                             # the sender's clock is the center's; ours may not be
+                             at=clock.to_local(int(at)) if at else None,
+                             only_if_newer=True)
     finally:
         conn.close()
+
+def _heard_within(seconds: int) -> bool:
+    """Whether the center answered in the last `seconds`. Never, if the clock went back."""
+    elapsed = clock.since(acl.center_last_seen())
+    return elapsed is not None and elapsed < seconds
+
 
 def ensure_fresh(*, force: bool = False) -> None:
     """Refresh this machine's copy of the fleet from the center, if it has gone stale.
@@ -201,7 +234,7 @@ def ensure_fresh(*, force: bool = False) -> None:
     if not url or not pinned:
         return                             # never been told where to ask, or who to trust
     cfg = load_config()
-    if not force and int(time.time()) - acl.center_last_seen() < int(cfg.sync_ttl_s):
+    if not force and _heard_within(int(cfg.sync_ttl_s)):
         return
     # A center that did not answer last time is left alone for a while, doubling per
     # miss. Reads keep working from local state either way; what this saves is the
@@ -217,7 +250,7 @@ def ensure_fresh(*, force: bool = False) -> None:
     with try_turn(STATE_DIR / "refresh") as ours:
         if not ours:
             return
-        if not force and int(time.time()) - acl.center_last_seen() < int(cfg.sync_ttl_s):
+        if not force and _heard_within(int(cfg.sync_ttl_s)):
             return                         # refreshed by another while we got here
         _refresh(url, pinned)
 
@@ -228,7 +261,14 @@ def _refresh(url: str, pinned: str) -> None:
         payload = acl.seal(inv.dumps(inv.load()), telemetry=telemetry_to_relay())
     except Exception:
         return                             # no key of our own yet; nothing to say
-    body = post(url, payload)
+    body = post(url, payload, errors=True)
+    if isinstance(body, tuple):
+        status, text = body
+        if status is not None and 400 <= status < 500:
+            acl.note_center_refused(status, text)
+        else:
+            acl.note_center_unanswered()
+        return
     if body is None:
         acl.note_center_unanswered()
         return
@@ -242,7 +282,9 @@ def _refresh(url: str, pinned: str) -> None:
         return
     if signer != pinned:
         acl.pin_center_pubkey(signer)      # a signed handover led here from our pin
-    inv.update(lambda current: inv.merge(current, incoming, authoritative=True))
+    clock.note_center_time(note.get("sent_at", 0))
+    inv.update(lambda current: inv.merge_from_center(current, incoming,
+                                                     sent_at=note.get("sent_at", 0)))
     if note["telemetry"]:
         record_relayed(note["telemetry"])
     acl.note_center_seen()
@@ -292,8 +334,9 @@ def join(url: str) -> str:
     except Exception as exc:
         raise FleetError(f"unreadable inventory from {url}: {exc}")
 
-    _, changes = inv.update(lambda current: inv.merge(current, incoming,
-                                                     authoritative=True))
+    clock.note_center_time(note.get("sent_at", 0))
+    _, changes = inv.update(lambda current: inv.merge_from_center(
+        current, incoming, sent_at=note.get("sent_at", 0)))
     if note["telemetry"]:
         record_relayed(note["telemetry"])
     acl.note_center_seen()

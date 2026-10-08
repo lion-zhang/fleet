@@ -18,7 +18,7 @@ from dataclasses import replace
 from ..state import access as acl
 from ..state import inventory as inv
 from .. import reconcile as rec
-from ..state import store
+from ..state import clock, store
 from ..config import load_config
 from ..probe.runner import run_probe
 from ..ssh.cmd import remote_platform
@@ -190,14 +190,27 @@ def apply_now(acc, src: str, dst: str, user: str, *, install: bool) -> None:
         conn.close()
     ok, out, install = rec.converge_edge(acc, (src, dst, user), ep, install=install,
                                          platform=remote_platform(snap))
+    wanted = "present" if install else "absent"
+    if wanted != st.desired:
+        # A new request: its own age, and its own backoff from the start.
+        st.pending_since, st.attempts = int(time.time()), 0
+    st.desired = wanted
+    st.dst_device = st.dst_device or dev.id
+    # When we last looked, success or not: what `save_ledger` decides by when two
+    # writers changed the same edge.
+    st.last_attempt_at = int(time.time())
     if ok:
-        st.observed = st.desired = "present" if install else "absent"
+        st.observed = st.desired
         st.last_error = ""
+        st.attempts = 0
         console.print(f"  [green]✓[/green] applied on {dev.name}")
     else:
+        st.attempts += 1
+        st.pending_since = st.pending_since or st.last_attempt_at
         st.last_error = out
         console.print(f"  [yellow]·[/yellow] {dev.name} not reached [dim]({out[:60]})[/dim]")
-        console.print("  [dim]it stays pending; `fleet sync` retries[/dim]")
+        console.print("  [dim]it stays pending; the center tries again by itself while it "
+                      "is listening, and `fleet sync` there tries now[/dim]")
     ledger[key] = st
     rec.save_ledger(ledger)
 
@@ -232,9 +245,10 @@ def enrol_unpinned(acc, devices) -> bool:
 def run(devices) -> None:
     """The center's pass over the fleet: make authorized_keys match the access list.
 
-    Only the center reaches here, and only when `fleet sync` is run deliberately -- this
-    installs and removes credentials on every machine, which is not something to do from
-    a background timer nobody is watching.
+    Only the center reaches here, and only when `fleet sync` is run deliberately: it also
+    enrols machines nobody has decided about yet and hands the inventory round, which is
+    not something to do from a background timer nobody is watching. The listener's timer
+    only retries what a person already decided -- see `retry_pending`.
     """
 
     try:
@@ -255,7 +269,6 @@ def run(devices) -> None:
         acc = acl.load()                   # each enrolment saved a new generation
         ledger = rec.plan(acc, rec.load_ledger())
 
-    by_id = {d.id: d for d in inv.live(devices)}
     pending = [(k, st) for k, st in ledger.items() if not st.converged]
     if not pending:
         # Still hand the inventory round. Keys converging is the common case, and it is
@@ -265,8 +278,21 @@ def run(devices) -> None:
         broadcast(devices)
         return
 
-    conn = store.connect()
+    done, failed = converge_pending(acc, ledger, pending, devices)
+    console.print(f"\n[dim]{done} applied, {failed} still pending[/dim]"
+                  + ("  [dim]-- `fleet access` shows what is outstanding[/dim]"
+                     if failed else ""))
+    broadcast(devices)
+
+
+def converge_pending(acc, ledger, pending, devices) -> tuple[int, int]:
+    """Apply these not-yet-converged edges, machine by machine. Returns (done, failed).
+
+    The ledger is saved, with every attempt recorded, whatever happens.
+    """
+    by_id = {d.id: d for d in inv.live(devices)}
     done = failed = 0
+    conn = store.connect()
     try:
         # Resolve every edge first, in this thread: what device it is about, which route
         # to dial, and what the last probe says the far side runs. All of that reads the
@@ -340,6 +366,7 @@ def run(devices) -> None:
                     # What was applied last, which is what the list wanted by then.
                     st.desired = st.observed = "present" if install else "absent"
                     st.last_error = ""
+                    st.attempts = 0            # the next failure backs off from scratch
                     done += 1
                     verb = "installed on" if install else "removed from"
                     console.print(f"[green]✓[/green] {acc.name_of(src)}'s key {verb} {dev.name}")
@@ -352,11 +379,68 @@ def run(devices) -> None:
     finally:
         conn.close()
         rec.save_ledger(ledger)
+    return done, failed
 
-    console.print(f"\n[dim]{done} applied, {failed} still pending[/dim]"
-                  + ("  [dim]-- `fleet access` shows what is outstanding[/dim]"
-                     if failed else ""))
-    broadcast(devices)
+
+def retry_due(st, *, interval_s: float, cap_s: float, now: float) -> bool:
+    """Whether a pending edge has waited long enough since its last attempt.
+
+    The wait doubles per failed attempt, from `interval_s` up to `cap_s`, so a machine
+    that is off for a week costs a few connection attempts an hour, not one a minute.
+    """
+    if not st.last_attempt_at:
+        return True
+    elapsed = clock.since(st.last_attempt_at, now)
+    return elapsed is None or elapsed >= clock.backoff(interval_s, st.attempts, cap_s)
+
+
+def retry_pending(*, interval_s: float) -> tuple[int, int]:
+    """The listener's retry: apply grants and revokes that could not be applied yet.
+
+    Only what a person already decided -- edges the access list wants and the ledger has
+    not seen land. Nothing new is decided here: no machine is enrolled and the inventory
+    is not handed round, which stay with a deliberate `fleet sync`. Without this a revoke
+    made while its machine was off stayed undone until somebody remembered to sync, and
+    the key sat there meanwhile. Returns (done, failed); (0, 0) when there was nothing
+    due or this machine should not act as center now.
+    """
+    try:
+        acc = acl.load()
+    except acl.AccessError:
+        return 0, 0                         # no list here: never, or no longer, the center
+    if not acl.is_center(acc) or acl.HANDING_PATH.exists():
+        return 0, 0                         # mid-handover: changes here would not carry over
+    ledger = rec.plan(acc, rec.load_ledger())
+    if rec.refuses_to_run(acc, ledger):
+        return 0, 0
+    cfg = load_config()
+    now = time.time()
+    pending = [(k, st) for k, st in ledger.items()
+               if not st.converged and retry_due(st, interval_s=interval_s,
+                                                 cap_s=float(cfg.offline_backoff_max_s),
+                                                 now=now)]
+    if not pending:
+        return 0, 0
+    return converge_pending(acc, ledger, pending, inv.load())
+
+
+def retry_forever(interval_s: float, *, stop=None) -> None:
+    """Run `retry_pending` every `interval_s` seconds until `stop` (an Event) is set.
+
+    Never raises: a failed round is logged and the next one tries again.
+    """
+    import threading
+
+    stop = stop or threading.Event()
+    while not stop.wait(interval_s):
+        try:
+            done, failed = retry_pending(interval_s=interval_s)
+            if done or failed:
+                console.print(f"[dim]retried pending access: {done} applied, "
+                              f"{failed} still pending[/dim]")
+        except Exception as exc:              # noqa: BLE001 -- a background loop
+            console.print(f"[dim]retrying pending access failed: "
+                          f"{type(exc).__name__}: {exc}[/dim]")
 
 def broadcast(devices) -> None:
     """Hand every machine that runs fleet the current inventory, and with it the center.
@@ -379,7 +463,20 @@ def broadcast(devices) -> None:
     mine = inv.dumps(inv.load())
     me = identity.local_device_id()
     routes, senders = [], []
+    # Machines that keep not answering are left out until they answer a probe again:
+    # each costs a full ssh attempt here, and on a large fleet with dead hosts the hand-
+    # round took minutes for nothing. And readings of machines no longer in the fleet
+    # are dropped, so the cache and every relayed message stop carrying them.
+    conn = store.connect()
+    try:
+        store.forget_except(conn, {d.id for d in inv.live(devices)})
+        quiet = {r["device_id"] for r in conn.execute(
+            "SELECT device_id FROM device_state WHERE source='self' AND fail_streak >= 3")}
+    finally:
+        conn.close()
     for dev in inv.live(devices):
+        if dev.id in quiet:
+            continue
         # Never the machine this is running on. "No endpoints" used to stand in for "the
         # center", which held only while the center was a laptop nobody could reach: once
         # it had an address of its own, the center opened an SSH connection to itself to

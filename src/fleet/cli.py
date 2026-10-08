@@ -4,6 +4,8 @@ universal interface: cron jobs, Makefiles, and non-MCP agents can all use it."""
 from __future__ import annotations
 
 import contextlib
+import dataclasses
+import copy
 import getpass
 import json as jsonlib
 import os
@@ -32,13 +34,13 @@ from .agents import (MCP_CLIENTS, TARGETS, config_command, detect_mcp_clients,
                      install_mcp, installed_mcp_clients, installed_targets, package_version,
                      stale_mcp_clients, stale_targets, uninstall, uninstall_mcp)
 from .config import DEFAULT_PORT, INVENTORY_PATH, load_config
-from .edit import apply_edits
+from .edit import apply_edits, check_name
 from .install import (NOTHING_TO_UPDATE, build_install_argv, install_script,
                       install_source,
                       local_install_argv, payload_for)
 from .mcpserver import McpUnavailable, serve as serve_mcp
 from .models import Device, Kind, Status
-from .onboard import onboard, onboard_self
+from .onboard import derive_id, onboard, onboard_self
 from .ops import FleetError, identity
 from .ops import sync as _sync
 from .ops.enrol import (finish_add as _enrol_after_add,
@@ -67,14 +69,14 @@ from .render.top import (Schedule, device_lines, disk_cell, gpu_cells_compact,
                          name_cell, render_device, render_fleet, render_ls)
 from .render.view import Detail, auth_of, device_view, fleet_view, matches_tag
 from .serve import serve as serve_center
-from .ssh.cmd import (build_argv, local_platform, local_shell_argv, remote_command,
+from .ssh.cmd import (WINDOWS, build_argv, local_platform, local_shell_argv, remote_command,
                       run as sshrun,
                       remote_platform, resolve_command)
 from .ssh.keys import (ensure_keypair, install_key, install_key_over_existing_access,
                        pty_available)
 from .state import access as acl
 from .state import inventory as inv
-from .state import store
+from .state import clock, store
 from .ui import (DOT as _DOT, chatter_to_stderr as _chatter_to_stderr, console,
                  emit as _emit, err)
 
@@ -137,6 +139,15 @@ def cmd_ls(names: list[str] = typer.Argument(None, help="only these devices"),
     """
     _first_run("ls")
     ensure_fresh()
+    # A name that matches nothing is said, and fails: `fleet ls TYPO --json` answered an
+    # empty list and exit 0, which an agent reads as "nothing wrong, nothing there".
+    unknown = [n for n in (names or []) if inv.find(inv.load(), n) is None]
+    if unknown:
+        if not _emit({"ok": False, "error": f"no machine named {', '.join(unknown)}",
+                      "unknown": unknown}, json_out):
+            err.print(f"[red]No machine named {', '.join(repr(n) for n in unknown)}[/red] "
+                      "[dim]-- `fleet ls` lists them all[/dim]")
+        raise typer.Exit(1)
     rows = _rows(list(names) if names else None, refresh=refresh)
     if online:
         rows = [r for r in rows if r["status"] == "ok"]
@@ -317,6 +328,7 @@ def cmd_add(ssh_command: str = typer.Argument(None, help='e.g. "ssh -p 58418 roo
         err.print("  [dim]start one with [bold]fleet center --init[/bold] — "
                   "a machine is added to a fleet, so the fleet comes first[/dim]")
         raise typer.Exit(2)
+    _usable_names(name=name, alias=alias)
     devices = inv.load()
     taken = inv.handles(devices)
     if alias and alias in taken:
@@ -339,11 +351,16 @@ def cmd_add(ssh_command: str = typer.Argument(None, help='e.g. "ssh -p 58418 roo
                   "managed at all: the center installs and removes keys over ssh, so "
                   "one it cannot dial cannot be granted or revoked anything.[/dim]")
         raise typer.Exit(1)
+    split = False
     if not this_machine:
-        _split_a_clone(devices, dev, res)
+        # Its note goes to stderr under --json: stdout is the one document an agent reads.
+        with _chatter_to_stderr(json_out):
+            split = _split_a_clone(devices, dev, res, write=not dry_run)
     if dry_run:
-        _emit({"device": dev.name, "id": dev.id, "kind": dev.kind.value,
-               "status": res.status.value}, True)
+        # `name`, as the real add answers: agents read the same key from both.
+        _emit({"name": dev.name, "id": dev.id, "kind": dev.kind.value,
+               "status": res.status.value, "dry_run": True,
+               "clone_of_a_known_machine": split}, True)
         return
     tags = _tags(tag) or []
 
@@ -370,8 +387,8 @@ def cmd_add(ssh_command: str = typer.Argument(None, help='e.g. "ssh -p 58418 roo
         dev.name = survivor.name
     for t in tags:
         if view_mod.is_fact_name(t):
-            console.print(f"  [dim]note: {t!r} is also derived from telemetry — "
-                          "kept, since a probe cannot see everything[/dim]")
+            err.print(f"  [dim]note: {t!r} is also derived from telemetry — "
+                      "kept, since a probe cannot see everything[/dim]")
     if res.snapshot is not None or not res.ok:
         conn = store.connect()
         store.record(conn, dev.id, res)
@@ -417,38 +434,153 @@ def cmd_add(ssh_command: str = typer.Argument(None, help='e.g. "ssh -p 58418 roo
         raise typer.Exit(1)
 
 
-def _split_a_clone(devices, dev, res) -> None:
+def _log_to_file_when_unattended() -> None:
+    """Where the listener says what it did, when no terminal is watching it.
+
+    Under the Windows service it runs as pythonw, which has no stdout at all: every line
+    -- and every traceback -- went nowhere, so nobody could tell what the retry thread had
+    done or why a revoke was still pending. Linux had the journal, macOS a log launchd
+    kept. Now all three write `center-service.log` in fleet's state folder, kept to about
+    a megabyte (the previous one is `.1`).
+    """
+    try:
+        if sys.stdout is not None and sys.stdout.isatty():
+            return                           # a person is watching
+    except (AttributeError, ValueError):
+        pass
+    from .config import STATE_DIR
+
+    path = STATE_DIR / "center-service.log"
+    with contextlib.suppress(OSError):
+        if path.exists() and path.stat().st_size > 1_000_000:
+            os.replace(path, path.with_suffix(".log.1"))
+    try:
+        fh = open(path, "a", encoding="utf-8", buffering=1)
+    except OSError:
+        return
+    console.file = fh
+    err.file = fh
+    if sys.stdout is None:
+        sys.stdout = fh
+    if sys.stderr is None:
+        sys.stderr = fh
+
+
+def _center_url_from(text: str) -> str:
+    """The listener's /sync address, from what a person types: `http://host:7373/sync`,
+    `host:7373` or a bare `host`. Refuses what is none of these, before dialling it --
+    `--from garbage` used to end in a traceback."""
+    from urllib.parse import urlsplit
+
+    raw = text.strip()
+    if "://" not in raw:
+        raw = f"http://{raw}"
+    parts = urlsplit(raw)
+    if parts.scheme not in ("http", "https") or not parts.hostname:
+        err.print(f"[red]Not an address to dial: {text!r}[/red]  [dim]e.g. "
+                  f"http://10.0.0.5:{DEFAULT_PORT}/sync, or just 10.0.0.5[/dim]")
+        raise typer.Exit(2)
+    port = parts.port or DEFAULT_PORT
+    path = parts.path if parts.path not in ("", "/") else "/sync"
+    return f"{parts.scheme}://{parts.hostname}:{port}{path}"
+
+
+def _usable_names(**given: str | None) -> None:
+    """Refuse a name or alias that cannot be one (edit.check_name), before any work."""
+    for what, value in given.items():
+        if value:
+            try:
+                check_name(value, what)
+            except ValueError as exc:
+                err.print(f"[red]{exc}[/red]")
+                raise typer.Exit(2)
+
+
+def _split_a_clone(devices, dev, res, *, write: bool = True) -> bool:
     """Keep two machines apart when they share a machine-id but are not the same host.
 
     Dedupe on machine-id is what makes one box reached two ways into one record. But VMs
     and containers cloned from one image share the id too, and on a real fleet the
     second clone was merged into the first as "one device, not two": unreachable by its
-    own name, with two pinned keys claiming one device. A machine's own hostname,
-    measured from inside it, is what tells them apart -- one box answering on two
-    addresses still reports one hostname.
+    own name, with two pinned keys claiming one device.
+
+    Asked of the machines themselves, not of what was recorded: the known machine is
+    measured again now, at its own address. If it answers as the same machine-id but
+    another host -- another hostname, or booted at another time -- there are two of
+    them. One box reached two ways is one host at one boot. Only when the known machine
+    cannot be reached is its last reading used, and then only the hostname can tell.
+
+    The clone gets an id of its own, and that id is written on it (see
+    `identity.assigned_id`), so its own fleet and every later probe agree with the
+    center about which machine it is -- rather than splitting it again on every add,
+    or the clone believing it is the machine it was cloned from.
     """
+    import secrets
+
     from .onboard import slugify
 
     existing = inv.find_exact(devices, dev.id)
-    host = res.snapshot.hostname if res.snapshot else ""
-    if existing is None or not host:
-        return
-    conn = store.connect()
-    try:
-        _, snap = store.latest(conn, existing.id)
-    finally:
-        conn.close()
-    before = (snap or {}).get("hostname") or ""
-    if not before or before == host:
-        return
-    dev.id = f"{dev.id}:{slugify(host)}"
+    new = res.snapshot
+    if existing is None or existing.id != dev.id or new is None:
+        return False
+    new_eps = inv.endpoints_of(dev)
+    old_eps = sorted(inv.endpoints_of(existing), key=lambda e: e.preference)
+    if new_eps and any((e.target, e.port) == (new_eps[0].target, new_eps[0].port)
+                       for e in old_eps):
+        return False                        # the same address: the same machine
+    host = new.hostname or ""
+    other, why = None, ""
+    if old_eps:
+        now = run_probe(old_eps[0], mode=existing.probe_mode, timeout=15)
+        if now.snapshot is not None:
+            if derive_id(now.snapshot, old_eps[0]) != dev.id:
+                return False                # its old address is someone else now: moved
+            other = now.snapshot
+    if other is not None:
+        booted = lambda s: (s.ts - s.uptime_s) if s.uptime_s is not None else None
+        b_old, b_new = booted(other), booted(new)
+        if other.hostname and host and other.hostname != host:
+            why = f"calls itself {host!r}, not {other.hostname!r}"
+        elif b_old is not None and b_new is not None and abs(b_old - b_new) > 120:
+            why = "is running at the same time, booted at another moment"
+        else:
+            return False                    # one host, one boot: one machine, two routes
+    else:
+        conn = store.connect()
+        try:
+            _, snap = store.latest(conn, existing.id)
+        finally:
+            conn.close()
+        before = (snap or {}).get("hostname") or ""
+        if not before or not host or before == host:
+            return False
+        why = f"calls itself {host!r}, not {before!r}"
+
+    taken_ids = {d.id for d in devices}
+    suffix = slugify(host) if host and host != (other.hostname if other else "") else ""
+    new_id = f"{dev.id}:{suffix}" if suffix else ""
+    while not new_id or new_id in taken_ids:
+        new_id = f"{dev.id}:{secrets.token_hex(3)}"
+    dev.id = new_id
     if dev.name == existing.name:
-        dev.name = inv_unique(devices, slugify(host))
+        dev.name = inv_unique(devices, slugify(host) or existing.name)
     console.print(f"  [yellow]![/yellow] {dev.name} shares a machine-id with "
-                  f"{existing.name} but calls itself {host!r}, not {before!r} -- most "
-                  "likely cloned from the same image. Recorded as a separate machine.")
-    console.print("  [dim]give it its own id to make this go away: "
-                  "`systemd-machine-id-setup` (after emptying /etc/machine-id) on it[/dim]")
+                  f"{existing.name} but {why} -- most likely cloned from the same image. "
+                  "Recorded as a separate machine.")
+    if not write:
+        return True                         # --dry-run: nothing written anywhere
+    from .reconcile import _remote
+    from .ssh.keys import remote_device_id_command
+
+    plat = remote_platform({"uname_s": new.uname_s, "os": new.os})
+    ok, said = _remote(new_eps[0], remote_device_id_command(new_id, platform=plat),
+                       platform=plat, capture=True) if new_eps else (False, "")
+    if not (ok and "ok" in said):
+        console.print("  [dim]its id could not be written on it, so it may be taken for "
+                      f"{existing.name} again; giving it a machine-id of its own fixes "
+                      "that: `systemd-machine-id-setup` (after emptying /etc/machine-id) "
+                      "on it[/dim]")
+    return True
 
 
 def inv_unique(devices, wanted: str) -> str:
@@ -456,6 +588,9 @@ def inv_unique(devices, wanted: str) -> str:
     while name in taken:
         name, n = f"{wanted}-{n}", n + 1
     return name
+
+
+MAX_INVITE_TTL_S = 7 * 86400
 
 
 def _duration_s(text: str) -> int:
@@ -564,9 +699,13 @@ def cmd_invite(name: str = typer.Argument(None, help="what the machine will be c
         try:
             got = invites_mod.revoke(withdraw)
         except invites_mod.InviteError as exc:
-            err.print(f"[red]{exc}[/red]")
+            if not _emit({"ok": False, "error": str(exc)}, json_out):
+                err.print(f"[red]{exc}[/red]")
             raise typer.Exit(1)
         state = got.state()
+        if _emit({"ok": True, "id": got.id, "state": state,
+                  "withdrawn": state == "revoked"}, json_out):
+            return
         if state == "revoked":
             console.print(f"[green]✓[/green] invite {got.id} withdrawn")
         else:
@@ -574,9 +713,16 @@ def cmd_invite(name: str = typer.Argument(None, help="what the machine will be c
                           "withdraw[/dim]")
         return
 
+    _usable_names(name=name)
     seconds = _duration_s(ttl)
     if seconds <= 0:
         err.print(f"[red]Not a duration: {ttl!r}[/red] -- try 15m, 2h or 1d")
+        raise typer.Exit(2)
+    if seconds > MAX_INVITE_TTL_S:
+        # An invite admits a machine. One valid for years is a standing key to the
+        # fleet in whatever chat or script it was pasted into.
+        err.print(f"[red]An invite lasts at most {MAX_INVITE_TTL_S // 86400} days.[/red] "
+                  "[dim]Issue a new one when it is needed.[/dim]")
         raise typer.Exit(2)
     if name:
         if name in inv.handles(inv.load()):
@@ -585,7 +731,8 @@ def cmd_invite(name: str = typer.Argument(None, help="what the machine will be c
     invite, secret = invites_mod.create(name=name or "", ttl_s=seconds)
     # Where the listener said it answers, when it has run here; the computed default
     # only for a center that has never listened.
-    url = url_opt or acl.center_url() or center_advertise_url(acc)
+    url = (_center_url_from(url_opt) if url_opt else "") or acl.center_url() \
+        or center_advertise_url(acc)
     code = encode_code(url, acc.center, invite.id, secret)
     serving = _listening(url)
     if _emit({"id": invite.id, "name": invite.name, "expires_at": invite.expires_at,
@@ -640,6 +787,7 @@ def cmd_join(code: str = typer.Argument(..., help="the code `fleet invite` print
     """
     from .ops.join import join as _join
 
+    _usable_names(name=name)
     try:
         summary = _join(code, name=name or "",
                         ssh_command=ssh_command or "")
@@ -791,7 +939,7 @@ def _route_known(dev) -> None:
 
     _, changed = acl.update(restore)
     if changed:
-        console.print("  [dim]the center will manage it again from its next sweep[/dim]")
+        err.print("  [dim]the center will manage it again from its next sweep[/dim]")
 
 
 def _rename_in_access_list(dev, old_name: str) -> None:
@@ -1063,7 +1211,11 @@ def cmd_update(name: str = typer.Argument(None, help="defaults to this machine")
     # This machine first and without ssh. The center is never an ssh target, so
     # connecting to ourselves would fail on exactly the machine most likely to be
     # running the command.
-    if not name or (targets and any(d.id == me for d in targets)):
+    here = not name or (targets and any(d.id == me for d in targets))
+    # On Windows this machine goes last, in the background, once this process has
+    # exited: a running fleet holds the very files the update replaces.
+    here_later = here and local_platform() == WINDOWS
+    if here and not here_later:
         console.print(f"[dim]updating this machine from {url} ({ref})[/dim]")
         # local_platform, not `sh -c`: on a Windows center that shell is git's, and the
         # POSIX script half-runs under it. This is the machine running the command, so
@@ -1088,7 +1240,7 @@ def cmd_update(name: str = typer.Argument(None, help="defaults to this machine")
             err.print(f"[red]✗[/red] this machine\n"
                       f"{said.decode(errors='replace')[-400:]}")
             failed += 1
-        targets = [d for d in targets if d.id != me]
+    targets = [d for d in targets if d.id != me]
 
     for dev in targets:
         eps = sorted(inv.endpoints_of(dev), key=lambda e: e.preference)
@@ -1119,6 +1271,24 @@ def cmd_update(name: str = typer.Argument(None, help="defaults to this machine")
                       f"[dim]{output.strip()[-120:]}[/dim]")
             failed += 1
 
+    if here_later:
+        from .install import update_windows_in_background
+
+        log, started = update_windows_in_background(
+            install_script(url, ref=ref, platform=local_platform(), update_only=True,
+                           from_git=from_git))
+        if started:
+            console.print(f"[green]✓[/green] this machine: updating in the background, "
+                          "once this command has exited [dim](Windows cannot replace a "
+                          f"program while it runs). It takes a minute; the log is {log}, "
+                          "and [bold]fleet --version[/bold] shows the result.[/dim]")
+            ok += 1
+        else:
+            err.print("[red]✗[/red] this machine: the background update did not start "
+                      f"[dim]-- what PowerShell said is in "
+                      f"{log.with_name('update-run.log')}[/dim]")
+            failed += 1
+
     if ok + failed + skipped > 1 or failed:
         tail = f", {skipped} skipped" if skipped else ""
         console.print(f"\n[dim]{ok} updated, {failed} failed{tail}[/dim]")
@@ -1143,12 +1313,27 @@ def cmd_sync(serve: bool = typer.Option(False, "--serve",
     if from_url:
         # Before the center check: this is for a machine that cannot be reached *by* the
         # center, and it is the only way in for one that has never been swept.
-        with _as_exit():
-            summary = _sync.join(from_url)
-        console.print(f"[green]✓[/green] {summary}")
+        url = _center_url_from(from_url)
+        try:
+            summary = _sync.join(url)
+        except FleetError as exc:
+            # Said here: `join` raises without printing, and this is used exactly when
+            # something is already wrong -- it failed with nothing on either stream.
+            if not _emit({"ok": False, "error": str(exc)}, json_out):
+                err.print(f"[red]{exc}[/red]")
+            raise typer.Exit(exc.code)
+        if not _emit({"ok": True, "summary": summary, "center_url": url}, json_out):
+            console.print(f"[green]✓[/green] {summary}")
         return
 
     if serve:
+        with contextlib.suppress(acl.AccessError):
+            if acl.is_center(acl.load()):
+                # Only a member is handed the fleet this way. On the center, with no
+                # center pinned, first contact would have taken the caller's key and
+                # merged its inventory as the center's -- past the member filter.
+                err.print("[red]This machine is the center; it is not served by another.[/red]")
+                raise typer.Exit(2)
 
         raw = sys.stdin.read()
         # The inventory carries the endpoints that decide where `fleet ssh` dials, and
@@ -1158,18 +1343,21 @@ def cmd_sync(serve: bool = typer.Option(False, "--serve",
         pinned = acl.trusted_center_pubkey()
         relayed = []
         url = ""
+        sent_at = 0
         try:
             if pinned:
                 note, signer = acl.unseal_trusting(raw, pinned)
                 if signer != pinned:
                     acl.pin_center_pubkey(signer)     # walked a signed handover to it
                 body, relayed, url = note["inventory"], note["telemetry"], note["center_url"]
+                sent_at = note.get("sent_at", 0)
             else:
                 body = acl.unseal_first_contact(raw)
         except acl.AccessError as exc:
             err.print(f"[red]{exc}[/red]")
             raise typer.Exit(2)
         acl.note_center_seen()
+        clock.note_center_time(sent_at)
         # Learned here, over a payload already signed by the key this machine pinned at
         # enrolment. After this it can refresh itself and stop waiting to be swept.
         acl.note_center_url(url)
@@ -1191,7 +1379,7 @@ def cmd_sync(serve: bool = typer.Option(False, "--serve",
         # timestamp -- and later authoritative pulls, tied on that timestamp, never
         # took them away.
         merged, changes = inv.update(
-            lambda current: inv.merge(current, incoming, authoritative=True))
+            lambda current: inv.merge_from_center(current, incoming, sent_at=sent_at))
         sys.stdout.write(inv.dumps(merged))
         return
 
@@ -1240,34 +1428,15 @@ def cmd_sync(serve: bool = typer.Option(False, "--serve",
         with _as_exit():
             _sweep(devices)
         return
-    eps = inv.endpoints_of(center)
-    if not eps:
-        err.print(f"[red]{center.name} is the center but has no endpoint recorded[/red]")
-        raise typer.Exit(2)
-
-    code, output = _sync.run_sync(sorted(eps, key=lambda e: e.preference)[0], inv.dumps(devices))
-    if code != 0:
-        # sync is not on the critical path: every command still works from local state.
-        err.print(f"[red]sync failed[/red] (exit {code})\n{output.strip()[-400:]}")
-        raise typer.Exit(2)
-    try:
-        returned = inv.loads(output)
-    except Exception as exc:
-        err.print(f"[red]the center returned something unreadable:[/red] {exc}")
-        raise typer.Exit(2)
-
-    # NOT merged against `devices`: that list was loaded before the round trip, and
-    # saving it back would erase anything committed while we were waiting.
-    merged, changes = inv.update(
-        lambda current: inv.merge(current, returned, authoritative=True))
-    if _emit({"center": center.name, "devices": len(merged), "changes": changes}, json_out):
-        return
-    console.print(f"[green]✓[/green] synced with [bold]{center.name}[/bold] "
-                  f"({len(merged)} devices)")
-    for line in changes:
-        console.print(f"  {line}")
-    if not changes:
-        console.print("  [dim]already up to date.[/dim]")
+    # Not over ssh. That path merged the center's reply as authoritative though nothing
+    # signed it -- everything else that crosses between machines is signed -- and a
+    # member that knows its center has always learned where it listens from the
+    # center's own signed messages, so only a machine that never heard from it lands
+    # here. The way in for that one is the listener.
+    err.print(f"[red]This machine has not heard from its center, {center.name}, yet.[/red]")
+    err.print(f"  [dim]reach it at its listener: [bold]fleet sync --from "
+              f"{center.name}[/bold] (or its address), or join it with an invite[/dim]")
+    raise typer.Exit(2)
 
 
 @app.command("top")
@@ -1281,6 +1450,9 @@ def cmd_top(name: str = typer.Argument(None, help="one device, instead of the wh
 
     [dim]Example:[/dim]  fleet top machine_A -i 1
     """
+    if interval <= 0:
+        err.print("[red]--interval must be more than 0 seconds[/red]")
+        raise typer.Exit(2)
     _first_run("top")
     cfg = load_config()
     devices = inv.live(inv.load())
@@ -1411,7 +1583,10 @@ def cmd_rm(name: str = typer.Argument(..., help="the exact name; a prefix is nev
             # tombstone then rode the merge to the center and deleted it fleet-wide.
             centre = _fleet_membership() == ""
         if not centre:
-            err.print(f"[red]Only the center can remove {dev.name}.[/red]")
+            from .ops import member as _member
+
+            err.print(f"[red]Only the center can remove {dev.name}.[/red] Run this on "
+                      f"[bold]{_member.center_name() or 'the center'}[/bold].")
             err.print("  [dim]a machine can remove itself -- that is leaving -- but "
                       "removing another revokes its keys, which only the center "
                       "can do[/dim]")
@@ -1429,17 +1604,20 @@ def cmd_rm(name: str = typer.Argument(..., help="the exact name; a prefix is nev
     try:
         acc = acl.load()
         if acl.is_center(acc) and not itself:
-            # The network work first, on a copy; then the change, to the list as it is
-            # by then. Saving the copy instead erased any grant made meanwhile.
-            _, unreached = _remove_now(acc, dev)
-
+            # Out of the list first, then off the machines, working from the list as it
+            # was. The other way round, a retry running meanwhile -- the listener's --
+            # still saw the pins, still wanted the center's key on the machine being
+            # removed, and put it back after it had been taken off.
             def forget_keys(current):
+                before = copy.deepcopy(current)
                 for fp in [fp for fp, m in current.keys.items()
                            if m.get("device_id") == dev.id]:
                     current.allow = [e for e in current.allow if fp not in (e.src, e.dst)]
                     current.keys.pop(fp, None)
+                return before
 
-            acl.update(forget_keys)
+            _, before = acl.update(forget_keys)
+            _, unreached = _remove_now(before, dev)
     except acl.AccessError:
         pass
 
@@ -1513,7 +1691,12 @@ def cmd_ssh(ctx: typer.Context,
         raise typer.Exit(1)
     eps = sorted(inv.endpoints_of(dev), key=lambda e: e.preference)
     if not eps:
-        err.print(f"[red]{dev.name} has no endpoint recorded[/red]")
+        if dev.id == identity.local_device_id():
+            err.print(f"[red]{dev.name} is this machine[/red] -- run the command here, "
+                      "without fleet ssh")
+        else:
+            err.print(f"[red]{dev.name} has no endpoint recorded[/red] [dim]-- give it "
+                      f"one on the center: fleet edit {dev.name} --ssh \"ssh user@host\"[/dim]")
         raise typer.Exit(1)
     ep = eps[0]
     conn = store.connect()
@@ -1642,7 +1825,7 @@ def cmd_access(target: str = typer.Argument(None, help="one machine, instead of 
                       f"[bold]{center}[/bold]:")
             err.print(f"  fleet access {target or 'NAME'} "
                       f"{'--allow' if allow else '--deny'} {allow or deny}"
-                      + (f" --user {user}" if user != "root" else ""))
+                      + (f" --user {user}" if user and user != "root" else ""))
             raise typer.Exit(2)
         if _emit({"is_center": False, "center": center, "edges": None}, json_out):
             return
@@ -1717,8 +1900,11 @@ def cmd_access(target: str = typer.Argument(None, help="one machine, instead of 
         if target and dst != _access_fp(current, target):
             continue
         st = ledger.get(">".join(edge), rec.EdgeState())
+        # One of three words, the ones the docs and the skill use: present, pending,
+        # revoking. The ledger's own value stays beside it as `observed`.
         rows.append({"from": current.name_of(src), "to": current.name_of(dst),
-                     "user": who, "state": st.observed,
+                     "user": who, "state": "present" if st.converged else "pending",
+                     "observed": st.observed, "attempts": st.attempts,
                      "pending_s": (int(time.time()) - st.pending_since)
                                   if not st.converged and st.pending_since else 0,
                      "last_error": st.last_error})
@@ -1735,11 +1921,13 @@ def cmd_access(target: str = typer.Argument(None, help="one machine, instead of 
         if target and dst != _access_fp(current, target):
             continue
         rows.append({"from": current.name_of(src), "to": current.name_of(dst),
-                     "user": who, "state": "revoking",
+                     "user": who, "state": "revoking", "observed": st.observed,
+                     "attempts": st.attempts,
                      "pending_s": (int(time.time()) - st.pending_since)
                                   if st.pending_since else 0,
                      "last_error": st.last_error or "revoke not applied yet -- the key is still there"})
-    if _emit({"center": current.name_of(current.center), "edges": rows,
+    if _emit({"role": "center" if centre else "member", "is_center": centre,
+              "center": current.name_of(current.center), "edges": rows,
               **(change_done if allow or deny else {})}, json_out):
         return
     if not rows:
@@ -1760,7 +1948,7 @@ def cmd_access(target: str = typer.Argument(None, help="one machine, instead of 
     console.print(t)
     if not centre:
         console.print(f"\n[dim]center is {current.name_of(current.center)}; "
-                      "changes are filed as requests from here[/dim]")
+                      "changes are made there[/dim]")
 
 
 
@@ -1835,6 +2023,7 @@ def cmd_center(name: str = typer.Argument(None, help="hand the role to this mach
         if not acl.is_center(acc):
             err.print("[red]Only the center can serve the fleet.[/red]")
             raise typer.Exit(2)
+        _log_to_file_when_unattended()
         where = port or DEFAULT_PORT
         url = advertise or center_advertise_url(acc, where)
         # Remembered, so `fleet invite` -- another process, run later -- hands out the
@@ -1845,6 +2034,18 @@ def cmd_center(name: str = typer.Argument(None, help="hand the role to this mach
         console.print(f"  [dim]machines are told to dial {url}[/dim]")
         console.print("  [dim]only keys this fleet has pinned are answered; a new "
                       "machine gets in by enrolment or with [bold]fleet invite[/bold][/dim]")
+        retry_s = int(load_config().get("access_retry_s") or 0)
+        if retry_s > 0:
+            # Grants and revokes the center could not apply when they were made -- the
+            # machine was off -- are tried again from here, so a revoke does not wait
+            # for somebody to remember `fleet sync`.
+            import threading
+            from .ops.sweep import retry_forever
+
+            threading.Thread(target=retry_forever, args=(retry_s,), daemon=True,
+                             name="fleet-access-retry").start()
+            console.print(f"  [dim]pending grants and revokes are retried every "
+                          f"{retry_s // 60 or 1} min or so[/dim]")
         try:
             serve_center(port=where, advertise=url)
         except KeyboardInterrupt:
@@ -1905,6 +2106,15 @@ def cmd_center(name: str = typer.Argument(None, help="hand the role to this mach
             _accept_handover(acc)
         return
     if leave:
+        if acl.is_center(acc) and not _stepped_down(acc):
+            # It stripped this fleet's keys from the center's own authorized_keys and
+            # said "removed", while the machine stayed the center -- of a fleet it could
+            # no longer be reached in. A center leaves by handing the role on or ending.
+            err.print("[red]This machine is the center; it cannot leave its own fleet.[/red]")
+            err.print("  [dim]hand the role to another machine with [bold]fleet center "
+                      "NAME[/bold], or end the fleet with [bold]fleet center --dissolve"
+                      "[/bold][/dim]")
+            raise typer.Exit(2)
         _leave_fleet(acc)
         return
     if export:
@@ -2232,6 +2442,82 @@ def cmd_mcp():
 
         err.print(f"[red]{escape(str(exc))}[/red]")
         raise typer.Exit(2)
+
+
+@app.command("uninstall")
+def cmd_uninstall(purge: bool = typer.Option(False, "--purge",
+                                             help="also delete fleet's files here: its key, "
+                                                  "inventory, cache and logs"),
+                  yes: bool = typer.Option(False, "--yes", "-y",
+                                           help="do not ask; needed without a terminal"),
+                  json_out: bool = typer.Option(False, "--json", help="print JSON instead of a table, for scripts and agents")):
+    """Take fleet off this machine: out of its fleet, out of your agents, service removed.
+
+    In order: a member leaves its fleet (the fleet's keys come off this machine), the
+    skills and MCP entries fleet gave your agents are removed, and so is the background
+    service. With --purge, fleet's own files go too. The program itself is removed last,
+    by you: the command to run is printed at the end.
+
+    The center of a fleet with other machines in it cannot uninstall: hand the role on
+    (`fleet center NAME`) or end the fleet (`fleet center --dissolve`) first.
+
+    [dim]Example:[/dim]  fleet uninstall --purge
+    """
+    from .ops import uninstall as _un
+
+    if why := _un.refusal():
+        if not _emit({"ok": False, "error": why}, json_out):
+            err.print(f"[red]Not uninstalling: {why}.[/red]")
+            err.print("  [dim]its key is on every one of them, and only it can take it "
+                      "off: hand the role on with [bold]fleet center NAME[/bold], or end "
+                      "the fleet with [bold]fleet center --dissolve[/bold], then run this "
+                      "again[/dim]")
+        raise typer.Exit(2)
+    if not yes:
+        if not sys.stdin.isatty():
+            err.print("[red]This removes fleet from this machine; run it in a terminal, "
+                      "or pass --yes.[/red]")
+            raise typer.Exit(2)
+        where = _fleet_membership()
+        steps = (["leave its fleet (the fleet's keys come off this machine)"]
+                 if where == "member" else
+                 ["forget the empty fleet it is the center of"] if where == "center" else [])
+        steps += ["remove fleet from your agents (skills, MCP entries)",
+                  "remove the background service"]
+        if purge:
+            steps.append("delete fleet's files here: its key, inventory, cache and logs")
+        console.print("This will:\n" + "\n".join(f"  - {x}" for x in steps))
+        if not typer.confirm("Uninstall fleet from this machine?"):
+            raise typer.Exit(1)
+    try:
+        out = _un.uninstall(purge=purge)
+    except FleetError as exc:
+        if not _emit({"ok": False, "error": str(exc)}, json_out):
+            err.print(f"[red]{exc}[/red]")
+        raise typer.Exit(exc.code)
+    if _emit({"ok": True, **dataclasses.asdict(out)}, json_out):
+        return
+    if out.left == "member":
+        console.print(f"[green]✓[/green] left fleet {out.fleet_id or '(unknown)'}: removed "
+                      f"{out.key_blocks_removed} key block(s) from this machine")
+        console.print(f"  [dim]{out.center or 'the center'} still lists this machine: "
+                      f"[bold]fleet rm {out.name or 'NAME'}[/bold] there[/dim]")
+    elif out.left:
+        console.print(f"[green]✓[/green] forgot fleet {out.fleet_id}, which had no other "
+                      "machines")
+    for path in out.agents:
+        console.print(f"[green]✓[/green] removed {path}")
+    if out.service:
+        console.print(f"[green]✓[/green] background service: {out.service}")
+    if out.files_removed:
+        console.print(f"[green]✓[/green] deleted {len(out.files_removed)} of fleet's files")
+    elif out.files_kept:
+        console.print("[dim]· fleet's files are kept (--purge deletes them):[/dim]")
+        for path in out.files_kept:
+            console.print(f"    [dim]{path}[/dim]")
+    console.print("\nLast, remove the program itself:")
+    for line in out.remove_program:
+        console.print(f"  [bold]{line}[/bold]")
 
 
 @app.command("paths")

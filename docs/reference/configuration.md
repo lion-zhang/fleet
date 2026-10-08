@@ -22,6 +22,7 @@ alone. `fleet paths` prints where the main files are on this machine.
 | `id_ed25519`, `id_ed25519.pub` | this machine's fleet key. Never regenerate it: other machines know it by this key. |
 | `access.yaml` | the access list — who may reach what. On the center only. |
 | `config.yaml` | the settings below. Optional; fleet never creates it. |
+| `device-id` | only on a machine cloned from another's image: the id fleet gave it, so the two are told apart |
 
 **State folder**
 
@@ -32,7 +33,9 @@ alone. `fleet paths` prints where the main files are on this machine.
 | `access-cache.yaml` | on a member: the center's key, its address, and when it was last heard from |
 | `access-invites.yaml` | on the center: open invites, stored as hashes |
 | `access-chain.yaml`, `access-handover-*.yaml` | handovers of the center role |
-| `center-service.log` | macOS only: the background service's output |
+| `center-service.log`, `.log.1` | the listener's output when no terminal is attached (the background service, on every OS): what it retried, and every request it refused. Kept to about a megabyte. |
+| `clock.yaml` | on a member: how far this machine's clock is from the center's |
+| `update.log`, `update.ps1`, `update-run.ps1`, `update-run.log` | Windows only: the last `fleet update` of this machine, which runs after fleet exits |
 
 Folders named `.NAME.queue` beside these files are the write queue; they come and go.
 
@@ -56,6 +59,7 @@ max_workers: 16
 | `probe_timeout_s` | `20` | Seconds `ls`, `show` and `top` give a machine to answer. |
 | `connect_timeout_s` | `8` | ssh connection timeout for those readings. |
 | `max_workers` | `8` | How many machines are measured at once, and how many the center reaches at once when it syncs (placing keys, handing out the inventory). |
+| `access_retry_s` | `300` | On a listening center, how often grants and revokes that could not be applied are tried again; doubles per miss up to `offline_backoff_max_s`. `0` leaves them to `fleet sync`. |
 | `shared_min_interval_s` | `300` | The shortest time between two measurements of a `shared` machine, so a multi-user cluster is never hammered. |
 | `snapshot_retention` | `120` | Readings kept per machine in `cache.db`. |
 | `repo` | (empty) | The git URL `fleet install` and `fleet update` deploy from; otherwise the repository fleet was installed from, or GitHub. |
@@ -97,7 +101,9 @@ It runs as you, never as root, and serves on all interfaces. See
 
 fleet writes two things there. The machine's own fleet key, created once if it has none
 and never replaced: `~/.config/fleet/id_ed25519` (macOS: `~/Library/Application
-Support/fleet`, Windows: `%LOCALAPPDATA%\fleet`). And `authorized_keys` —
+Support/fleet`, Windows: `%LOCALAPPDATA%\fleet`). Beside it, only on a machine cloned
+from another's image, `device-id`: the id fleet gave it to tell the two apart. And
+`authorized_keys` —
 `~/.ssh/authorized_keys`, or on Windows for administrators
 `C:\ProgramData\ssh\administrators_authorized_keys` — only inside blocks it marks with its
 fleet id:

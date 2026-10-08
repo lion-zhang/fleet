@@ -21,8 +21,17 @@ def derive_id(snap: Snapshot | None, ep: Endpoint) -> str:
     machine-id does not, which is what makes dedupe possible at all.
     """
     if snap and snap.machine_id:
-        prefix = "darwin:hwuuid" if snap.os.lower().startswith("macos") else "linux:machine-id"
-        return f"{prefix}:{snap.machine_id}"
+        # By `uname -s` where the probe sent it: `os` says "Mac OS X" on macOS 10.15 and
+        # older, which read as Linux here while the Mac itself said darwin.
+        mac = (snap.uname_s.lower() == "darwin" if snap.uname_s
+               else snap.os.lower().startswith(("macos", "mac os")))
+        prefix = "darwin:hwuuid" if mac else "linux:machine-id"
+        base = f"{prefix}:{snap.machine_id}"
+        # A clone of another machine carries the id fleet gave it (see
+        # identity.assigned_id), and only one that extends its own machine-id counts.
+        if snap.device_id.startswith(base + ":"):
+            return snap.device_id
+        return base
     return f"net:{ep.target}:{ep.port}"
 
 

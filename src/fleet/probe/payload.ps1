@@ -26,6 +26,9 @@ Emit "host.os" $os.Caption
 # MachineGuid is the closest stable analogue of /etc/machine-id: per-install, survives
 # renames and address changes, which is the whole point of preferring it to an address.
 Emit "host.machine_id" (Get-ItemProperty 'HKLM:\SOFTWARE\Microsoft\Cryptography' -Name MachineGuid).MachineGuid
+# The id fleet gave this machine if it is a clone of another (see payload.sh).
+$fleetId = Join-Path $env:LOCALAPPDATA 'fleet\device-id'
+if (Test-Path -LiteralPath $fleetId) { Emit "host.device_id" ((Get-Content -LiteralPath $fleetId -TotalCount 1) -replace '[\r\n|]', '').Trim() }
 if ($os.LastBootUpTime) {
     Emit "host.uptime_s" ([int]((Get-Date) - $os.LastBootUpTime).TotalSeconds)
 }

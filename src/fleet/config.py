@@ -43,6 +43,10 @@ DEFAULTS: dict = {
     "connect_timeout_s": 8,
     "max_workers": 8,
     "shared_min_interval_s": 300,   # never hammer a multi-user cluster
+    # How often a listening center tries again to apply grants and revokes that could not
+    # be applied yet (the machine was off). Doubles per miss up to offline_backoff_max_s.
+    # 0 turns it off, leaving it to `fleet sync`.
+    "access_retry_s": 300,
     "snapshot_retention": 120,      # ring buffer per device; enough for idle detection
     "repo": "",                     # where `fleet install` clones fleet from
 }

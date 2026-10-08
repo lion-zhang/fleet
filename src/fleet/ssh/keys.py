@@ -260,6 +260,29 @@ def ensure_remote_keypair_command(*, platform: str = "posix") -> str:
     )
 
 
+def remote_device_id_command(device_id: str, *, platform: str = "posix") -> str:
+    """Write the id fleet gave a clone into fleet's config folder on that machine.
+
+    Two machines cloned from one image share a machine-id, so the id derived from it
+    cannot tell them apart; the second is given `<machine-id id>:<suffix>`. Written
+    where that machine's own fleet looks (`identity.DEVICE_ID_FILE`) and where the probe
+    reads it, so the center, the machine itself and every later probe all agree.
+    """
+    import re
+
+    if not re.fullmatch(r"[A-Za-z0-9:._-]{1,200}", device_id):
+        raise ValueError(f"not a device id: {device_id!r}")
+    if platform == "windows":
+        return ("$d=Join-Path $env:LOCALAPPDATA 'fleet';"
+                "if(!(Test-Path $d)){New-Item -ItemType Directory -Path $d|Out-Null};"
+                f"Set-Content -LiteralPath (Join-Path $d 'device-id') -Value '{device_id}'"
+                " -Encoding ascii;'ok'")
+    return ('case "$(uname -s)" in '
+            'Darwin) d="$HOME/Library/Application Support/fleet" ;; '
+            '*) d="$HOME/.config/fleet" ;; '
+            f'esac; mkdir -p "$d" && echo {device_id} > "$d/device-id" && echo ok')
+
+
 def windows_authorized_keys_command(pubkey: str) -> str:
     """The first-contact twin for Windows, as a single PowerShell -Command string.
 

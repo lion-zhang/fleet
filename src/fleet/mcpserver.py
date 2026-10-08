@@ -61,7 +61,12 @@ def _clean(text: str) -> str:
     return _ANSI.sub("", text or "").strip()
 
 
-def _exec(args: list[str]):
+# Commands that do a lot over the network get longer: adding a machine probes it,
+# checks for a clone and enrols it; a sync on the center reaches every machine.
+SLOW_TIMEOUT_S = 300
+
+
+def _exec(args: list[str], timeout: float | None = None):
     """Run one fleet command. Never on this server's own stdin: that is the protocol
     pipe, and a child reading it (an ssh session, a prompt) would eat the client's
     messages."""
@@ -71,12 +76,46 @@ def _exec(args: list[str]):
     # where a machine name or a ✓ is mangled or cannot be written at all.
     env = {**os.environ, "NO_COLOR": "1", "TERM": "dumb", "COLUMNS": "200",
            "PYTHONUTF8": "1", "PYTHONIOENCODING": "utf-8"}
-    return subprocess.run([_fleet(), *args], capture_output=True, text=True,
-                          encoding="utf-8", errors="replace",
-                          timeout=TIMEOUT_S, stdin=subprocess.DEVNULL, env=env)
+    # In a process group of its own, so a timeout stops everything the command started
+    # and not only the command. On Windows fleet.exe is uv's launcher: killing it, which
+    # is all subprocess.run's timeout does, left the python it runs -- and that python's
+    # ssh -- running, holding our pipes open, and run() then waited on those pipes for
+    # as long as the remote command took. On POSIX the ssh outlived the timeout too.
+    kw: dict = ({"creationflags": subprocess.CREATE_NEW_PROCESS_GROUP}
+                if os.name == "nt" else {"start_new_session": True})
+    proc = subprocess.Popen([_fleet(), *args], stdout=subprocess.PIPE,
+                            stderr=subprocess.PIPE, stdin=subprocess.DEVNULL, text=True,
+                            encoding="utf-8", errors="replace", env=env, **kw)
+    try:
+        out, errout = proc.communicate(timeout=timeout or TIMEOUT_S)
+    except subprocess.TimeoutExpired:
+        _kill_tree(proc)
+        try:
+            proc.communicate(timeout=10)
+        except subprocess.TimeoutExpired:
+            pass                          # something escaped the tree; do not wait on it
+        raise
+    return subprocess.CompletedProcess(proc.args, proc.returncode, out, errout)
 
 
-def _run(args: list[str]) -> Any:
+def _kill_tree(proc) -> None:
+    """Stop a process and every process it started."""
+    import os
+    import signal
+    from contextlib import suppress
+
+    if os.name == "nt":
+        with suppress(OSError, subprocess.SubprocessError):
+            subprocess.run(["taskkill", "/F", "/T", "/PID", str(proc.pid)],
+                           capture_output=True, timeout=30)
+    else:
+        with suppress(OSError):
+            os.killpg(proc.pid, signal.SIGKILL)
+    with suppress(OSError):
+        proc.kill()
+
+
+def _run(args: list[str], timeout: float | None = None) -> Any:
     """Run one fleet command and return its result, parsed when it is JSON.
 
     Errors come back as a value rather than an exception: an agent needs to read what
@@ -87,11 +126,15 @@ def _run(args: list[str]) -> Any:
     `notes` (how many machines could not be judged, why a grant is pending).
     """
     try:
-        p = _exec(args)
+        p = _exec(args, timeout)
     except FileNotFoundError:
         return {"ok": False, "error": "fleet is not installed on this machine"}
     except subprocess.TimeoutExpired:
-        return {"ok": False, "error": f"`fleet {' '.join(args)}` exceeded {TIMEOUT_S}s"}
+        # Stopped part way, so part of it may have happened: say so, and how to look.
+        return {"ok": False, "error": f"`fleet {' '.join(args)}` exceeded "
+                                      f"{int(timeout or TIMEOUT_S)}s and was stopped; part "
+                                      "of it may already have been applied -- check with "
+                                      "list_machines or show_access before trying again"}
     out, notes = (p.stdout or "").strip(), _clean(p.stderr)[-2000:]
     try:
         data = json.loads(out) if out else {}
@@ -197,13 +240,20 @@ def build_server():
                              "the key to put on it -- or use invite_machine. Never ask "
                              "for a password.")
     def add_machine(ssh_command: str, name: str | None = None,
-                    tags: list[str] | None = None) -> Any:
+                    tags: list[str] | None = None, alias: str | None = None,
+                    kind: str | None = None) -> Any:
+        """`kind` only when the user says what it is: permanent, rental, shared,
+        appliance or mobile. fleet picks one itself otherwise."""
         args = ["add", ssh_command, "--json"]
         if name:
             args += ["--name", name]
+        if alias:
+            args += ["--alias", alias]
+        if kind:
+            args += ["--kind", kind]
         for t in tags or []:
             args += ["--tag", t]
-        result = _run(args)
+        result = _run(args, SLOW_TIMEOUT_S)
         refused = result.get("enrolment") == "failed" or any(
             w in str(result.get("error", "")).lower()
             for w in ("permission denied", "auth", "password", "publickey"))
@@ -225,18 +275,36 @@ def build_server():
     def invite_machine(name: str | None = None, valid_for: str = "15m") -> Any:
         return _run(["invite", *([name] if name else []), "--ttl", valid_for, "--json"])
 
+    @server.tool(description="Invites issued in the last day and what became of each: "
+                             "open, used (by which machine), expired or withdrawn.")
+    def list_invites() -> Any:
+        return _run(["invite", "--list", "--json"])
+
+    @server.tool(description="Withdraw an invite that has not been used yet -- one given "
+                             "to the wrong person, or no longer needed. Takes its id from "
+                             "invite_machine or list_invites.")
+    def withdraw_invite(invite_id: str) -> Any:
+        return _run(["invite", "--revoke", invite_id, "--json"])
+
     @server.tool(description="Label a machine, or change what it costs per hour (for the "
                              "$/HR column and burn rate), how it is reached, or which disks "
                              "to watch for free space: disk_paths means exactly these paths "
                              "from now on -- for a container or rental whose `/` is not "
-                             "where the space is -- and autodetect_disks goes back. Tags are "
-                             "yours; measured facts such as cuda or vram-24g come from probes.")
+                             "where the space is -- and autodetect_disks goes back. rename "
+                             "gives it a new name, alias a short one (empty clears it). Tags "
+                             "are yours; measured facts such as cuda or vram-24g come from "
+                             "probes.")
     def edit_machine(name: str, add_tags: list[str] | None = None,
                      remove_tags: list[str] | None = None, cost_per_hour: float | None = None,
                      ssh_command: str | None = None,
                      disk_paths: list[str] | None = None,
-                     autodetect_disks: bool = False) -> Any:
+                     autodetect_disks: bool = False, rename: str | None = None,
+                     alias: str | None = None) -> Any:
         args = ["edit", name, "--json"]
+        if rename:
+            args += ["--name", rename]
+        if alias is not None:
+            args += ["--alias", alias]
         for path in disk_paths or []:
             args += ["--disk-path", path]
         if autodetect_disks:
@@ -251,9 +319,11 @@ def build_server():
             args += ["--ssh", ssh_command]
         return _run(args)
 
-    @server.tool(description="Who may reach what, and what has not landed yet. A row "
-                             "that is not `present` is a grant still in flight, not one "
-                             "that failed.")
+    @server.tool(description="Who may reach what, and what has not landed yet. `state` "
+                             "is present, pending (a grant not on the machine yet) or "
+                             "revoking (a revoked key still there). A listening center "
+                             "retries both by itself; if last_error stays the same over "
+                             "many attempts, it will not land -- report it.")
     def show_access(machine: str | None = None) -> Any:
         return _run(["access", *([machine] if machine else []), "--json"])
 
@@ -266,8 +336,8 @@ def build_server():
 
     @server.tool(description="Let one machine reach another over ssh, as the account the "
                              "machine is reached as unless `user` names another. Applied on "
-                             "the spot; a machine that is off stays pending until sync_fleet "
-                             "on the center. "
+                             "the spot; a machine that is off stays pending, and the center "
+                             "applies it once the machine is back. "
                              "Only the center can do this. Ask before calling it: access "
                              "is the user's decision.")
     def grant_access(machine: str, may_be_reached_by: str, user: str | None = None) -> Any:
@@ -285,7 +355,7 @@ def build_server():
                              "pending access changes and share the inventory. On a member: "
                              "fetch a fresh copy from the center. Safe to repeat.")
     def sync_fleet() -> Any:
-        return _run(["sync", "--json"])
+        return _run(["sync", "--json"], SLOW_TIMEOUT_S)
 
     return server
 

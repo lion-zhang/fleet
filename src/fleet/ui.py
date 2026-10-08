@@ -11,6 +11,8 @@ the layering honest without pretending the output is someone else's problem.
 
 from __future__ import annotations
 
+import os
+
 import json as jsonlib
 import sys
 from contextlib import contextmanager, suppress
@@ -41,8 +43,26 @@ def confirm(question: str, *, default: bool = False) -> bool:
     return typer.confirm(question, default=default)
 
 
-console = Console()
-err = Console(stderr=True)
+def _console(**kw) -> Console:
+    """Wide, and not hard-wrapped, when nobody is looking at a terminal.
+
+    Agents run fleet with no terminal, and rich then assumes 80 columns: `fleet paths`
+    broke each path across two lines, and messages wrapped mid-sentence -- text an agent
+    then copies back into a command. A real terminal keeps its own width.
+    """
+    stream = sys.stderr if kw.get("stderr") else sys.stdout
+    try:
+        tty = stream.isatty()
+    except (AttributeError, ValueError):
+        tty = False
+    if not tty and not os.environ.get("COLUMNS"):
+        kw.setdefault("width", 200)
+        kw.setdefault("soft_wrap", True)
+    return Console(**kw)
+
+
+console = _console()
+err = _console(stderr=True)
 
 DOT = {"ok": "[green]●[/green]", "auth_failed": "[yellow]◐[/yellow]",
        "timeout": "[dim]○[/dim]", "refused": "[red]○[/red]", "closed": "[red]○[/red]",

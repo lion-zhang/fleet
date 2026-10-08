@@ -33,8 +33,9 @@ What waits for the center:
   contact with the center, while still measuring the machines it reaches itself.
 
 When it comes back, members catch up by themselves. A change the center could not apply
-because a machine was off stays pending until `fleet sync` runs on the center; run it
-once that machine is back. A member whose center has been quiet for a week says so in
+because a machine was off stays pending; the listening center tries it again by itself,
+every five minutes or so (less often while that machine stays off), and `fleet sync` on
+the center tries at once. A member whose center has been quiet for a week says so in
 `fleet ls`; that is a note, not an error.
 
 ## What runs where
@@ -63,10 +64,12 @@ can join. Starting a fleet installs a background service that does this, run as 
 | OS | Service |
 |---|---|
 | Linux | systemd user unit `fleet-center.service` (lingering is enabled, so it runs without a login) |
-| macOS | launchd agent `io.fleet.center`; its output goes to `center-service.log` in fleet's state folder |
+| macOS | launchd agent `io.fleet.center` |
 | Windows | scheduled task `fleet-center`, with a firewall rule for port 7373 |
 
-`fleet center` says whether it is serving, and `fleet service` manages it:
+On every OS the listener writes what it does — the grants and revokes it retried, the
+requests it refused — to `center-service.log` in fleet's state folder. `fleet center`
+says whether it is serving, and `fleet service` manages it:
 
 ```bash
 fleet service                 # status
@@ -100,10 +103,13 @@ signed handover, so each one moves its trust across without being asked.
 
 The new center must then listen on port 7373: `fleet service install` on it (or
 `fleet center --listen` where there is no service manager). The old center steps down,
-becoming an ordinary member, the next time it reaches the new one.
+becoming an ordinary member, the next time it reaches the new one, and removes its own
+background service then.
 
-Until `--accept`, the old center refuses changes. `fleet center --cancel` on the old
-center keeps the role if the new one never accepts.
+From the moment it sends the handover — even if the answer was lost on the way — the
+old center refuses changes. `fleet center --cancel` on the old center keeps the role if
+the new one never accepts. An `--accept` that was cut short (a closed terminal, a
+crash) is finished by running `fleet center --accept` again.
 
 ## If the center is lost
 
@@ -126,8 +132,10 @@ fleet rm gpu-box              # on the center: remove a machine, and its keys ev
 fleet center --dissolve       # on the center: take the whole fleet down
 ```
 
-`--dissolve` removes every key from every machine first, and only then forgets the fleet
-and removes the background service.
+`--dissolve` stops this machine's listener, removes every key from every machine, and
+only then forgets the fleet — open invites included — and removes the background
+service. `--leave` is for members: the center refuses it, since a center leaves by
+handing the role on or by dissolving.
 If some machines cannot be reached it stops and says which; `--force` finishes anyway.
 **Do not delete fleet's files by hand instead**: that leaves every key in place with
 nothing left that can remove them.

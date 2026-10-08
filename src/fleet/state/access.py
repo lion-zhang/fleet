@@ -33,6 +33,8 @@ from pathlib import Path
 
 import yaml
 
+from . import untrusted
+
 from .. import config
 from ..config import CONFIG_DIR, STATE_DIR
 from .writes import atomic_write, turn
@@ -470,8 +472,9 @@ def seal(inventory_yaml: str, *, key_path: Path | None = None,
     # `join` reports as having no key at all.
     key_path = key_path or config.FLEET_KEY
     chain = handover_chain() if key_path == config.FLEET_KEY else []
+    # `sent_at`: a member corrects its clock by it (state/clock.py).
     inner = {"inventory": inventory_yaml, "telemetry": telemetry or [],
-             "center_url": center_url}
+             "center_url": center_url, "sent_at": int(time.time())}
     if fleet_id:
         inner["fleet_id"] = fleet_id
     if claims:
@@ -479,7 +482,7 @@ def seal(inventory_yaml: str, *, key_path: Path | None = None,
         # center's key in its own authorized_keys. Signed like everything else, and
         # only ever about the signer: a machine is the authority on its own files.
         inner["claims"] = dict(claims)
-    body = yaml.safe_dump(inner, sort_keys=False)
+    body = untrusted.dump(inner, sort_keys=False)
     env = {
         "protocol": PROTOCOL,
         # named for the common case; it is simply whoever signed, and a listening center
@@ -499,7 +502,7 @@ def seal(inventory_yaml: str, *, key_path: Path | None = None,
         # so it vouches for itself, and a peer that has never heard of handovers reads
         # the envelope exactly as before.
         env["handovers"] = chain
-    return yaml.safe_dump(env, sort_keys=False)
+    return untrusted.dump(env, sort_keys=False)
 
 
 def unseal(payload: str, signer_pubkey: str) -> dict:
@@ -510,7 +513,7 @@ def unseal(payload: str, signer_pubkey: str) -> dict:
     not be given the benefit of the doubt.
     """
     try:
-        env = yaml.safe_load(payload) or {}
+        env = untrusted.load(payload) or {}
     except yaml.YAMLError as exc:
         raise AccessError(f"unreadable sync payload: {exc}") from exc
     if not isinstance(env, dict) or "body" not in env:
@@ -528,12 +531,20 @@ def unseal(payload: str, signer_pubkey: str) -> dict:
             raise AccessError("sync payload is not signed by the key we trust")
     elif not verify(env["body"], env.get("signature") or "", signer_pubkey):
         raise AccessError("sync payload is not signed by the key we trust")
-    inner = yaml.safe_load(env["body"]) or {}
+    inner = untrusted.load(env["body"]) or {}
     return {"inventory": inner.get("inventory", ""),
             "telemetry": list(inner.get("telemetry") or []),
             "center_url": str(inner.get("center_url") or ""),
             "fleet_id": str(inner.get("fleet_id") or ""),
-            "claims": dict(inner.get("claims") or {})}
+            "claims": dict(inner.get("claims") or {}),
+            "sent_at": _int_or_zero(inner.get("sent_at"))}
+
+
+def _int_or_zero(value) -> int:
+    try:
+        return int(value or 0)
+    except (TypeError, ValueError):
+        return 0
 
 
 def claimed_signer(payload: str) -> str:
@@ -545,7 +556,7 @@ def claimed_signer(payload: str) -> str:
     it is not there, before unsealing anything.
     """
     try:
-        env = yaml.safe_load(payload) or {}
+        env = untrusted.load(payload) or {}
     except yaml.YAMLError:
         return ""
     return str((env or {}).get("center_pubkey") or "").strip() if isinstance(env, dict) else ""
@@ -578,6 +589,11 @@ def _update_cache(change, cache_path: Path | None = None) -> None:
         data = _read_yaml(path)
         before = dict(data)
         change(data)
+        if not before and not data.get("center_pubkey"):
+            # A record of a center with no center in it. Written by a refresh that was
+            # under way while this machine left the fleet, it made a machine in no
+            # fleet look like a member.
+            return
         if data != before:
             atomic_write(path, yaml.safe_dump(data, sort_keys=False))
 
@@ -629,7 +645,7 @@ def unseal_first_contact(payload: str) -> str:
     chance and only before the real center has ever called.
     """
     try:
-        env = yaml.safe_load(payload) or {}
+        env = untrusted.load(payload) or {}
     except yaml.YAMLError as exc:
         raise AccessError(f"unreadable sync payload: {exc}") from exc
     if not isinstance(env, dict) or "body" not in env:
@@ -758,6 +774,33 @@ def note_center_unanswered(cache_path: Path | None = None) -> None:
     _update_cache(unanswered, cache_path)
 
 
+def note_center_refused(status: int, reason: str, cache_path: Path | None = None) -> None:
+    """Record that the center answered and said no -- which is not the same as silence.
+
+    A member re-imaged with a new key, or one removed from the fleet, is refused by the
+    center for good; recorded as unanswered it looked like a center that was off, and
+    the person went looking for a network problem.
+    """
+    def refused(data: dict) -> None:
+        data["refused_at"] = int(time.time())
+        data["refused"] = f"{status} {reason.strip()[:160]}"
+        data["unanswered_at"] = int(time.time())
+        data["unanswered"] = int(data.get("unanswered") or 0) + 1
+
+    _update_cache(refused, cache_path)
+
+
+def center_refusal(cache_path: Path | None = None) -> str:
+    """Why the center last refused this machine, if that is newer than its last answer."""
+    data = _read_yaml(cache_path or CACHE_PATH)
+    try:
+        if int(data.get("refused_at") or 0) > int(data.get("seen_at") or 0):
+            return str(data.get("refused") or "")
+    except (TypeError, ValueError):
+        pass
+    return ""
+
+
 def center_retry_after(base_s: int, max_s: int, cache_path: Path | None = None) -> int:
     """Seconds until the center is worth asking again; 0 means now.
 
@@ -771,8 +814,12 @@ def center_retry_after(base_s: int, max_s: int, cache_path: Path | None = None) 
         return 0
     if failures <= 0 or not at:
         return 0
-    wait = min(max_s, base_s * 2 ** min(failures - 1, 20)) if max_s else base_s
-    return max(0, at + wait - int(time.time()))
+    from .timing import backoff, since
+
+    elapsed = since(at)
+    if elapsed is None:
+        return 0                           # the clock went back: ask now
+    return max(0, int(backoff(base_s, failures, max_s) - elapsed))
 
 
 # ------------------------------------------------------------ which fleet, on a member
@@ -828,7 +875,7 @@ def follow_chain(chain: list, trusted_pubkey: str) -> str:
     for entry in chain or []:
         record = str(entry.get("record") or "")
         try:
-            rec = yaml.safe_load(record) or {}
+            rec = untrusted.load(record) or {}
         except yaml.YAMLError:
             continue
         if not isinstance(rec, dict) or rec.get("kind") != "fleet-handover":
@@ -858,7 +905,7 @@ def unseal_trusting(payload: str, pinned: str) -> tuple[dict, str]:
         return unseal(payload, pinned), pinned
     except AccessError as first:
         try:
-            env = yaml.safe_load(payload) or {}
+            env = untrusted.load(payload) or {}
         except yaml.YAMLError:
             raise first
         if not isinstance(env, dict) or not env.get("handovers"):

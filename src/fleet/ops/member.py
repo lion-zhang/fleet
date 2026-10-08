@@ -139,6 +139,9 @@ def leave() -> tuple[str, int]:
             subprocess.run(shell, input=script.encode(), capture_output=True)
             removed.add(src)
     sources = sorted(removed)
+    from ..state.writes import turn
+
     for path in (acl.CACHE_PATH, acl.OUTBOX_PATH, acl.INBOX_PATH):
-        path.unlink(missing_ok=True)
+        with turn(path):                   # after any refresh already writing it
+            path.unlink(missing_ok=True)
     return fid, len(sources)

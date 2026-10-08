@@ -85,6 +85,10 @@ fi
 # fails against it with an error that mentions nothing about why. Quiet and best-effort,
 # because a machine that is not a center has nothing to stop.
 PATH="$HOME/.local/bin:$PATH" fleet service stop >/dev/null 2>&1 || true
+# And started again however this ends -- set -e stops at the first failure, and an
+# upgrade that failed on a network blip left the center not listening until a reboot.
+# `service start` does nothing on a machine that never had one.
+trap 'PATH="$HOME/.local/bin:$PATH" fleet service start >/dev/null 2>&1 || true' EXIT
 
 # --reinstall-package, not --reinstall: the problem is uv reusing a cached build of
 # fleet when the version has not changed, and rebuilding every dependency to fix that
@@ -110,13 +114,13 @@ uv tool update-shell >/dev/null 2>&1 || true
 # What the agents on this machine are told about fleet, rewritten to match the fleet
 # just installed. Only what is already there: never adds fleet to an agent. Without it
 # every update left agents describing commands as they used to be.
+# uv's tool bin directory, which UV_TOOL_BIN_DIR can move off ~/.local/bin.
+if command -v uv >/dev/null 2>&1; then
+  B=$(uv tool dir --bin 2>/dev/null) && [ -n "$B" ] && PATH="$B:$PATH" && export PATH
+fi
 PATH="$HOME/.local/bin:$PATH" fleet setup --refresh >/dev/null 2>&1 || true
 
 PATH="$HOME/.local/bin:$PATH" fleet --version
-
-# Back up if it was there. `install` is idempotent, so this must not start a service on a
-# machine that never had one -- `service start` does nothing when none is installed.
-PATH="$HOME/.local/bin:$PATH" fleet service start >/dev/null 2>&1 || true
 {_drop_timer_block()}"""
 
 
@@ -382,10 +386,24 @@ while ((Get-Date) -lt $deadline) {{
   Start-Sleep -Milliseconds 400
 }}
 
-$fleet = Join-Path $env:USERPROFILE '.local\\bin\\fleet.exe'
+# Where uv puts fleet.exe: its tool bin directory, which is not always ~/.local/bin --
+# UV_TOOL_BIN_DIR moves it, and on the e2e runner it is elsewhere entirely. Asked of uv
+# again after installing, since the answer is only certain once fleet is there.
+function Find-Fleet {{
+  $b = ''
+  try {{ $b = ((& uv tool dir --bin 2>$null) | Out-String).Trim() }} catch {{ }}
+  if ($b -and (Test-Path (Join-Path $b 'fleet.exe'))) {{ return (Join-Path $b 'fleet.exe') }}
+  $c = Get-Command fleet -ErrorAction SilentlyContinue
+  if ($c) {{ return $c.Source }}
+  return (Join-Path $env:USERPROFILE '.local\\bin\\fleet.exe')
+}}
+$fleet = Find-Fleet
 
 # The package was `fleet-broker` until 0.5, then `agent-fleet`; both would claim the
 # `fleet` command.
+# In try/finally: an install that fails -- a network blip, a locked file -- must still
+# start the center's service again, or it stays down until the next logon.
+try {{
 if ($mode -eq 'uv') {{
   uv tool upgrade --quiet agents-fleet
 }} elseif ($mode -eq 'pipx') {{
@@ -394,6 +412,12 @@ if ($mode -eq 'uv') {{
   try {{ uv tool uninstall fleet-broker 2>&1 | Out-Null }} catch {{ }}
   try {{ uv tool uninstall agent-fleet 2>&1 | Out-Null }} catch {{ }}
   uv tool install --force --reinstall-package agents-fleet --quiet $dir
+}}
+}} finally {{
+  $fleet = Find-Fleet
+  if (Test-Path $fleet) {{
+    try {{ & $fleet service start 2>&1 | Out-Null }} catch {{ }}
+  }}
 }}
 
 # So `fleet` works in a terminal the user opens later, not just in this script. Without
@@ -407,9 +431,6 @@ if (Test-Path $fleet) {{
 }}
 
 & $fleet --version
-if (Test-Path $fleet) {{
-  try {{ & $fleet service start 2>&1 | Out-Null }} catch {{ }}
-}}
 """
 
 
@@ -499,3 +520,104 @@ def install_source() -> Path | None:
                 return Path(req["directory"])
         return None
     return None
+
+
+UPDATE_EXIT_MARK = "fleet-update-exit:"
+
+
+def _windows_update_runner(inner: Path, pids: list[int], log: Path | None = None) -> str:
+    """The PowerShell that waits for this fleet to exit, then runs the installer.
+
+    A Windows program cannot be replaced while it runs, and `fleet update` *is* the
+    program being replaced: fleet.exe (uv's launcher) runs the tool's python.exe, which
+    runs this code. The installer used to run as our child, so its `taskkill fleet.exe`
+    killed the command that started it while python.exe went on holding the files uv
+    then failed to remove -- half an installation, and no fleet. Run after we are gone,
+    there is nothing of ours left holding anything.
+
+    The chain of fleet processes above us is resolved here, first, while they are still
+    alive to be asked about; the caller waits for that line before it exits.
+    """
+    inner_lit = str(inner).replace("'", "''")
+    log_lit = str(log or inner.with_name("update.log")).replace("'", "''")
+    start = ", ".join(str(p) for p in pids)
+    # Every line appended to the log as it happens. Written to stdout instead, it sat in
+    # PowerShell's buffer until the runner exited, so nobody could see it had started.
+    return f"""$ErrorActionPreference = 'Continue'
+$log = '{log_lit}'
+function Say($text) {{ Add-Content -LiteralPath $log -Value $text -Encoding utf8 }}
+Say "update runner started (pid $PID)"
+# Up from this fleet to the fleet.exe that started it, and no further: whatever ran
+# fleet.exe -- a shell, an agent, a test written in python -- is not ours to wait for,
+# and waiting for it while it waits for us would never end.
+# At most three steps (this python, the tool's python.exe launcher, fleet.exe); with no
+# fleet.exe among them -- `python -m fleet`, say -- only this process itself.
+$chain = @()
+$found = $false
+$id = {pids[0] if pids else 0}
+while ($id -and $chain.Count -lt 3 -and -not ($chain -contains $id)) {{
+  $p = Get-CimInstance Win32_Process -Filter "ProcessId=$id" -ErrorAction SilentlyContinue
+  if (-not $p) {{ break }}
+  $chain += $id
+  if ($p.Name -match '^fleet\\.exe$') {{ $found = $true; break }}
+  if ($p.Name -notmatch '^pythonw?\\.exe$') {{ break }}
+  $id = $p.ParentProcessId
+}}
+$ids = if ($found) {{ $chain }} else {{ @({pids[0] if pids else 0}) }}
+Say "waiting for fleet to exit (started from {start}; waiting on $($ids -join ', '))"
+foreach ($i in $ids) {{ Wait-Process -Id $i -Timeout 1800 -ErrorAction SilentlyContinue }}
+Start-Sleep -Seconds 1
+& powershell -NoProfile -ExecutionPolicy Bypass -File '{inner_lit}' 2>&1 | ForEach-Object {{ Say "$_" }}
+Say "{UPDATE_EXIT_MARK} $LASTEXITCODE"
+"""
+
+
+def update_windows_in_background(script: str, *, wait_s: float = 20.0) -> tuple[Path, bool]:
+    """Start the installer for *this* Windows machine detached, to run once we exit.
+
+    Returns the log it writes (its last line is `fleet-update-exit: N`) and whether the
+    runner said it had started. Waits (briefly) until the runner has found the processes
+    it must outlive, so that returning -- and exiting -- cannot race it.
+    """
+    import os
+    import subprocess
+    import time
+
+    state = config.STATE_DIR
+    state.mkdir(parents=True, exist_ok=True)
+    inner, runner, log = (state / "update.ps1", state / "update-run.ps1",
+                          state / "update.log")
+    # utf-8 with a BOM: Windows PowerShell 5 reads a .ps1 without one as the ANSI code
+    # page, and the installer is not all ASCII.
+    inner.write_text(script, encoding="utf-8-sig")
+    runner.write_text(_windows_update_runner(inner, [os.getpid(), os.getppid()], log),
+                      encoding="utf-8-sig")
+    log.write_text("", encoding="utf-8")
+    # The runner's own output -- a parse error, say -- separately: the log is its to write.
+    # A hidden console rather than DETACHED_PROCESS: PowerShell given no console at all
+    # exits at once, saying nothing, and the update never ran. Out of our job object
+    # where that is allowed: uv's launcher (fleet.exe) puts what it starts in one that
+    # is killed when it exits -- and the runner exists to outlive it.
+    base = (getattr(subprocess, "CREATE_NO_WINDOW", 0)
+            | getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0))
+    breakaway = getattr(subprocess, "CREATE_BREAKAWAY_FROM_JOB", 0)
+    argv = ["powershell", "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", str(runner)]
+    with open(state / "update-run.log", "wb") as out:
+        for flags in (base | breakaway, base):
+            try:
+                subprocess.Popen(argv, stdin=subprocess.DEVNULL, stdout=out,
+                                 stderr=subprocess.STDOUT, creationflags=flags,
+                                 close_fds=True)
+                break
+            except OSError:
+                if flags == base:
+                    raise                  # a job that refuses breakaway: try without
+    deadline = time.monotonic() + wait_s
+    while time.monotonic() < deadline:
+        try:
+            if b"waiting for fleet" in log.read_bytes():
+                return log, True
+        except OSError:
+            pass
+        time.sleep(0.2)
+    return log, False

@@ -118,7 +118,7 @@ terminal there, or give it to the agent on that machine. The machine installs fl
 `authorized_keys`. No password, and nothing to approve afterwards: the invite *was* the
 approval.
 
-- **Single use, 15 minutes** by default (`--ttl 2h` for longer). `fleet invite --list`
+- **Single use, 15 minutes** by default (`--ttl 2h` for longer, 7 days at most). `fleet invite --list`
   shows what became of recent ones; `--revoke ID` withdraws one.
 - **Safe to paste into a provisioning script**: a used code is worth nothing, and the
   secret in it never crosses the network.
@@ -178,6 +178,16 @@ route, since `fleet ssh` connects directly.
 **Tailscale SSH and similar** answer ssh themselves and decide who may log in from their
 own access rules, not from `authorized_keys`. fleet measures and connects to such a
 machine as usual, says so when it is added, and leaves access to it to those rules.
+
+## Machines cloned from one image
+
+VMs and containers made from one image share a machine-id, which is what fleet knows a
+machine by. When you add one, fleet checks the machine it already knows under that id,
+at its own address: if that one is a different host — another hostname, or booted at
+another time — the new one is recorded as a separate machine, with an id of its own
+written on it, and fleet says so. If it is the same host, the new address is added to
+it. Giving each clone its own machine-id (`systemd-machine-id-setup` after emptying
+`/etc/machine-id`) avoids the question altogether.
 
 ## Adding from a member
 

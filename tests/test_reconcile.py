@@ -88,3 +88,41 @@ def test_reconcile_never_multiplexes():
 
     src = inspect.getsource(reconcile._remote)
     assert "multiplex=False" in src
+
+
+def test_a_long_sweep_does_not_write_back_over_a_newer_look(tmp_path):
+    """Found in the final audit. A sweep loaded the ledger, removed a key early in its
+    pass, and saved minutes later -- after the key had been granted again and then
+    revoked again with its machine off. Its stale "removed" was saved and pruned: the
+    key was there, the list did not want it, and nothing would ever look again."""
+    from fleet import reconcile as rec
+
+    path = tmp_path / "ledger.yaml"
+    edge = "a>b>root"
+    rec.save_ledger({edge: rec.EdgeState(desired="absent", observed="present",
+                                         last_attempt_at=100)}, path)
+    sweep = rec.load_ledger(path)                    # the sweep reads it, and works
+    sweep[edge].observed, sweep[edge].last_attempt_at = "absent", 200
+
+    later = rec.load_ledger(path)                    # meanwhile: granted, then revoked
+    later[edge] = rec.EdgeState(desired="absent", observed="present", last_attempt_at=300,
+                                last_error="timed out")
+    rec.save_ledger(later, path)
+
+    rec.save_ledger(sweep, path)                     # the sweep finishes
+    st = rec.load_ledger(path)[edge]
+    assert st.observed == "present" and st.desired == "absent", "still to be removed"
+
+
+def test_a_writer_that_looked_last_wins(tmp_path):
+    from fleet import reconcile as rec
+
+    path = tmp_path / "ledger.yaml"
+    edge = "a>b>root"
+    rec.save_ledger({edge: rec.EdgeState(observed="unknown", last_attempt_at=100)}, path)
+    one, two = rec.load_ledger(path), rec.load_ledger(path)
+    one[edge].observed, one[edge].last_attempt_at = "present", 200
+    two[edge].observed, two[edge].last_attempt_at = "absent", 300
+    rec.save_ledger(two, path)
+    rec.save_ledger(one, path)
+    assert rec.load_ledger(path)[edge].observed == "absent"

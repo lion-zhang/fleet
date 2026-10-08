@@ -136,6 +136,7 @@ def parse_payload(stdout: str) -> Snapshot:
     snap = Snapshot(
         hostname=kv.get("host.hostname", ""),
         machine_id=kv.get("host.machine_id", ""),
+        device_id=kv.get("host.device_id", ""),
         os=kv.get("host.os", ""),
         uname_s=kv.get("host.uname_s", ""),
         kernel=kv.get("host.kernel", ""),

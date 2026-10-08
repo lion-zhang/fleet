@@ -657,3 +657,26 @@ def test_an_id_that_is_another_machines_name_does_not_make_the_joiner_that_machi
         assert acl.load().name_of(acl.fingerprint(f["jpub"])) == "newbox"
         box = inv.find_exact(inv.load(), "box")
         assert box.id == "id:box", "the machine called box is still itself"
+
+
+def test_a_clone_that_joins_learns_the_id_it_was_given(joining, monkeypatch):
+    """Kept apart on the center under `id:box:box-clone`, the clone went on deriving
+    `id:box` itself -- the machine it was copied from."""
+    import fleet.onboard
+    from fleet.models import ProbeResult, Snapshot, Status
+    from fleet.ops import identity
+
+    f = joining
+    with being(f["c"]):
+        conn = store.connect()
+        store.record(conn, "id:box", ProbeResult(status=Status.OK,
+                                                 snapshot=Snapshot(ts=1, hostname="box")))
+        conn.close()
+    monkeypatch.setattr(fleet.onboard, "onboard_self",
+                        lambda **k: (_me("box-clone", "id:box"),
+                                     ProbeResult(status=Status.OK,
+                                                 snapshot=Snapshot(hostname="box-clone"))))
+    adopted = []
+    monkeypatch.setattr(identity, "adopt_id", adopted.append)
+    join_mod.join(_code(f))
+    assert adopted == ["id:box:box-clone"]

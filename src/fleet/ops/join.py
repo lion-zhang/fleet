@@ -40,6 +40,7 @@ import yaml
 
 from ..models import Device
 from ..state import access as acl
+from ..state import untrusted
 from ..state import invites as invites_mod
 from ..state import inventory as inv
 from ..ssh.cmd import Endpoint, classify_route, local_platform, local_shell_argv, \
@@ -95,7 +96,7 @@ def join_url(sync_url: str) -> str:
 # ------------------------------------------------------------------- the request
 
 def _request_body(invite_id: str, sealed: str, mac: str) -> str:
-    return yaml.safe_dump({"kind": "fleet-join", "protocol": JOIN_PROTOCOL,
+    return untrusted.dump({"kind": "fleet-join", "protocol": JOIN_PROTOCOL,
                            "invite": invite_id, "mac": mac, "sealed": sealed},
                           sort_keys=False)
 
@@ -193,7 +194,7 @@ def handle(raw: str, *, peer: str = "", center_url: str = "") -> tuple[int, str]
         return 503, "not the center\n"
 
     try:
-        req = yaml.safe_load(raw) or {}
+        req = untrusted.load(raw) or {}
     except yaml.YAMLError:
         return 400, "unreadable join request\n"
     if not isinstance(req, dict) or req.get("kind") != "fleet-join":
@@ -452,7 +453,11 @@ def join(code: str, *, name: str = "", ssh_command: str = "") -> dict:
                          "update fleet on the center and try again")
 
     acl.pin_center_pubkey(center_pub)
-    _, changes = inv.update(lambda current: inv.merge(current, incoming, authoritative=True))
+    from ..state import clock
+
+    clock.note_center_time(note.get("sent_at", 0))
+    _, changes = inv.update(lambda current: inv.merge_from_center(
+        current, incoming, sent_at=note.get("sent_at", 0)))
     if note["telemetry"]:
         record_relayed(note["telemetry"])
     acl.note_center_seen()
@@ -462,6 +467,13 @@ def join(code: str, *, name: str = "", ssh_command: str = "") -> dict:
     # Found by key, not id: the center may have given us an id of its own (see
     # `_stable_id`), and the key is the one thing both sides agree this machine is.
     me = next((d for d in inv.live(incoming) if d.pubkey.strip() == pub.strip()), None)
+    if me is not None and not me.id.startswith(("key:", "net:")):
+        # The center may have kept this machine apart from another with the same
+        # machine-id -- a clone of one image -- under an id of its own. Remembered here,
+        # so this machine's fleet agrees about which machine it is.
+        from . import identity
+
+        identity.adopt_id(me.id)
     joined_as = me.name if me else dev.name
     eps = inv.endpoints_of(me) if me else []
     reach = eps[0] if eps else None

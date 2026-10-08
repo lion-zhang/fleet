@@ -35,6 +35,8 @@ def _sandbox_fleet_state(tmp_path_factory, monkeypatch):
     from fleet.state import invites
     monkeypatch.setattr(invites, "INVITES_PATH", root / "access-invites.yaml", raising=False)
     monkeypatch.setattr(store, "DB_PATH", root / "cache.db", raising=False)
+    from fleet.state import clock
+    monkeypatch.setattr(clock, "OFFSET_PATH", root / "clock.yaml", raising=False)
     monkeypatch.setattr(config, "FLEET_KEY", root / "id_ed25519", raising=False)
     monkeypatch.setattr(config, "CONFIG_PATH", root / "config.yaml", raising=False)
     monkeypatch.setattr(config, "INVENTORY_PATH", root / "inventory.yaml", raising=False)

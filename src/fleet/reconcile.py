@@ -93,8 +93,18 @@ def save_ledger(ledger: dict[str, EdgeState], path: Path | None = None) -> None:
     with turn(path):
         current = _parse(path) if base is not None else Ledger()
         for k, st in ledger.items():
-            if base is None or base.get(k) != asdict(st):
-                current[k] = st
+            if base is not None and base.get(k) == asdict(st):
+                continue                   # not ours to write: we changed nothing
+            theirs = current.get(k)
+            if (base is not None and theirs is not None
+                    and asdict(theirs) != base.get(k)
+                    and theirs.last_attempt_at >= st.last_attempt_at):
+                # Someone else changed this edge after we read it, and looked at the
+                # machine no earlier than we did. A sweep holds its copy for minutes;
+                # saved over a grant and revoke made meanwhile, it wrote back "removed"
+                # for a key that was there again -- and nothing ever looked again.
+                continue
+            current[k] = st
         for k in (base or {}):
             if k not in ledger:
                 current.pop(k, None)       # this copy dropped it
@@ -117,13 +127,13 @@ def plan(acc: Access, ledger: dict[str, EdgeState]) -> dict[str, EdgeState]:
     for edge in wanted:
         st = out.setdefault(_key(edge), EdgeState(pending_since=now))
         if st.desired != "present":
-            st.desired, st.pending_since = "present", now
+            st.desired, st.pending_since, st.attempts = "present", now, 0
         # refreshed while we still know it, so a later revoke does not need the pin
         if device := (acc.keys.get(edge[1]) or {}).get("device_id"):
             st.dst_device = device
     for k, st in out.items():
         if tuple(k.split(">")) not in wanted and st.desired != "absent":
-            st.desired, st.pending_since = "absent", now
+            st.desired, st.pending_since, st.attempts = "absent", now, 0
     return out
 
 

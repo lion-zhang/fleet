@@ -111,6 +111,8 @@ class Snapshot:
     ts: int = field(default_factory=lambda: int(time.time()))
     hostname: str = ""
     machine_id: str = ""
+    # The id fleet assigned a clone (see identity.DEVICE_ID_FILE); empty almost always.
+    device_id: str = ""
     os: str = ""
     # `uname -s`: Linux | Darwin | Windows. A clean token both payloads have always sent
     # and the parser used to throw away, leaving OS family to be guessed from `os` free

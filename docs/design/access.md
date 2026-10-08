@@ -147,7 +147,9 @@ weakening that: it is the center speaking first, just earlier, and out of band.
 - **The joiner describes itself, not the fleet.** The center records one machine from a
   join — no role, no other records, no identity paths that only mean something on the
   joiner — under a name the invite chose or that is made unique. A machine-id that is
-  already pinned to another key is refused, as `enroll` refuses everywhere.
+  already pinned to another key is refused, as `enroll` refuses everywhere — unless the
+  joiner also reports another hostname: then it is a clone of the same image, kept apart
+  under an id of its own, which the joiner adopts.
 - **Stored as a hash.** `access-invites.yaml` holds sha256 of each secret, which is also
   the MAC key. Reading it grants what the invite grants, for minutes, on the one machine
   whose compromise is total anyway.
@@ -161,8 +163,11 @@ they are not built.
 
 Nothing that already works stops working when the center is closed: grants are keys in
 `authorized_keys`, enforced by sshd, with fleet nowhere in the connection path. Grants and
-revokes that could not be applied stay in the ledger as desired-but-not-observed, and
-are applied by the next `fleet sync` on the center; nothing retries them on a timer.
+revokes that could not be applied stay in the ledger as desired-but-not-observed. The
+listening center retries them (`access_retry_s`, five minutes, doubling per miss up to
+half an hour), and `fleet sync` on the center retries at once. The timer only applies
+what a person already decided: it enrols nothing and hands nothing round, which stay
+with a deliberate `fleet sync`, and it does nothing while a handover is pending.
 
 A stale cache **warns and proceeds, never denies**. A center off for a fortnight is a
 laptop on holiday, and treating that as revocation would turn a sync outage into a fleet

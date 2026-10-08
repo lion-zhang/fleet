@@ -248,6 +248,7 @@ def test_a_quiet_center_is_a_note_not_a_refusal(tmp_path):
 
     p = tmp_path / "access-cache.yaml"
     assert staleness_note(p) == "", "never contacted: say nothing, do not nag"
+    access.pin_center_pubkey("ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIOMqqnkVzrm0SdG6UOoqKLsabgH5C9okWi0dh2l9GKJl center", p)
     access.note_center_seen(p)
     assert staleness_note(p) == "", "fresh"
 

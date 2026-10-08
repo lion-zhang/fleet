@@ -7,6 +7,7 @@ The two things missing were the ones you actually reach for.
 from __future__ import annotations
 
 import subprocess
+from pathlib import Path
 
 import pytest
 from typer.testing import CliRunner
@@ -33,6 +34,12 @@ def fleet_of(tmp_path, monkeypatch):
         Device(id="id:nas", name="ds720", kind=Kind.APPLIANCE),      # no endpoint
     ], inv.INVENTORY_PATH)
 
+    # POSIX unless a test says otherwise, on every OS the suite runs on: on a Windows
+    # runner the local update otherwise goes to the background runner, for real.
+    monkeypatch.setattr(cli, "local_platform", lambda: "posix")
+    monkeypatch.setattr(install, "local_platform", lambda: "posix")
+    monkeypatch.setattr(install, "update_windows_in_background",
+                        lambda script: pytest.fail("started a real background update"))
     remote, local = [], []
     monkeypatch.setattr(cli, "run_installer",
                         lambda ep, script, **kw: remote.append(ep.target) or (0, "ok"))
@@ -172,3 +179,43 @@ def test_running_from_a_checkout_skips_this_machine_rather_than_failing(fleet_of
     r = runner.invoke(cli.app, ["update"])
     assert r.exit_code == 0
     assert "no installed fleet" in r.output
+
+
+# ---- Windows: this machine is updated after this process exits -------------------------
+# The installer used to run as fleet's own child, and its `taskkill fleet.exe` killed the
+# `fleet update` that started it while python.exe kept the files uv had to replace.
+
+def test_on_windows_this_machine_is_updated_last_and_in_the_background(fleet_of, monkeypatch):
+    runner, remote, local = fleet_of
+    monkeypatch.setattr(cli, "local_platform", lambda: "windows")
+    order = []
+    monkeypatch.setattr(cli, "run_installer",
+                        lambda ep, script, **kw: order.append(ep.target) or (0, "ok"))
+    monkeypatch.setattr(install, "update_windows_in_background",
+                        lambda script: order.append(("here", script)) or (Path("C:/update.log"), True))
+    r = runner.invoke(cli.app, ["update", "--all"])
+    assert r.exit_code == 0, r.output
+    assert not local, "never as our child"
+    assert order[0] == "1.2.3.4" and order[-1][0] == "here", "the others first"
+    assert "$ErrorActionPreference" in order[-1][1], "the PowerShell installer"
+    assert "in the background" in r.output and "2 updated" in r.output
+
+
+def test_the_windows_runner_waits_for_fleet_then_reports_how_it_ended(tmp_path):
+    text = install._windows_update_runner(tmp_path / "it's.ps1", [123, 456])
+    assert "$id = 123" in text and "456" not in text.split("waiting for fleet")[0]
+    # up to the fleet.exe that started us and no further: whoever ran fleet.exe -- an
+    # agent, a test harness -- may be waiting for us, and waiting for it never ends
+    assert "'^fleet\\.exe$'" in text and "$chain.Count -lt 3" in text
+    assert "Wait-Process" in text
+    assert "it''s.ps1" in text, "the path is quoted for PowerShell"
+    assert text.rstrip().endswith(f'"{install.UPDATE_EXIT_MARK} $LASTEXITCODE"')
+
+
+def test_a_background_update_that_never_started_is_a_failure(fleet_of, monkeypatch):
+    runner, _, _ = fleet_of
+    monkeypatch.setattr(cli, "local_platform", lambda: "windows")
+    monkeypatch.setattr(install, "update_windows_in_background",
+                        lambda script: (Path("C:/f/update.log"), False))
+    r = runner.invoke(cli.app, ["update"])
+    assert r.exit_code == 1 and "did not start" in r.output, r.output

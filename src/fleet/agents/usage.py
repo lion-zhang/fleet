@@ -43,11 +43,17 @@ Anywhere. A name may be omitted where the obvious subject is the machine you are
 - `{cmd} ssh NAME` -- an interactive shell, exactly as plain ssh
 - `{cmd} access [NAME]` -- who may reach what, and what is still pending
 - `{cmd} center --json` -- `role` (center or member), who decides, and when it was last heard from
-- `{cmd} center --pubkey` -- the key to pre-place on a host that takes no password;
-  works with nothing reachable, which is the point
+- `{cmd} center --pubkey` -- on the center: the key to pre-place on a host that takes
+  no password; works with nothing reachable, which is the point. On a member it prints
+  that member's own key, which the center does not use
 - `{cmd} center --export` -- the access list and pins, worth keeping off the machine
-- `{cmd} center --leave` -- take this machine out of the fleet. Needs nobody's
-  permission: you own the machine you are on
+- `{cmd} center --leave` -- take this machine out of the fleet (a member; the center
+  refuses -- it hands the role on or dissolves). Needs nobody's permission: you own the
+  machine you are on
+- `{cmd} uninstall` -- only when the user asks to remove fleet from this machine: leaves
+  its fleet, removes fleet from the agents here (this skill included) and the service;
+  `--purge` deletes fleet's files too. It refuses on the center of a fleet with other
+  machines in it. It prints the last step -- removing the program -- for the user to run
 - `{cmd} top` -- live view; needs a terminal, so not for an agent
 - `{cmd} update [NAME]` / `--all` -- deploy the newest fleet from git. It also
   rewrites this description on each machine, so what you read here stays current;
@@ -83,7 +89,8 @@ where to run them: report that to the user, nothing is queued.
 
 - `{cmd} access NAME --allow MACHINE` -- grant, and it is applied on the spot, as the
   account NAME is reached as. `--user` names another, since a box can answer as both
-  root@ and ubuntu@. A machine that is off stays pending until `{cmd} sync` on the center
+  root@ and ubuntu@. A machine that is off stays pending; the center applies it once the
+  machine is back (`{cmd} sync` on the center tries at once).
 - `{cmd} access NAME --deny MACHINE` -- revoke, for every account unless `--user` names one
 - `{cmd} sync` -- on the center, the sweep: enrol anything not yet enrolled, install and
   remove keys, and collect telemetry. On a member, fetch a fresh copy from the center
@@ -138,10 +145,13 @@ where to run them: report that to the user, nothing is queued.
 - **Ask rather than guess.** These commands need a machine name, sometimes a user,
   sometimes a whole ssh command. If the request does not say, ask -- do not infer a
   machine from a partial name or from whatever was being discussed. `{cmd} rm`,
-  `{cmd} access --deny`, `{cmd} center --dissolve` and `{cmd} update --all` are not
-  undone by running them again.
-- A row in `{cmd} access` that is not `present` is a grant that has not reached its
-  target yet, not one that failed. Say so rather than retrying.
+  `{cmd} access --deny`, `{cmd} center --dissolve`, `{cmd} uninstall` and
+  `{cmd} update --all` are not undone by running them again.
+- A row in `{cmd} access` has `state` present, pending or revoking. `pending`: a grant
+  that has not reached its machine yet, not one that failed. `revoking`: the key is
+  still on the machine. A listening center retries both by itself; say so rather than
+  retrying. But if `last_error` stays the same over many `attempts` -- a wrong
+  `--user`, an account that does not exist -- it will not land: report it.
 - Reading the fleet refreshes it. `{cmd} ls` and `{cmd} show` pull from the center when
   this machine's copy has gone stale, so you do not need `{cmd} sync` to see current
   data -- and a center that is down costs you freshness, never the command.
