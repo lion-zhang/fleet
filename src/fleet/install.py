@@ -99,13 +99,20 @@ trap 'PATH="$HOME/.local/bin:$PATH" fleet service start >/dev/null 2>&1 || true'
 case "$MODE" in
   uv)   uv tool upgrade --quiet agents-fleet ;;
   pipx) pipx upgrade agents-fleet >/dev/null ;;
-  old)  uv tool uninstall fleet-broker >/dev/null 2>&1 || true
-        uv tool uninstall agent-fleet >/dev/null 2>&1 || true
-        uv tool install --quiet agents-fleet ;;
-  *)    uv tool uninstall fleet-broker >/dev/null 2>&1 || true
-        uv tool uninstall agent-fleet >/dev/null 2>&1 || true
-        uv tool install --force --reinstall-package agents-fleet --quiet "$DIR" ;;
+  old)  uv tool install --force --quiet agents-fleet ;;
+  *)    uv tool install --force --reinstall-package agents-fleet --quiet "$DIR" ;;
 esac
+# A tool from before the rename goes only now, with the new one in place: uninstalled
+# first, an install that then failed left the machine with no fleet at all. uv deletes
+# the `fleet` command it once wrote whoever owns it now, so the new one's is put back.
+if uv tool list 2>/dev/null | grep -qE '^(fleet-broker|agent-fleet) '; then
+  uv tool uninstall fleet-broker >/dev/null 2>&1 || true
+  uv tool uninstall agent-fleet >/dev/null 2>&1 || true
+  if [ ! -x "$(uv tool dir --bin 2>/dev/null)/fleet" ]; then
+    if [ "$MODE" = old ]; then uv tool install --force --quiet agents-fleet
+    else uv tool install --force --quiet "$DIR"; fi
+  fi
+fi
 
 # Put fleet on the PATH of a terminal the user opens later, not just this script's.
 # Without it fleet installs correctly and then is not there when they type its name --
@@ -425,14 +432,26 @@ if ($mode -eq 'uv') {{
   uv tool upgrade --quiet agents-fleet
 }} elseif ($mode -eq 'pipx') {{
   pipx upgrade agents-fleet | Out-Null
-}} elseif ($mode -eq 'old') {{
-  try {{ uv tool uninstall fleet-broker 2>&1 | Out-Null }} catch {{ }}
-  try {{ uv tool uninstall agent-fleet 2>&1 | Out-Null }} catch {{ }}
-  uv tool install --quiet agents-fleet
 }} else {{
-  try {{ uv tool uninstall fleet-broker 2>&1 | Out-Null }} catch {{ }}
-  try {{ uv tool uninstall agent-fleet 2>&1 | Out-Null }} catch {{ }}
-  uv tool install --force --reinstall-package agents-fleet --quiet $dir
+  # The new one first, and nothing removed unless it worked: uninstalled first, a
+  # failed install left the machine with no fleet at all.
+  if ($mode -eq 'old') {{ uv tool install --force --quiet agents-fleet }}
+  else {{ uv tool install --force --reinstall-package agents-fleet --quiet $dir }}
+  if ($LASTEXITCODE -ne 0) {{ throw 'could not install agents-fleet; the fleet that was here is left as it was' }}
+  # A tool from before the rename goes now. uv deletes the `fleet` command it once wrote,
+  # whoever owns it now, so the new one's is put back.
+  $listed = ''
+  try {{ $listed = (& uv tool list 2>$null) -join "`n" }} catch {{ }}
+  if ($listed -match '(?m)^(fleet-broker|agent-fleet) ') {{
+    try {{ uv tool uninstall fleet-broker 2>&1 | Out-Null }} catch {{ }}
+    try {{ uv tool uninstall agent-fleet 2>&1 | Out-Null }} catch {{ }}
+    $b = ''
+    try {{ $b = ((& uv tool dir --bin 2>$null) | Out-String).Trim() }} catch {{ }}
+    if (-not ($b -and (Test-Path (Join-Path $b 'fleet.exe')))) {{
+      if ($mode -eq 'old') {{ uv tool install --force --quiet agents-fleet }}
+      else {{ uv tool install --force --quiet $dir }}
+    }}
+  }}
 }}
 }} finally {{
   $fleet = Find-Fleet

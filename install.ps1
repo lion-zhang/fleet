@@ -72,7 +72,9 @@ function Install-FleetCore($uv, $kind) {
     }
     $source = if ($env:FLEET_SOURCE) { $env:FLEET_SOURCE } else { 'agents-fleet' }
     # FLEET_FORCE_CORE asked for this copy to take over the `fleet` command from another.
-    $force = if ($kind -eq 'force') { @('--force') } else { @() }
+    # And over a tool from before the rename, which holds the `fleet` command until it
+    # is uninstalled -- only once this install has worked.
+    $force = if ($kind -eq 'force' -or $kind -eq 'old') { @('--force') } else { @() }
     Write-Host 'installing fleet ...'
     if ($env:FLEET_SOURCE) {
         & $uv tool install --upgrade @force --quiet $source
@@ -158,13 +160,6 @@ function Install-Fleet {
     } elseif ($kind -eq 'other') {
         Write-Host "core: $(& $fleet --version) at $fleet, keeping it"
     } else {
-        # Machines from before a rename carry it as `fleet-broker` or `agent-fleet`; two
-        # tools must not both claim the `fleet` command. A running fleet.exe holds its
-        # own files open, so the background service is stopped first.
-        if ($kind -eq 'old') {
-            & $uv tool uninstall fleet-broker 2>&1 | Out-Null
-            & $uv tool uninstall agent-fleet 2>&1 | Out-Null
-        }
         # A center's listener is pythonw.exe running from the tool's own folder, not a
         # `fleet` process: stopping only fleet.exe left it holding the files uv replaces,
         # and the upgrade failed half way with "Access is denied". The task is ended, the
@@ -182,6 +177,16 @@ function Install-Fleet {
         }
         try {
             Install-FleetCore $uv $kind
+            # Machines from before a rename carry it as `fleet-broker` or `agent-fleet`;
+            # two tools must not both claim the `fleet` command. Removed only once the
+            # new one is in -- uninstalled first, a failed install left no fleet at all --
+            # and the `fleet` command it takes with it put back.
+            if ($kind -eq 'old') {
+                & $uv tool uninstall fleet-broker 2>&1 | Out-Null
+                & $uv tool uninstall agent-fleet 2>&1 | Out-Null
+                $b = ((& $uv tool dir --bin) | Out-String).Trim()
+                if (-not (Test-Path (Join-Path $b "fleet$exe"))) { Install-FleetCore $uv 'old' }
+            }
         } finally {
             if ($restart) { try { & $restart service start 2>&1 | Out-Null } catch { } }
         }

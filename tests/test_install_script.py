@@ -83,3 +83,51 @@ def test_installing_the_command_only_needs_no_code(tmp_path):
     p = run(tmp_path, "--no-setup", join="")
     assert "set but empty" not in p.stderr
     assert "mode: none" in p.stdout
+
+
+def _old_tool_world(tmp_path: Path, *, install_fails: bool) -> tuple[dict, Path, Path]:
+    """A machine whose `fleet` is a uv tool from before the rename, and a uv that does
+    what uv does to it: `tool uninstall` deletes the `fleet` command it once wrote."""
+    home, bin_, tools = tmp_path / "home", tmp_path / "bin", tmp_path / "tools"
+    for d in (home, bin_, tools):
+        d.mkdir(exist_ok=True)
+    log, gone = tmp_path / "uv.log", tmp_path / "old-gone"
+    (tools / "fleet").write_text("#!/bin/sh\necho fleet 0.4.0\n")
+    (tools / "fleet").chmod(0o755)
+    (bin_ / "uv").write_text(f"""#!/bin/sh
+echo "uv $*" >> {log}
+case "$1 $2" in
+  "tool list") [ -f {gone} ] || printf 'fleet-broker v0.4.0\\n- fleet\\n' ;;
+  "tool dir") echo {tools} ;;
+  "tool install") {'exit 1' if install_fails else ''}
+    printf '#!/bin/sh\\necho fleet 0.5.1\\n' > {tools}/fleet; chmod +x {tools}/fleet ;;
+  "tool uninstall") rm -f {tools}/fleet; touch {gone} ;;
+esac
+exit 0
+""")
+    (bin_ / "uv").chmod(0o755)
+    env = {"HOME": str(home), "PATH": f"{bin_}:/usr/bin:/bin"}
+    return env, log, tools / "fleet"
+
+
+def test_an_old_tool_is_replaced_only_once_the_new_one_is_in(tmp_path):
+    env, log, fleet = _old_tool_world(tmp_path, install_fails=False)
+    p = subprocess.run([SH, str(REPO / "install.sh"), "--no-setup"], env=env,
+                       capture_output=True, text=True, timeout=60)
+    calls = log.read_text().splitlines()
+    first_install = next(i for i, c in enumerate(calls) if c.startswith("uv tool install"))
+    uninstall = next(i for i, c in enumerate(calls) if c.startswith("uv tool uninstall"))
+    assert first_install < uninstall, calls
+    assert "--force" in calls[first_install]
+    # and the `fleet` command the uninstall took with it is back
+    assert fleet.exists() and "0.5.1" in fleet.read_text(), (p.stdout, p.stderr, calls)
+
+
+def test_a_failed_install_leaves_the_old_fleet_working(tmp_path):
+    """Uninstalled first, an install that then failed left no fleet on the machine."""
+    env, log, fleet = _old_tool_world(tmp_path, install_fails=True)
+    p = subprocess.run([SH, str(REPO / "install.sh"), "--no-setup"], env=env,
+                       capture_output=True, text=True, timeout=60)
+    assert p.returncode != 0
+    assert not any(c.startswith("uv tool uninstall") for c in log.read_text().splitlines())
+    assert fleet.exists() and "0.4.0" in fleet.read_text()

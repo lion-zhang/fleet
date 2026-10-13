@@ -94,8 +94,21 @@ def test_an_install_from_before_the_rename_moves_to_the_release(tmp_path, old):
     assert p.returncode == 0, p.stderr
     assert "kept as it is" not in p.stdout
     assert f"uv tool uninstall {old}" in calls
-    assert "uv tool install --quiet agents-fleet" in calls
+    install = calls.index("uv tool install --force --quiet agents-fleet")
+    assert install < calls.index(f"uv tool uninstall {old}"), "the new one first"
     assert not (tmp_path / ".local" / "share" / "fleet").exists(), "nothing cloned"
+
+
+def test_an_old_install_is_left_working_when_the_new_one_fails(tmp_path):
+    """Found on a Windows runner: the old tool was uninstalled first, the install that
+    followed failed, and the machine was left with no fleet at all."""
+    b, _ = _sandbox(tmp_path, receipt=None, old="fleet-broker")
+    uv = (b / "uv").read_text().replace('case "$1 $2"',
+                                        '[ "$1 $2" = "tool install" ] && exit 1\ncase "$1 $2"')
+    (b / "uv").write_text(uv)
+    p, calls = _run(tmp_path, b)
+    assert p.returncode != 0
+    assert "tool uninstall" not in calls, "the old one stays, and still works"
 
 
 def test_an_old_tool_built_from_your_own_checkout_is_kept(tmp_path):

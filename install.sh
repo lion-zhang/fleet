@@ -118,7 +118,9 @@ install_core() {
     fi
     say "installing fleet ..."
     # --force-core asked for this copy to take over the `fleet` command from another.
-    force=""; [ "$kind" = force ] && force="--force"
+    # And over a tool from before the rename: it holds the `fleet` command until it is
+    # uninstalled, which happens only once this install has worked.
+    force=""; case "$kind" in force|old) force="--force" ;; esac
     if [ -n "${FLEET_SOURCE:-}" ]; then
         "$uv" tool install --upgrade $force --quiet "$source" </dev/null || die "could not install $source"
     else
@@ -221,12 +223,6 @@ main() {
         other)
             say "core: $("$found" --version </dev/null 2>/dev/null) at $found, keeping it" ;;
         *)
-            # Machines from before a rename carry it as `fleet-broker` or `agent-fleet`;
-            # two tools must not both claim the `fleet` command.
-            if [ "$kind" = old ]; then
-                "$uv" tool uninstall fleet-broker >/dev/null 2>&1 </dev/null || true
-                "$uv" tool uninstall agent-fleet >/dev/null 2>&1 </dev/null || true
-            fi
             # A center's listener runs from the files being replaced: stopped first, and
             # started again however this ends -- or it went on running the old version,
             # loading the new one's modules into it as it went.
@@ -236,6 +232,17 @@ main() {
                 trap '"$restart_with" service start </dev/null >/dev/null 2>&1 || true' EXIT
             fi
             install_core "$uv" "$kind"
+            # Machines from before a rename carry it as `fleet-broker` or `agent-fleet`;
+            # two tools must not both claim the `fleet` command. Removed only now that
+            # the new one is in: uninstalled first, a failed install left the machine
+            # with no fleet at all. Removing it takes the `fleet` command with it --
+            # uv deletes what it once wrote there, whoever owns it now -- so the new
+            # tool's is put back.
+            if [ "$kind" = old ]; then
+                "$uv" tool uninstall fleet-broker >/dev/null 2>&1 </dev/null || true
+                "$uv" tool uninstall agent-fleet >/dev/null 2>&1 </dev/null || true
+                [ -x "$("$uv" tool dir --bin 2>/dev/null </dev/null)/fleet" ] || install_core "$uv" old
+            fi
             found="" ;;
     esac
     if [ -n "$found" ]; then
