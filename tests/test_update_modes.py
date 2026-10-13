@@ -17,9 +17,10 @@ from fleet.install import install_script
 pytestmark = pytest.mark.skipif(sys.platform == "win32", reason="POSIX sh")
 
 
-def _sandbox(tmp_path, *, receipt: str | None, pipx: bool = False):
+def _sandbox(tmp_path, *, receipt: str | None, pipx: bool = False, old: str = ""):
     """Stubs for uv, pipx, fleet and crontab. `receipt` is uv's record of how fleet was
-    installed; None means uv has no fleet tool."""
+    installed; None means uv has no fleet tool. `old` names a tool from before a rename
+    (`fleet-broker`, `agent-fleet`) that uv lists instead."""
     b = tmp_path / "bin"
     b.mkdir()
     log = tmp_path / "calls.log"
@@ -27,7 +28,8 @@ def _sandbox(tmp_path, *, receipt: str | None, pipx: bool = False):
     if receipt is not None:
         (tooldir / "agents-fleet").mkdir(parents=True)
         (tooldir / "agents-fleet" / "uv-receipt.toml").write_text(receipt, encoding="utf-8")
-    listing = "agents-fleet v0.5.0\\n- fleet" if receipt is not None else ""
+    listing = ("agents-fleet v0.5.0\\n- fleet" if receipt is not None
+               else f"{old} v0.4.0\\n- fleet" if old else "")
     (b / "uv").write_text(
         f'#!/bin/sh\necho "uv $@" >> {log}\n'
         f'case "$1 $2" in "tool list") printf "{listing}\\n";; "tool dir") echo {tooldir};; esac\n')
@@ -79,6 +81,32 @@ def test_fleet_installed_some_other_way_is_kept(tmp_path):
     p, calls = _run(tmp_path, b)
     assert p.returncode == 0, p.stderr
     assert "installed another way" in p.stdout and "tool install" not in calls
+    # Said plainly: which version is there, and that it was not touched.
+    assert "fleet 0.5.0" in p.stdout and "NOT updated" in p.stdout
+
+
+@pytest.mark.parametrize("old", ["fleet-broker", "agent-fleet"])
+def test_an_install_from_before_the_rename_moves_to_the_release(tmp_path, old):
+    """Found on a real fleet: with no clone of fleet on the machine, a `fleet-broker` tool
+    fell through to "kept as it is" and `fleet update` left it on 0.4 for good."""
+    b, _ = _sandbox(tmp_path, receipt=None, old=old)
+    p, calls = _run(tmp_path, b)
+    assert p.returncode == 0, p.stderr
+    assert "kept as it is" not in p.stdout
+    assert f"uv tool uninstall {old}" in calls
+    assert "uv tool install --quiet agents-fleet" in calls
+    assert not (tmp_path / ".local" / "share" / "fleet").exists(), "nothing cloned"
+
+
+def test_an_old_tool_built_from_your_own_checkout_is_kept(tmp_path):
+    b, _ = _sandbox(tmp_path, receipt=None, old="agent-fleet")
+    receipt = tmp_path / "tools" / "agent-fleet" / "uv-receipt.toml"
+    receipt.parent.mkdir(parents=True)
+    receipt.write_text('[tool]\nrequirements = [{ name = "agent-fleet", '
+                       'editable = "/home/me/src/fleet" }]\n', encoding="utf-8")
+    p, calls = _run(tmp_path, b)
+    assert p.returncode == 0, p.stderr
+    assert "kept as it is" in p.stdout and "tool install" not in calls
 
 
 def _origin(tmp_path):

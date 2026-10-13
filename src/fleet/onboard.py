@@ -44,18 +44,50 @@ def slugify(value: str) -> str:
 def _is_address(value: str) -> bool:
     """An IPv4 address, or something close enough that trimming it would be wrong."""
     parts = value.split(".")
-    return len(parts) == 4 and all(p.isdigit() for p in parts)
+    return (len(parts) == 4 and all(p.isdigit() for p in parts)) or ":" in value
+
+
+def _name_candidates(snap: Snapshot | None, ep: Endpoint):
+    """What a machine could be called, best first, each with where it came from.
+
+    The name you typed to reach it comes before the name it gives itself. A cloud VM's
+    hostname is whatever the image set -- `vm-0-8-ubuntu`, or the name of whoever built
+    the image -- while `oracle.tailXXXXXX.ts.net` is a name someone chose; ranking the
+    hostname first made `fleet add "ssh root@oracle..."` record a machine called `lion`.
+    Not for a rental's shared ssh gateway (`ssh2.vast.ai` names the gateway, not the
+    box), for localhost, or for an address, which is the last resort.
+    """
+    if snap and snap.vast_label:
+        yield snap.vast_label, "its vast.ai label"
+    target = ep.target or ""
+    if (target and not _is_address(target) and any(c.isalpha() for c in target)
+            and target.lower() not in ("localhost", "localhost.localdomain")
+            and not _RENTAL_HOST_RE.search(target)):
+        yield target, "the address you gave"
+    if snap and snap.hostname:
+        yield snap.hostname, "its hostname"
+    yield target, "the address you gave"
+
+
+def _first_label(cand: str) -> str:
+    # Trim an FQDN to its first label *before* slugifying. Doing it afterwards can never
+    # work: slugify turns every dot into a dash, so there is nothing left to split on --
+    # which is why a tailnet host came out as "box-tailXXXXXX-ts-net" rather than "box".
+    # An address is left whole, since the first label of 1.2.3.4 is not a name.
+    return slugify(cand.split(".", 1)[0] if cand and not _is_address(cand) else cand)
+
+
+def name_source(snap: Snapshot | None, ep: Endpoint) -> str:
+    """Where `suggest_name` took its name from, to say so when a machine is added."""
+    for cand, source in _name_candidates(snap, ep):
+        if _first_label(cand) not in ("", "device"):
+            return source
+    return ""
 
 
 def suggest_name(snap: Snapshot | None, ep: Endpoint, taken: set[str]) -> str:
-    for cand in ((snap.vast_label if snap else ""), (snap.hostname if snap else ""), ep.target):
-        # Trim an FQDN to its first label *before* slugifying. Doing it afterwards can
-        # never work: slugify turns every dot into a dash, so there is nothing left to
-        # split on -- which is why a tailnet host came out as
-        # "box-tailXXXXXX-ts-net" rather than "box". An address is left whole, since
-        # the first label of 1.2.3.4 is not a name.
-        head = cand.split(".", 1)[0] if cand and not _is_address(cand) else cand
-        base = slugify(head)
+    for cand, _ in _name_candidates(snap, ep):
+        base = _first_label(cand)
         if not base or base == "device":
             continue
         name, n = base, 2

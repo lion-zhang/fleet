@@ -106,4 +106,4 @@ def test_every_install_and_update_refreshes_the_skills():
                                     update_only=update_only)
             assert "setup --refresh" in script, (platform, update_only)
             # and before the version line, which is what the caller reports
-            assert script.index("setup --refresh") < script.index("--version")
+            assert script.index("setup --refresh") < script.rindex("--version")

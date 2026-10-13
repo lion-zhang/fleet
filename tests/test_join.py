@@ -680,3 +680,59 @@ def test_a_clone_that_joins_learns_the_id_it_was_given(joining, monkeypatch):
     monkeypatch.setattr(identity, "adopt_id", adopted.append)
     join_mod.join(_code(f))
     assert adopted == ["id:box:box-clone"]
+
+
+# ------------------------------------------------ the same machine, back with a new key
+
+def _rebuilt_box(f, *, grants: int = 2):
+    """`box` is pinned with its old key and holds grants; the same machine, reinstalled,
+    now joins with the joiner's key (a new one)."""
+    from fleet import reconcile as rec
+
+    with being(f["c"]):
+        acc = acl.load()
+        old = next(fp for fp, m in acc.keys.items() if m.get("name") == "box")
+        for n in range(grants):
+            acc.allow.append(acl.Edge(src=old if n % 2 == 0 else acc.center,
+                                      dst=acc.center if n % 2 == 0 else old, user="root"))
+        acl.save(acc)
+        ledger = rec.plan(acc, rec.Ledger())
+        rec.save_ledger(ledger)
+    return old
+
+
+def test_a_rebuilt_machine_is_told_what_its_new_key_breaks_and_how_to_allow_it(fleet_of_two):
+    """Found on a real fleet: a reinstalled member came back with a new key and its four
+    grants went on naming the old one -- nothing said so until a path refused."""
+    f = fleet_of_two
+    old = _rebuilt_box(f, grants=3)
+    invite, secret = _invite(f)                                   # not naming box
+    code, body = _ask(f, _request(f, invite, secret, dev=_me("box", "id:box")))
+    assert code == 409
+    assert "different key" in body and "3 grant(s)" in body and "fleet invite box" in body
+    with being(f["c"]):
+        assert old in acl.load().keys                             # nothing changed
+
+
+def test_invited_by_name_it_comes_back_with_its_grants_on_the_new_key(fleet_of_two):
+    from fleet import reconcile as rec
+
+    f = fleet_of_two
+    old = _rebuilt_box(f, grants=2)
+    invite, secret = _invite(f, name="box")
+    code, body = _ask(f, _request(f, invite, secret, dev=_me("box", "id:box")))
+    assert code == 200, body
+    with being(f["c"]):
+        acc = acl.load()
+        new = acl.fingerprint(f["jpub"])
+        assert old not in acc.keys and acc.keys[new]["name"] == "box"
+        assert acc.keys[new]["device_id"] == "id:box"
+        assert acl.grants_of(acc, [new]) == 2 and acl.grants_of(acc, [old]) == 0
+        ledger = rec.plan(acc, rec.load_ledger())
+    # Keys the old one had on other machines are now unwanted, and will be removed;
+    # nothing is left wanting to remove blocks from the rebuilt machine itself.
+    assert all(st.desired == "absent" for k, st in ledger.items() if k.startswith(old))
+    assert not any(k.split(">")[1] == old for k in ledger)
+    assert all(st.desired == "present" for k, st in ledger.items() if new in k)
+    note = acl.unseal(body, acl.claimed_signer(body))
+    assert note["claims"]["rekeyed"]["grants"] == 2

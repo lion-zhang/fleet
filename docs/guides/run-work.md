@@ -13,6 +13,13 @@ fleet ssh gpu-box                        # an interactive shell, as with plain s
 fleet ssh a -- 'cd ~/proj && make test'  # by alias; quote anything with && or |
 ```
 
+**Put the remote command in single quotes.** Your own shell reads the command before
+fleet does, and expands `$HOME`, `${VAR}` and a leading `~` with *this* machine's values.
+PowerShell does it even inside double quotes, so from Windows `fleet ssh gpu-box -- ls
+"$HOME"` asks a Linux box about `C:\Users\you`. In single quotes the command reaches the
+machine as you typed it, and that machine expands it. fleet warns when a command bound
+for a Linux or macOS machine contains your Windows home folder.
+
 `fleet ssh` finds the machine's address and the right key, so the agent needs neither
 and never builds an `ssh` command by hand. It works on every
 OS: on a Windows machine the command goes to its shell as it is, and the remote

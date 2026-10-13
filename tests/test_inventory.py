@@ -195,3 +195,25 @@ def test_a_trimmed_name_still_avoids_collisions():
     from fleet.onboard import suggest_name
 
     assert suggest_name(None, Endpoint(target="box.tailXXXXXX.ts.net"), {"box"}) == "box-2"
+
+
+def test_the_name_you_typed_beats_the_hostname_the_image_shipped_with():
+    """Found on a real fleet: `fleet add "ssh root@oracle.tailXXXXXX.ts.net"` recorded the
+    machine as `lion`, and a Tencent VM as `vm-0-8-ubuntu` -- the hostnames their images
+    set, over the names someone chose to reach them by."""
+    from fleet.onboard import name_source
+
+    snap = parse_payload((FIX / "gpu-box.txt").read_text(encoding="utf-8"))   # hostname gpu-box
+    ep = Endpoint(target="oracle.tailXXXXXX.ts.net")
+    assert suggest_name(snap, ep, set()) == "oracle"
+    assert name_source(snap, ep) == "the address you gave"
+
+
+def test_an_address_or_a_rental_gateway_still_defers_to_the_hostname():
+    from fleet.onboard import name_source
+
+    snap = parse_payload((FIX / "gpu-box.txt").read_text(encoding="utf-8"))
+    for target in ("10.0.0.7", "ssh2.vast.ai", "connect.westb.seetacloud.com", "localhost",
+                   "fe80::1"):
+        assert suggest_name(snap, Endpoint(target=target), set()) == "gpu-box", target
+    assert name_source(snap, Endpoint(target="10.0.0.7")) == "its hostname"

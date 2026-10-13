@@ -119,7 +119,14 @@ function Install-Fleet {
     elseif ($join) { Write-Host 'mode: member -- joining the fleet whose center printed this code' }
     elseif ($was -eq 'center') { Write-Host 'mode: center (already; upgrading)' }
     elseif ($was -eq 'member') { Write-Host 'mode: member (already; upgrading)' }
-    else { Write-Host 'mode: center -- starting a new fleet on this machine' }
+    else {
+        # Loud, because PowerShell cannot tell "no code given" from "a code that got lost":
+        # assigning '' to $env:FLEET_JOIN deletes the variable. Skimmed past, this line
+        # was how a machine meant to join a fleet became the center of a second one.
+        Write-Host 'mode: center -- this machine will become the center of a NEW fleet' -ForegroundColor Yellow
+        Write-Host '  no join code was given. Meant to join an existing fleet? Afterwards, run' -ForegroundColor Yellow
+        Write-Host '  fleet join CODE here: it retires the new, empty fleet and joins that one.' -ForegroundColor Yellow
+    }
 
     # 1. uv, which installs and runs fleet.
     $uv = (Get-Command uv -ErrorAction SilentlyContinue).Source

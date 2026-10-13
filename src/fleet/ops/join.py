@@ -30,10 +30,12 @@ code it is handed stops being worth anything once used.
 from __future__ import annotations
 
 import base64
+import copy
 import getpass
 import ipaddress
 import json
 import subprocess
+import sys
 import threading
 
 import yaml
@@ -256,8 +258,6 @@ def _is_a_clone(acc, known: Device, fp: str, hostname: str) -> bool:
 def _admit(dev: Device, signer: str, fp: str, invite, *, peer: str,
            center_url: str, hostname: str = "") -> tuple[int, str]:
     """Pin, record and spend, against an access list read under the admission lock."""
-    from ..ops.sync import telemetry_to_relay
-
     try:
         acc = acl.load()
     except acl.AccessError as exc:
@@ -294,6 +294,40 @@ def _admit(dev: Device, signer: str, fp: str, invite, *, peer: str,
         return 400, ("could not tell how the center would reach this machine -- "
                      "join again with --ssh \"ssh user@address\"\n")
     user = record.endpoints[0].get("user") or "root"
+
+    # The same machine, back with a key it did not have before: reinstalled, or its
+    # fleet folder wiped. Its grants name the old key, so pinning the new one beside them
+    # left every one of them silently dead. Moved to the new key when the owner invited
+    # this machine by name; otherwise refused, saying what is at stake and how to allow it.
+    replaced = [k for k, m in acc.keys.items()
+                if known is not None and m.get("device_id") == known.id and k != fp]
+    # Never the center's own key: a machine claiming to be the center with another key
+    # is refused below, by the pin, whatever the invite says.
+    if replaced and acc.center not in replaced:
+        n = acl.grants_of(acc, replaced)
+        if invite.name != name:
+            return 409, (f"{name} is already in this fleet with a different key -- most "
+                         f"likely it was reinstalled, which makes a new one"
+                         + (f", and {n} grant(s) depend on the old key" if n else "")
+                         + f". To let it back in with its new key and move "
+                         + ("those grants" if n else "its pin") + " to it, run "
+                         f"`fleet invite {name}` on the center and join with that code\n")
+        try:
+            acl.rekey(copy.deepcopy(acc), known.id, signer, name=name, user=user)
+        except acl.AccessError as exc:
+            return 409, f"{exc}\n"
+        try:
+            invites_mod.redeem(invite.id, fp, name)
+        except invites_mod.InviteError as exc:
+            return 403, f"{exc}\n"
+        _, (old, moved) = acl.update(
+            lambda current: acl.rekey(current, known.id, signer, name=name, user=user))
+        _forget_edges_onto(old)
+        _say(f"{name} rejoined with a new key; {moved} grant(s) moved to it from "
+             f"{', '.join(k[:20] for k in old)}")
+        return _admitted(record, acc, center_url,
+                         claims={"rekeyed": {"replaced": old, "grants": moved}})
+
     try:
         acl.enroll(acc, name, signer, record.id, user=user)
     except acl.AccessError as exc:
@@ -316,6 +350,14 @@ def _admit(dev: Device, signer: str, fp: str, invite, *, peer: str,
     except acl.AccessError as exc:
         return 409, f"{exc}\n"
 
+    return _admitted(record, acc, center_url)
+
+
+def _admitted(record: Device, acc, center_url: str, *,
+              claims: dict | None = None) -> tuple[int, str]:
+    """Record the machine and answer it with the fleet, sealed."""
+    from ..ops.sync import telemetry_to_relay
+
     def admit(current):
         merged, _ = inv.upsert(current, record)
         if survivor := inv.find_exact(merged, record.id):
@@ -327,7 +369,29 @@ def _admit(dev: Device, signer: str, fp: str, invite, *, peer: str,
     merged, _ = inv.update(admit)
 
     return 200, acl.seal(inv.dumps(merged), telemetry=telemetry_to_relay(),
-                         center_url=center_url, fleet_id=acc.fleet_id)
+                         center_url=center_url, fleet_id=acc.fleet_id, claims=claims)
+
+
+def _forget_edges_onto(old: list[str]) -> None:
+    """Drop what the ledger knows about keys installed *on* the replaced key's machine.
+
+    Those edges now point at the new key, and the blocks they describe live in the
+    rebuilt machine's own authorized_keys -- the same file, under the same markers, that
+    the moved grants are about to write. Left to become "desired absent", a sweep could
+    remove a block right after installing it. Edges *from* the old key stay: they are
+    keys on other machines that nothing can use any more, and the sweep takes them off.
+    """
+    from .. import reconcile as rec
+
+    ledger = rec.load_ledger()
+    for k in [k for k in ledger if k.split(">")[1:2] and k.split(">")[1] in old]:
+        del ledger[k]
+    rec.save_ledger(ledger)
+
+
+def _say(line: str) -> None:
+    """Into the listener's log: the center's owner is not the one watching a join."""
+    print(f"fleet: {line}", file=sys.stderr, flush=True)
 
 
 # ------------------------------------------------------------------- the joiner
@@ -486,6 +550,8 @@ def join(code: str, *, name: str = "", ssh_command: str = "") -> dict:
         reached_as = f"{reach.user}@{reach.target}" if reach.user else reach.target
         if reach.port and reach.port != 22:
             reached_as += f" port {reach.port}"
+    rekeyed = (note.get("claims") or {}).get("rekeyed") or {}
     return {"fleet_id": fleet_id, "name": joined_as, "machines": len(inv.live(incoming)),
             "changed": changes, "reached_as": reached_as, "center_key_installed": ok,
-            "install_output": "" if ok else out.strip()[-300:]}
+            "install_output": "" if ok else out.strip()[-300:],
+            "rekeyed_grants": int(rekeyed.get("grants") or 0) if rekeyed else None}

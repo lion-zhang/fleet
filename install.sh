@@ -152,12 +152,17 @@ find_uv() {
 
 main() {
     join="${FLEET_JOIN:-}"
+    # Set but empty is not the same as unset: it is a member install whose code was lost
+    # on the way -- a quoting slip, a variable that never got filled in. Treated as
+    # unset, it started a new fleet on the machine that was meant to join one.
+    empty_join=""
+    if [ "${FLEET_JOIN+set}" = set ] && [ -z "$FLEET_JOIN" ]; then empty_join="FLEET_JOIN"; fi
     setup=1
     while [ $# -gt 0 ]; do
         case "$1" in
             --join) [ $# -ge 2 ] || die "--join needs the code \`fleet invite\` printed"
-                    join="$2"; shift 2 ;;
-            --join=*) join="${1#--join=}"; shift ;;
+                    join="$2"; [ -n "$2" ] || empty_join="--join"; shift 2 ;;
+            --join=*) join="${1#--join=}"; [ -n "$join" ] || empty_join="--join"; shift ;;
             --no-setup) setup=0; shift ;;
             --force-core) FLEET_FORCE_CORE=1; shift ;;
             -h|--help) usage; exit 0 ;;
@@ -175,6 +180,9 @@ main() {
     for f in "$(command -v fleet 2>/dev/null || true)" "$HOME/.local/bin/fleet"; do
         if [ -n "$f" ] && [ -x "$f" ]; then was=$(role_of "$f"); break; fi
     done
+    if [ -n "$empty_join" ] && [ -z "$join" ] && [ "$setup" = 1 ] && [ -z "$was" ]; then
+        die "$empty_join is set but empty, so there is no code to join with -- paste the code \`fleet invite\` printed, or leave $empty_join out to start a new fleet here"
+    fi
     if [ "$setup" = 0 ]; then
         say "mode: none -- installing the command only"
     elif [ -n "$join" ]; then
@@ -184,7 +192,7 @@ main() {
     elif [ "$was" = member ]; then
         say "mode: member (already; upgrading)"
     else
-        say "mode: center -- starting a new fleet on this machine"
+        say "mode: center -- starting a NEW fleet on this machine (no join code given; to join an existing fleet instead, rerun with --join CODE)"
     fi
 
     # 1. uv, which installs and runs fleet. Its own installer, unless it is here already.

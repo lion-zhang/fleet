@@ -165,3 +165,28 @@ def test_on_windows_ctrl_c_is_left_to_ssh(box, monkeypatch):
     assert r.exit_code == 0
     assert seen["handler"] is signal.SIG_IGN, "ignored while ssh runs"
     assert signal.getsignal(signal.SIGINT) == before, "and restored after"
+
+
+def test_a_home_folder_the_local_shell_put_in_is_pointed_out():
+    """Found from a Windows center: PowerShell turned `$HOME` and a leading `~` into
+    C:\\Users\\me before fleet ever saw the command, so a Linux box was asked about a
+    path that cannot exist there."""
+    from fleet.ssh.cmd import expanded_here
+
+    home = "C:\\Users\\zl172"
+    for sent in (["echo", "C:\\Users\\zl172"], ["C:\\Users\\zl172/bin_cleanup"],
+                 ["PATH=c:\\users\\zl172/.local/bin:$PATH", "fleet", "ls"]):
+        hint = expanded_here(sent, home=home, here_windows=True, there_windows=False)
+        assert "single quotes" in hint and home in hint, sent
+
+
+def test_nothing_is_said_when_nothing_was_expanded_or_it_cannot_matter():
+    from fleet.ssh.cmd import expanded_here
+
+    home = "C:\\Users\\zl172"
+    assert expanded_here(["echo", "$HOME"], home=home, here_windows=True,
+                         there_windows=False) == ""
+    # A Windows target has that path; a POSIX machine running fleet expands nothing odd.
+    assert expanded_here(["dir", home], home=home, here_windows=True, there_windows=True) == ""
+    assert expanded_here(["ls", "/home/me"], home="/home/me", here_windows=False,
+                         there_windows=False) == ""

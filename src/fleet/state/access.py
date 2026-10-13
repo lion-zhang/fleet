@@ -735,6 +735,48 @@ def enroll(acc: Access, name: str, pubkey: str, device_id: str = "",
     return fp
 
 
+def grants_of(acc: Access, fps) -> int:
+    """How many grants name any of these keys, as either end."""
+    fps = set(fps)
+    return sum(1 for e in acc.allow if e.src in fps or e.dst in fps)
+
+
+def rekey(acc: Access, device_id: str, pubkey: str, *, name: str,
+          user: str = "") -> tuple[list[str], int]:
+    """A machine already pinned, back with a new key: move its pin and grants to it.
+
+    Returns the keys it replaced and how many grants moved. Grants are keyed on the
+    fingerprint, so a reinstalled machine that was simply pinned again kept every grant
+    pointing at a key that no longer existed: the access list still said "present", and
+    nothing failed until someone tried the path. Only for an admission the owner asked
+    for by name (an invite naming this machine) -- a changed key is never taken quietly.
+    """
+    new = fingerprint(pubkey)
+    old = [fp for fp, m in acc.keys.items() if m.get("device_id") == device_id and fp != new]
+    if not old:
+        return [], 0
+    if acc.center in old:
+        raise AccessError("the center's own key cannot be replaced by a join")
+    moved, seen, kept = 0, set(), []
+    for e in acc.allow:
+        if e.src in old or e.dst in old:
+            e = Edge(src=new if e.src in old else e.src, dst=new if e.dst in old else e.dst,
+                     user=e.user, granted_at=e.granted_at, note=e.note)
+            moved += 1
+        if e.key not in seen:
+            seen.add(e.key)
+            kept.append(e)
+    acc.allow = kept
+    meta = dict(acc.keys[old[0]])
+    for fp in old:
+        acc.keys.pop(fp, None)
+    acc.keys[new] = {**meta, "name": name, "pubkey": canonical_pubkey(pubkey),
+                     "device_id": device_id,
+                     "user": check_user(user or meta.get("user") or "root"),
+                     "pinned_at": int(time.time())}
+    return old, moved
+
+
 # --------------------------------------------------------------------- handover
 
 def handover_record(acc: Access, successor_fp: str) -> str:

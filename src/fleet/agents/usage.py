@@ -39,7 +39,10 @@ Anywhere. A name may be omitted where the obvious subject is the machine you are
   least 24G. Matches two things at once -- what someone declared about a machine, and
   what the last probe measured. Never pick a machine by remembering its name
 - `{cmd} show [NAME] --json` -- full detail; no name means this machine
-- `{cmd} ssh NAME -- COMMAND` -- run a command there
+- `{cmd} ssh NAME -- 'COMMAND'` -- run a command there. Single quotes, always: the shell
+  you run fleet from expands `$VAR` and a leading `~` before fleet sees the command, so
+  `$HOME` would arrive as *this* machine's home -- PowerShell does it even inside double
+  quotes. Quoted, the machine that runs the command expands them
 - `{cmd} ssh NAME` -- an interactive shell, exactly as plain ssh
 - `{cmd} access [NAME]` -- who may reach what, and what is still pending
 - `{cmd} center --json` -- `role` (center or member), who decides, and when it was last heard from
@@ -92,6 +95,10 @@ where to run them: report that to the user, nothing is queued.
   root@ and ubuntu@. A machine that is off stays pending; the center applies it once the
   machine is back (`{cmd} sync` on the center tries at once).
 - `{cmd} access NAME --deny MACHINE` -- revoke, for every account unless `--user` names one
+- `{cmd} access [NAME] --prune` -- list fleet keys on machines that the list no longer
+  wants (a reinstalled machine's old key, a fleet rebuilt from scratch), and remove them
+  once the user agrees; `--yes` skips asking. Another fleet's keys are kept unless
+  `--fleet ID` names it. Show the user the list before removing anything
 - `{cmd} sync` -- on the center, the sweep: enrol anything not yet enrolled, install and
   remove keys, and collect telemetry. On a member, fetch a fresh copy from the center
   now. Rarely needed: a grant applies itself, and machines refresh on their own. Reach
@@ -119,7 +126,11 @@ where to run them: report that to the user, nothing is queued.
   became of recent ones, `--revoke ID` to withdraw one, `--url` when the machine must
   dial some other address than the one the center listens on. The code admits a
   machine, so hand it to the user and nowhere else: not into a file, a commit or a
-  message to anyone. Prefer this to `{cmd} add` when the host takes no key from here
+  message to anyone. Prefer this to `{cmd} add` when the host takes no key from here.
+  To give the user the install line, take `{cmd} invite NAME --json` and hand over its
+  `install` (or `install_windows`) field exactly as printed -- never re-assemble it from
+  the code. A code lost on the way (an empty `FLEET_JOIN`, a quote that ate it) makes
+  the machine start a fleet of its own instead of joining this one
 
 ## Rules
 

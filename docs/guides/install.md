@@ -97,12 +97,42 @@ replaces a copy you installed yourself:
 | with uv from PyPI (the installer's way) | `uv tool upgrade agents-fleet` |
 | with pipx | `pipx upgrade agents-fleet` |
 | by `fleet install` (the checkout in `~/.local/share/fleet`) | fetches the ref and reinstalls from it |
-| from a source checkout of yours, or some other way | kept as it is, and says so |
+| under its name before 0.5, `fleet-broker` or `agent-fleet` | replaced by `agents-fleet` from PyPI, or rebuilt from fleet's checkout if the machine has one |
+| from a source checkout of yours, or some other way | kept as it is, and says which version it found and that it did not update it |
 
 `--repo` or `--ref` asks for git by name, and then git it is. Both commands forward your
 SSH agent for a clone, so the machine fetches as you and no credential is left on it
 (`--no-forward-agent` turns that off). Each also refreshes what the agents on that
 machine are told, and restarts the center's background service if it ran.
+
+### From before 0.5
+
+fleet was called `fleet-broker` until 0.5, and `agent-fleet` for a while after. A
+machine installed under either name is updated across the rename only by a center
+running a release newer than 0.5.1: run `fleet update NAME` (or `--all`) there. Older
+releases updated such a machine only if it had fleet's checkout in
+`~/.local/share/fleet`, and otherwise said "kept as it is" and left it on the old
+version. On the machine itself, the one-line installer does the same move.
+
+A `fleet-center` service left by an old install can linger and block the new one. On
+Linux and macOS installing the service replaces it. On Windows a task an old version
+registered to run elevated can be removed only from an administrator shell: see
+[Windows](windows.md#running-fleet-on-windows).
+
+## Moving or reinstalling a center: keep its key
+
+The center's key is `id_ed25519` in fleet's configuration folder
+(`~/.config/fleet` on Linux, `~/Library/Application Support/fleet` on macOS,
+`%LOCALAPPDATA%\fleet` on Windows). It is the machine's identity: every machine in the
+fleet holds its public half in `authorized_keys`, and nothing else can stand in for it.
+Rebuild the center with that key restored, and every machine still lets it in; lose it,
+and each machine has to be visited by hand.
+
+So before `fleet uninstall --purge`, or reinstalling the OS, copy the folder somewhere
+safe, along with what `fleet center --export` prints (the access list and its pins), and put `id_ed25519` and
+`id_ed25519.pub` back in place before running fleet again. Never generate a new one over
+it. To move the role to another machine instead, hand it over with `fleet center NAME`;
+that keeps every machine's trust intact without copying a key anywhere.
 
 ## Removing fleet
 

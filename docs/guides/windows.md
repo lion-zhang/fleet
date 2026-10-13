@@ -54,6 +54,19 @@ Open a new terminal afterwards so `fleet` is on your PATH.
   Windows cannot replace a program while it runs. It takes a minute; `fleet --version`
   shows the result, and `update.log` in fleet's state folder says how it went.
 
+**Quote what you send.** PowerShell expands `$HOME` inside double quotes and, from 7.4,
+a leading `~` in any argument, before fleet sees it. Commands for another machine go in
+single quotes: `fleet ssh gpu-box -- 'ls ~/proj'`. See [Running work](run-work.md#commands).
+
+**The background service is the one step that can need an administrator.** It is a
+scheduled task registered as you, and most accounts may create one. Some may not -- a
+managed machine's policy, or a `fleet-center` task left by an earlier install that was
+registered to run elevated and can now be neither deleted nor replaced. fleet then says
+which it is, with ✗, and prints the fix: in an administrator PowerShell,
+`schtasks /delete /tn fleet-center /f`, then as yourself `fleet service install`. Until
+then the center works while `fleet center --listen` runs in a terminal you leave open.
+`fleet service status` says whether the task or something else is holding port 7373.
+
 **One limit: a Windows machine cannot type a password for you**, because Windows has no
 pseudo-terminal for ssh to prompt on. So a Windows center adds only machines that already
 accept a key — yours, or the fleet's. For a password-only host, put the fleet's key there
@@ -66,5 +79,7 @@ first (`fleet center --pubkey` on the center prints it), or use an [invite](add-
 | `fleet` is not found after installing | Open a new terminal. |
 | `ssh: connect to host … port 22: Connection refused` | sshd is not running there: `Start-Service sshd`. |
 | `… accepts no key of ours, and this machine cannot type a password` | Expected on a Windows center; see the limit above. |
+| `✗ service: a scheduled task named fleet-center is already here …` or `could not register the scheduled task` | See the service note above: one command in an administrator shell, then `fleet service install`. |
+| `! this command contains C:\Users\…, this machine's home folder` | PowerShell expanded `$HOME` or `~` before fleet saw the command. Put the remote command in single quotes. |
 
 More in [Troubleshooting](troubleshooting.md).

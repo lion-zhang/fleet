@@ -156,6 +156,37 @@ def authorized_keys_edit(user: str, path: str, center_key: str) -> None:
           == [l for l in before.splitlines() if l.strip()], final)
 
 
+def prune_check(user: str, path: str, center_key: str) -> None:
+    """A key this fleet once placed and has since forgotten is found and taken off --
+    through this OS's sshd and shell -- and nothing else in the file is touched."""
+    from fleet.ssh.authkeys import sync_command
+
+    fid = (as_json(fleet("center", "--json")[1]) or {}).get("fleet_id", "")
+    plat = "windows" if WINDOWS else "posix"
+    dead = "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIDeaDDeaDDeaDDeaDDeaDDeaDDeaDDeaDDeaDDeaDDea dead"
+    script = sync_command(fid, "SHA256:e2e-forgotten", user=user, pubkey=dead, platform=plat)
+    shell = (["powershell", "-NoProfile", "-Command", "-"] if WINDOWS else ["sh", "-s"])
+    if not WINDOWS and user != os.environ.get("USER"):
+        shell = ["sudo", "-u", user, *shell]
+    subprocess.run(shell, input=script.encode(), capture_output=True)
+    before = authorized_keys_text(path)
+    check("prune: a forgotten key is in the file to begin with", dead.split()[1] in before,
+          before)
+    code, out = fleet("access", "--prune", "--json")
+    found = (as_json(out) or {}).get("findings", [])
+    check("access --prune --json lists it, and removes nothing without --yes",
+          code == 0 and any(f.get("src") == "SHA256:e2e-forgotten" for f in found)
+          and dead.split()[1] in authorized_keys_text(path), out)
+    code, out = fleet("access", "--prune", "--yes")
+    after = authorized_keys_text(path)
+    check("access --prune --yes removes it", code == 0 and dead.split()[1] not in after,
+          f"exit {code}: {out}\n{after}")
+    check("  and every other key survived", center_key.split()[1] in after
+          and all(ln in after for ln in before.splitlines()
+                  if ln.strip() and "e2e-forgotten" not in ln and dead.split()[1] not in ln),
+          after)
+
+
 # -- the checks ----------------------------------------------------------------------
 
 def main() -> int:
@@ -278,6 +309,9 @@ def main() -> int:
     authorized_keys_edit(a.ssh_user, path, pub.strip().splitlines()[-1])
     expect("ssh still works after the edits", ["ssh", name, "--", "echo", "still-in"],
            r"still-in")
+    prune_check(a.ssh_user, path, pub.strip().splitlines()[-1])
+    expect("ssh still works after pruning", ["ssh", name, "--", "echo", "still-in"],
+           r"still-in")
 
     interactive_checks(name, a.ssh_user)
 
@@ -303,6 +337,7 @@ def main() -> int:
 
     # Last, because it replaces the installed fleet and stops anything running from it.
     local_update_check()
+    migration_check()
     # And then take it off again: the fleet was dissolved above, so this is the plain
     # case -- agents unregistered, service removed, files deleted, the last step named.
     ok, out = expect("uninstall --purge", ["uninstall", "--yes", "--purge"],
@@ -497,6 +532,52 @@ def local_update_check() -> None:
               f"{UPDATE_EXIT_MARK} 0" in text, f"{text[-3000:]}\n-- runner: {said[-2000:]}")
     expect("fleet works after the update", ["--version"], r"^fleet \d")
     expect("and reads its state", ["paths"], r".", rc=None)
+
+
+def migration_check() -> None:
+    """A machine still on `fleet-broker`, fleet's name before 0.5, with no checkout of
+    fleet on it: the updater moves it to `agents-fleet` from PyPI.
+
+    Found on a real fleet: such a machine fell through to "kept as it is" and stayed on
+    the old version for good, because only a checkout gave the updater a way across the
+    rename. The old tool is a stand-in that claims the `fleet` command as the real one
+    did; what replaces it is the published release.
+    """
+    from fleet.install import install_script
+
+    uv = shutil.which("uv") or "uv"
+    stub = Path(tempfile.mkdtemp(prefix="fleet-broker-"))
+    (stub / "fleet_broker_stub.py").write_text(
+        "def main():\n    print('fleet 0.4.0')\n", encoding="utf-8")
+    (stub / "pyproject.toml").write_text(
+        '[project]\nname = "fleet-broker"\nversion = "0.4.0"\n'
+        '[project.scripts]\nfleet = "fleet_broker_stub:main"\n'
+        '[build-system]\nrequires = ["setuptools"]\nbuild-backend = "setuptools.build_meta"\n'
+        '[tool.setuptools]\npy-modules = ["fleet_broker_stub"]\n', encoding="utf-8")
+    run([uv, "tool", "uninstall", "agents-fleet"])
+    code, out = run([uv, "tool", "install", "--quiet", str(stub)], timeout=300)
+    if not check("migration: an old fleet-broker install to start from", code == 0
+                 and "fleet 0.4.0" in fleet("--version")[1], out):
+        return
+    # No checkout: that is the case that used to be stranded.
+    shutil.rmtree(Path.home() / ".local" / "share" / "fleet", ignore_errors=True)
+    script = install_script("https://github.com/lion-zhang/fleet", update_only=True,
+                            platform="windows" if WINDOWS else "")
+    if WINDOWS:
+        ps1 = stub / "update.ps1"
+        ps1.write_text(script, encoding="utf-8")
+        code, out = run(["powershell", "-NoProfile", "-ExecutionPolicy", "Bypass", "-File",
+                         str(ps1)], timeout=600)
+    else:
+        code, out = run(["sh", "-s"], input=script, timeout=600)
+    _, tools = run([uv, "tool", "list"])
+    _, version = fleet("--version")
+    found = re.search(r"fleet (\d+)\.(\d+)\.(\d+)", version)
+    check("migration: fleet update moves fleet-broker to agents-fleet",
+          code == 0 and "kept as it is" not in out and "fleet-broker" not in tools
+          and "agents-fleet" in tools and bool(found)
+          and tuple(map(int, found.groups())) >= (0, 5, 1),
+          f"exit {code}: {out[-1500:]}\n-- tools: {tools}\n-- version: {version}")
 
 
 def report(path: str) -> None:
