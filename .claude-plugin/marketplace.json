@@ -12,7 +12,7 @@
       "name": "fleet",
       "source": "./",
       "description": "Every machine you have, for your coding agent: live GPU, VRAM, RAM and disk, and SSH.",
-      "version": "0.5.1",
+      "version": "0.5.2",
       "author": {
         "name": "Lin Zhang",
         "url": "https://github.com/lion-zhang"
