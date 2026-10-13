@@ -50,6 +50,8 @@ def run(args: list[str], *, env: dict | None = None, timeout: float = 180,
         out = exc.stdout or ""
         out = out.decode(errors="replace") if isinstance(out, bytes) else out
         return 124, out + "\n[timed out]"
+    except FileNotFoundError as exc:              # the program itself is gone
+        return 127, str(exc)
 
 
 def fleet(*args: str, **kw) -> tuple[int, str]:
@@ -560,7 +562,19 @@ def migration_check() -> None:
                  and "fleet 0.4.0" in fleet("--version")[1], out):
         return
     # No checkout: that is the case that used to be stranded.
-    shutil.rmtree(Path.home() / ".local" / "share" / "fleet", ignore_errors=True)
+    checkout = Path.home() / ".local" / "share" / "fleet"
+    # git writes its objects read-only, and on Windows rmtree cannot delete a read-only
+    # file: ignoring that left a half-deleted .git, which the updater then took for a
+    # checkout to build from.
+    def _writable(func, path, _exc):
+        os.chmod(path, 0o700)
+        func(path)
+    if checkout.exists():
+        shutil.rmtree(checkout, onexc=_writable) if sys.version_info >= (3, 12) else \
+            shutil.rmtree(checkout, onerror=_writable)
+    if not check("migration: no checkout of fleet left on the machine", not checkout.exists(),
+                 str(checkout)):
+        return
     script = install_script("https://github.com/lion-zhang/fleet", update_only=True,
                             platform="windows" if WINDOWS else "")
     if WINDOWS:
