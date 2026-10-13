@@ -118,7 +118,9 @@ install_core() {
     fi
     say "installing fleet ..."
     # --force-core asked for this copy to take over the `fleet` command from another.
-    force=""; [ "$kind" = force ] && force="--force"
+    # And over a tool from before the rename: it holds the `fleet` command until it is
+    # uninstalled, which happens only once this install has worked.
+    force=""; case "$kind" in force|old) force="--force" ;; esac
     if [ -n "${FLEET_SOURCE:-}" ]; then
         "$uv" tool install --upgrade $force --quiet "$source" </dev/null || die "could not install $source"
     else
@@ -152,12 +154,17 @@ find_uv() {
 
 main() {
     join="${FLEET_JOIN:-}"
+    # Set but empty is not the same as unset: it is a member install whose code was lost
+    # on the way -- a quoting slip, a variable that never got filled in. Treated as
+    # unset, it started a new fleet on the machine that was meant to join one.
+    empty_join=""
+    if [ "${FLEET_JOIN+set}" = set ] && [ -z "$FLEET_JOIN" ]; then empty_join="FLEET_JOIN"; fi
     setup=1
     while [ $# -gt 0 ]; do
         case "$1" in
             --join) [ $# -ge 2 ] || die "--join needs the code \`fleet invite\` printed"
-                    join="$2"; shift 2 ;;
-            --join=*) join="${1#--join=}"; shift ;;
+                    join="$2"; [ -n "$2" ] || empty_join="--join"; shift 2 ;;
+            --join=*) join="${1#--join=}"; [ -n "$join" ] || empty_join="--join"; shift ;;
             --no-setup) setup=0; shift ;;
             --force-core) FLEET_FORCE_CORE=1; shift ;;
             -h|--help) usage; exit 0 ;;
@@ -175,6 +182,9 @@ main() {
     for f in "$(command -v fleet 2>/dev/null || true)" "$HOME/.local/bin/fleet"; do
         if [ -n "$f" ] && [ -x "$f" ]; then was=$(role_of "$f"); break; fi
     done
+    if [ -n "$empty_join" ] && [ -z "$join" ] && [ "$setup" = 1 ] && [ -z "$was" ]; then
+        die "$empty_join is set but empty, so there is no code to join with -- paste the code \`fleet invite\` printed, or leave $empty_join out to start a new fleet here"
+    fi
     if [ "$setup" = 0 ]; then
         say "mode: none -- installing the command only"
     elif [ -n "$join" ]; then
@@ -184,7 +194,7 @@ main() {
     elif [ "$was" = member ]; then
         say "mode: member (already; upgrading)"
     else
-        say "mode: center -- starting a new fleet on this machine"
+        say "mode: center -- starting a NEW fleet on this machine (no join code given; to join an existing fleet instead, rerun with --join CODE)"
     fi
 
     # 1. uv, which installs and runs fleet. Its own installer, unless it is here already.
@@ -213,12 +223,6 @@ main() {
         other)
             say "core: $("$found" --version </dev/null 2>/dev/null) at $found, keeping it" ;;
         *)
-            # Machines from before a rename carry it as `fleet-broker` or `agent-fleet`;
-            # two tools must not both claim the `fleet` command.
-            if [ "$kind" = old ]; then
-                "$uv" tool uninstall fleet-broker >/dev/null 2>&1 </dev/null || true
-                "$uv" tool uninstall agent-fleet >/dev/null 2>&1 </dev/null || true
-            fi
             # A center's listener runs from the files being replaced: stopped first, and
             # started again however this ends -- or it went on running the old version,
             # loading the new one's modules into it as it went.
@@ -228,6 +232,17 @@ main() {
                 trap '"$restart_with" service start </dev/null >/dev/null 2>&1 || true' EXIT
             fi
             install_core "$uv" "$kind"
+            # Machines from before a rename carry it as `fleet-broker` or `agent-fleet`;
+            # two tools must not both claim the `fleet` command. Removed only now that
+            # the new one is in: uninstalled first, a failed install left the machine
+            # with no fleet at all. Removing it takes the `fleet` command with it --
+            # uv deletes what it once wrote there, whoever owns it now -- so the new
+            # tool's is put back.
+            if [ "$kind" = old ]; then
+                "$uv" tool uninstall fleet-broker >/dev/null 2>&1 </dev/null || true
+                "$uv" tool uninstall agent-fleet >/dev/null 2>&1 </dev/null || true
+                [ -x "$("$uv" tool dir --bin 2>/dev/null </dev/null)/fleet" ] || install_core "$uv" old
+            fi
             found="" ;;
     esac
     if [ -n "$found" ]; then

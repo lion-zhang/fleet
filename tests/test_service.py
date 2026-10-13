@@ -8,6 +8,7 @@ a Mac or a Linux box as the Windows mini PC it happens to be today.
 
 from __future__ import annotations
 
+import subprocess
 import sys
 
 import pytest
@@ -438,3 +439,83 @@ def test_the_launchd_job_keeps_its_output_somewhere_a_person_can_read(tmp_path, 
     monkeypatch.setattr(service, "LOG_PATH", lambda: tmp_path / "center-service.log")
     plist = service._plist("/usr/local/bin/fleet", 7373)
     assert f"<key>StandardErrorPath</key><string>{tmp_path / 'center-service.log'}" in plist
+
+
+# ------------------------------------------- what a failed install says (Windows)
+
+def _windows_run(*, delete_rc=0, register_rc=0, exists=False, err="ERROR: Access is denied."):
+    calls = []
+
+    def run(argv, **k):
+        calls.append(argv)
+        if argv[:2] == ["schtasks", "/delete"]:
+            return _ok(returncode=delete_rc) if not delete_rc else \
+                subprocess.CompletedProcess(argv, delete_rc, "", err)
+        if argv[:2] == ["schtasks", "/query"]:
+            return _ok(returncode=0 if exists else 1)
+        if (argv[0] == "powershell" and "Register-ScheduledTask" in argv[-1]) or \
+                argv[:2] == ["schtasks", "/create"]:
+            return subprocess.CompletedProcess(argv, register_rc, "", err if register_rc else "")
+        return _ok()
+    return calls, run
+
+
+def test_a_task_left_by_an_earlier_install_is_named_with_the_remedy(monkeypatch):
+    """Found on a real machine: a 0.4 task registered to run elevated could be neither
+    deleted nor replaced, and the failed delete was discarded -- so all anyone saw was
+    "could not register it: Access is denied"."""
+    calls, run = _windows_run(delete_rc=1, exists=True)
+    monkeypatch.setattr(service, "_run", run)
+    said = service._windows_install("C:\\Users\\me\\.local\\bin\\fleet.exe", 7373)
+    assert said.level == service.FAIL
+    assert "already here" in said and "earlier install" in said
+    assert "administrator" in said and "schtasks /delete /tn fleet-center /f" in said
+    assert '"C:\\Users\\me\\.local\\bin\\fleet.exe" service install' in said
+    assert not any("Register-ScheduledTask" in c[-1] for c in calls), "nothing registered"
+
+
+def test_an_account_that_may_not_create_tasks_is_told_so(monkeypatch):
+    _, run = _windows_run(register_rc=1)
+    monkeypatch.setattr(service, "_run", run)
+    said = service._windows_install("C:\\fleet.exe", 7373)
+    assert said.level == service.FAIL
+    assert "Access is denied" in said and "may not be allowed to create" in said
+    assert "administrator" in said and "center --listen" in said
+
+
+def test_the_task_asks_for_no_more_privilege_than_it_uses(monkeypatch):
+    """`-RunLevel Highest` is itself something only an elevated account may register."""
+    calls, run = _windows_run()
+    monkeypatch.setattr(service, "_run", run)
+    said = service._windows_install("C:\\fleet.exe", 7373)
+    assert said.level == service.OK
+    reg = next(c[-1] for c in calls if c[0] == "powershell" and "Register-ScheduledTask" in c[-1])
+    assert "-RunLevel Limited" in reg and "Highest" not in reg
+
+
+# ------------------------------------------- the service and the port, apart
+
+def test_a_listener_started_by_hand_is_not_called_the_service(monkeypatch):
+    """Found on a real machine: no task at all, a `fleet center --listen` in a terminal,
+    and `fleet service status` said "running"."""
+    monkeypatch.setattr(service, "_impl", lambda: (None, None, lambda: service.ABSENT, None, None))
+    monkeypatch.setattr(service, "_answers", lambda port, timeout=1.5: True)
+    line, notes = service.describe(7373)
+    assert "not installed" in line and "port 7373: answers" in line
+    assert notes and "not because of the service" in notes[0]
+    assert service.status(7373) == service.RUNNING     # still serving, for `fleet center`
+
+
+def test_a_running_service_with_a_silent_port_is_said(monkeypatch):
+    monkeypatch.setattr(service, "_impl", lambda: (None, None, lambda: service.RUNNING, None, None))
+    monkeypatch.setattr(service, "_answers", lambda port, timeout=1.5: False)
+    line, notes = service.describe(7373)
+    assert "running" in line and "nothing listening" in line
+    assert notes and "nothing answers" in notes[0]
+
+
+def test_a_healthy_service_has_nothing_to_add(monkeypatch):
+    monkeypatch.setattr(service, "_impl", lambda: (None, None, lambda: service.RUNNING, None, None))
+    monkeypatch.setattr(service, "_answers", lambda port, timeout=1.5: True)
+    line, notes = service.describe(7373)
+    assert "service: running" in line and notes == []

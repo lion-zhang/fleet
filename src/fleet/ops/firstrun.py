@@ -105,7 +105,10 @@ def maybe(command: str, say) -> bool:
         + (f"; taught {', '.join(taught)} to use it" if taught else "")
         + f"  (to join another fleet instead: fleet join CODE)")
     if svc := start_listening():
-        say(f"service: {svc}")
+        # The tick only for a service that will outlive this terminal: the center is
+        # what every other machine asks, and "✓ service: could not register it" told
+        # someone it would be there after logout when it would not.
+        say(f"service: {svc}", getattr(svc, "level", "ok"))
     return True
 
 
@@ -126,4 +129,4 @@ def start_listening() -> str:
     try:
         return service.install(fleet_executable(), DEFAULT_PORT)
     except Exception as exc:        # a center without its service still works
-        return f"not installed ({exc})"
+        return service.Said(f"not installed ({exc})", service.FAIL)

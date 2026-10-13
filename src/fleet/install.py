@@ -99,10 +99,20 @@ trap 'PATH="$HOME/.local/bin:$PATH" fleet service start >/dev/null 2>&1 || true'
 case "$MODE" in
   uv)   uv tool upgrade --quiet agents-fleet ;;
   pipx) pipx upgrade agents-fleet >/dev/null ;;
-  *)    uv tool uninstall fleet-broker >/dev/null 2>&1 || true
-        uv tool uninstall agent-fleet >/dev/null 2>&1 || true
-        uv tool install --force --reinstall-package agents-fleet --quiet "$DIR" ;;
+  old)  uv tool install --force --quiet agents-fleet ;;
+  *)    uv tool install --force --reinstall-package agents-fleet --quiet "$DIR" ;;
 esac
+# A tool from before the rename goes only now, with the new one in place: uninstalled
+# first, an install that then failed left the machine with no fleet at all. uv deletes
+# the `fleet` command it once wrote whoever owns it now, so the new one's is put back.
+if uv tool list 2>/dev/null | grep -qE '^(fleet-broker|agent-fleet) '; then
+  uv tool uninstall fleet-broker >/dev/null 2>&1 || true
+  uv tool uninstall agent-fleet >/dev/null 2>&1 || true
+  if [ ! -x "$(uv tool dir --bin 2>/dev/null)/fleet" ]; then
+    if [ "$MODE" = old ]; then uv tool install --force --quiet agents-fleet
+    else uv tool install --force --quiet "$DIR"; fi
+  fi
+fi
 
 # Put fleet on the PATH of a terminal the user opens later, not just this script's.
 # Without it fleet installs correctly and then is not there when they type its name --
@@ -125,7 +135,7 @@ PATH="$HOME/.local/bin:$PATH" fleet --version
 
 
 def _how_installed_posix(from_git: bool, update_only: bool) -> str:
-    """Set MODE to how fleet is updated here: git, uv, pipx or keep.
+    """Set MODE to how fleet is updated here: git, uv, pipx, old or keep.
 
     The rule the installer keeps -- an existing core is never replaced -- holds for
     `fleet update` too. This script used to clone `main` and reinstall from it on every
@@ -151,10 +161,24 @@ if [ -z "{forced}" ]; then
     else
       MODE=uv
     fi
+  elif command -v uv >/dev/null 2>&1 && uv tool list 2>/dev/null | grep -qE '^(fleet-broker|agent-fleet) '; then
+    # Installed before a rename, as `fleet-broker` or `agent-fleet`. With fleet's own
+    # checkout here it is rebuilt from it, as before; without one it used to fall through
+    # to "kept as it is" and stay on the old version forever. Now it moves to the
+    # release, as install.sh moves it.
+    receipt="$(uv tool dir 2>/dev/null)/agent-fleet/uv-receipt.toml"
+    if [ -d "$DIR/.git" ] || grep -qF "$DIR" "$receipt" 2>/dev/null; then
+      MODE=git
+    elif grep -qE '(editable|directory) = ' "$receipt" 2>/dev/null; then
+      MODE=keep; KEPT="fleet here is installed from a source checkout; kept as it is"
+    else
+      MODE=old
+    fi
   elif command -v pipx >/dev/null 2>&1 && pipx list --short 2>/dev/null | grep -q '^agents-fleet '; then
     MODE=pipx
   elif [ -n "{other}" ] && [ ! -d "$DIR/.git" ] && command -v fleet >/dev/null 2>&1; then
-    MODE=keep; KEPT="fleet here was installed another way ($(command -v fleet)); kept as it is"
+    MODE=keep
+    KEPT="fleet here ($(fleet --version 2>/dev/null || echo 'version unknown'), $(command -v fleet)) was installed another way, not by uv, pipx or fleet itself -- NOT updated; update it the way it was installed"
   fi
 fi"""
 
@@ -409,9 +433,25 @@ if ($mode -eq 'uv') {{
 }} elseif ($mode -eq 'pipx') {{
   pipx upgrade agents-fleet | Out-Null
 }} else {{
-  try {{ uv tool uninstall fleet-broker 2>&1 | Out-Null }} catch {{ }}
-  try {{ uv tool uninstall agent-fleet 2>&1 | Out-Null }} catch {{ }}
-  uv tool install --force --reinstall-package agents-fleet --quiet $dir
+  # The new one first, and nothing removed unless it worked: uninstalled first, a
+  # failed install left the machine with no fleet at all.
+  if ($mode -eq 'old') {{ uv tool install --force --quiet agents-fleet }}
+  else {{ uv tool install --force --reinstall-package agents-fleet --quiet $dir }}
+  if ($LASTEXITCODE -ne 0) {{ throw 'could not install agents-fleet; the fleet that was here is left as it was' }}
+  # A tool from before the rename goes now. uv deletes the `fleet` command it once wrote,
+  # whoever owns it now, so the new one's is put back.
+  $listed = ''
+  try {{ $listed = (& uv tool list 2>$null) -join "`n" }} catch {{ }}
+  if ($listed -match '(?m)^(fleet-broker|agent-fleet) ') {{
+    try {{ uv tool uninstall fleet-broker 2>&1 | Out-Null }} catch {{ }}
+    try {{ uv tool uninstall agent-fleet 2>&1 | Out-Null }} catch {{ }}
+    $b = ''
+    try {{ $b = ((& uv tool dir --bin 2>$null) | Out-String).Trim() }} catch {{ }}
+    if (-not ($b -and (Test-Path (Join-Path $b 'fleet.exe')))) {{
+      if ($mode -eq 'old') {{ uv tool install --force --quiet agents-fleet }}
+      else {{ uv tool install --force --quiet $dir }}
+    }}
+  }}
 }}
 }} finally {{
   $fleet = Find-Fleet
@@ -457,11 +497,26 @@ if (-not {forced}) {{
     elseif ($r -match '(editable|directory) = ') {{
       $mode = 'keep'; $kept = 'fleet here is installed from a source checkout; kept as it is'
     }} else {{ $mode = 'uv' }}
+  }} elseif ($tools -match '(?m)^(fleet-broker|agent-fleet) ') {{
+    # From before a rename: rebuilt from fleet's checkout if there is one, else moved to
+    # the release -- never left on the old version as "kept".
+    $tooldir = ''
+    try {{ $tooldir = (& uv tool dir 2>$null).Trim() }} catch {{ }}
+    $receipt = Join-Path $tooldir 'agent-fleet\\uv-receipt.toml'
+    $r = if (Test-Path $receipt) {{ Get-Content -Raw $receipt }} else {{ '' }}
+    $ours = $r.Contains($dir) -or $r.Contains($dir.Replace('\\', '\\\\')) -or $r.Contains($dir.Replace('\\', '/'))
+    if ((Test-Path (Join-Path $dir '.git')) -or $ours) {{ $mode = 'git' }}
+    elseif ($r -match '(editable|directory) = ') {{
+      $mode = 'keep'; $kept = 'fleet here is installed from a source checkout; kept as it is'
+    }} else {{ $mode = 'old' }}
   }} elseif ((Get-Command pipx -ErrorAction SilentlyContinue) -and
              $(try {{ ((& pipx list --short 2>$null) -join "`n") -match '(?m)^agents-fleet ' }} catch {{ $false }})) {{
     $mode = 'pipx'
   }} elseif ({other} -and -not (Test-Path (Join-Path $dir '.git')) -and (Get-Command fleet -ErrorAction SilentlyContinue)) {{
-    $mode = 'keep'; $kept = "fleet here was installed another way ($((Get-Command fleet).Source)); kept as it is"
+    $v = 'version unknown'
+    try {{ $v = ((& fleet --version 2>$null) | Out-String).Trim() }} catch {{ }}
+    $mode = 'keep'
+    $kept = "fleet here ($v, $((Get-Command fleet).Source)) was installed another way, not by uv, pipx or fleet itself -- NOT updated; update it the way it was installed"
   }}
 }}"""
 

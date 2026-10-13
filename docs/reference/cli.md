@@ -357,6 +357,9 @@ fleet access machine_A --allow machine_B
 | `--deny` `MACHINE` | stop MACHINE reaching the target |
 | `--user` | whose authorized_keys; a grant defaults to the account the target is reached as, a revoke to every account |
 | `--migrate` | spend passwords an older fleet stored |
+| `--prune` | find fleet keys on machines that the list no longer wants, and remove them |
+| `--fleet` `ID` | with --prune: also remove blocks another fleet, ID, left behind |
+| `--yes`, `-y` | with --prune: remove without asking |
 | `--json` | print JSON instead of a table, for scripts and agents |
 
 ## fleet center

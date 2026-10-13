@@ -81,3 +81,26 @@ def test_no_service_from_a_uvx_environment(monkeypatch, tmp_path):
     monkeypatch.setattr(registry.sys, "prefix", str(tmp_path / "archive-v0" / "x"))
     monkeypatch.setattr(service, "install", lambda *a: pytest.fail("installed a service"))
     assert firstrun.start_listening() == ""
+
+
+def test_a_service_that_failed_is_not_reported_with_a_tick(fresh, monkeypatch):
+    """Found on a real Windows center: `✓ service: could not register it: Access is
+    denied.` -- the tick told the user the center would outlive the terminal."""
+    from fleet import service
+
+    monkeypatch.setattr(firstrun, "start_listening", lambda: service.Said(
+        "could not register the scheduled task: Windows said \"Access is denied.\"",
+        service.FAIL))
+    r = CliRunner().invoke(cli.app, ["ls"])
+    line = next(ln for ln in r.output.splitlines() if "service:" in ln)
+    assert "✓" not in line and "✗" in line, line
+
+
+def test_a_service_that_runs_but_will_not_last_is_flagged(fresh, monkeypatch):
+    from fleet import service
+
+    monkeypatch.setattr(firstrun, "start_listening", lambda: service.Said(
+        "running, but only while you are logged in", service.WARN))
+    r = CliRunner().invoke(cli.app, ["ls"])
+    line = next(ln for ln in r.output.splitlines() if "service:" in ln)
+    assert "✓" not in line and "!" in line, line

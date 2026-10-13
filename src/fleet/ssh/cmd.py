@@ -295,6 +295,29 @@ def remote_command(args: list[str], *, windows: bool = False) -> str:
 
 
 
+def expanded_here(args: list[str], *, home: str, here_windows: bool,
+                  there_windows: bool) -> str:
+    """A warning when this machine's shell has already rewritten the remote command.
+
+    fleet passes the command on untouched -- but the shell that ran fleet may not have.
+    PowerShell expands `$HOME` and `${HOME}` inside double quotes, does not treat `\\$`
+    as an escape, and since 7.4 replaces a leading `~` in a native command's argument
+    with the local home. So `fleet ssh box -- ls ~/x` from Windows arrived on a Linux box
+    as `ls C:\\Users\\me/x`, and failed with an error about a path nobody typed. The
+    command is gone by the time fleet sees it, so the most fleet can do is notice this
+    machine's home folder in a command bound for a machine that cannot have it.
+    """
+    if not (here_windows and not there_windows and home):
+        return ""
+    folded = home.lower()
+    if not any(folded in a.lower() or folded.replace("\\", "/") in a.lower() for a in args):
+        return ""
+    return (f"this command contains {home}, this machine's home folder -- most likely "
+            "your shell expanded $HOME or ~ before fleet saw it. Put the remote command "
+            "in single quotes so the other machine expands it: "
+            "fleet ssh NAME -- 'ls ~/x'")
+
+
 # Overlay suffixes worth knowing by name. Deliberately a table, not logic: fleet is
 # neutral about which overlay you run, and adding one must not mean touching a
 # classifier. Address ranges cannot do this job -- 100.64.0.0/10 is shared by several

@@ -12,6 +12,9 @@ not broken.
 | `service: installed, but nothing answers on port 7373 yet` | The service started but is not serving. Its output is in `center-service.log` in fleet's state folder (`fleet paths` shows where). Meanwhile `fleet center --listen` in a terminal does the same job. |
 | `No coding agent found` | fleet is installed, but no agent it knows is on this machine yet. Install the agent, then `fleet setup`; or name one with `fleet setup --target claude`. |
 | `core: … keeping it` | Not an error: fleet was already installed, and the installer kept that copy. `--force-core` replaces it. |
+| `FLEET_JOIN is set but empty` or `--join is set but empty` | The invite code got lost on the way, and the installer stopped rather than start a new fleet. Paste the line `fleet invite NAME` printed on the center again, whole. |
+| `✗ service: …` | The center works, but only while something keeps `fleet center --listen` running. The line says why the service could not be installed and what fixes it; on Windows see [the service note](windows.md#running-fleet-on-windows). |
+| I installed fleet to join a fleet, and now this machine is the center of a second one | Get an invite from the real center and run `fleet join CODE` here. A fleet with no other machines and no grants is retired on the spot — its listener removed, its key kept — and the machine joins. A fleet that has machines in it is never retired this way. |
 
 ## Adding machines
 
@@ -21,6 +24,7 @@ not broken.
 | `… accepts no key of ours and there is no terminal to type a password` | The machine needs a password, and only you can type it: run `fleet add "ssh …"` yourself in a terminal. Or put the fleet's key there first (`fleet center --pubkey`, run on the center), or use an invite. |
 | `… this machine cannot type a password (no pty on Windows)` | A Windows center cannot type passwords. Put the output of `fleet center --pubkey` (run on the center) into the host's `authorized_keys`, or use an invite. |
 | `it keeps its name; to rename it: fleet edit NAME --name …` | That machine was already known; the new address was added to it under its old name. |
+| `named after its hostname; to rename it: …` | fleet picks a name from the address you gave, or else from the machine's own hostname. If it is not the one you want, `fleet edit NAME --name NEW` keeps everything else. |
 | `… shares a machine-id with … most likely cloned from the same image` | Two machines made from one image. They are kept apart; nothing to do. |
 | `… is not a usable name` | Names and aliases are letters, digits, `.`, `_` and `-`, starting with a letter or digit. |
 | `An invite lasts at most 7 days` | Issue a new one when it is needed; `--ttl 2h` is plenty for most. |
@@ -41,6 +45,9 @@ not broken.
 | `the center has not swept this machine for Nd` | Normal for a center that is often off. Everything already granted keeps working; only changes wait. |
 | `Only the center can … Run it on NAME` | You are on a member. Run it on the machine named. |
 | `the center refused this machine (403 …)` | The center answered and said no: this machine was removed, or its fleet key changed (re-imaged, fleet's files deleted). On the center, invite it again. Not a network problem. |
+| `Permission denied (publickey…)` from a member to a machine it was granted, after the member was reinstalled | Its grants name its old key. Invite it by name and join again, or grant again; see [A machine was reinstalled](access.md#a-machine-was-reinstalled). The target is fine. |
+| `NAME is already in this fleet with a different key` when joining | The machine was reinstalled. On the center, `fleet invite NAME` — an invite naming it moves its grants to the new key — and join with that code. |
+| Old `fleet:` keys in a machine's `authorized_keys` | `fleet access --prune` on the center lists and removes the ones this fleet no longer wants. |
 | `This machine has not heard from its center, NAME, yet` | Reach the center's listener: `fleet sync --from NAME` (or its address), or join with an invite. |
 | `This machine is the center; it cannot leave its own fleet` | Hand the role on (`fleet center NAME`) or end the fleet (`fleet center --dissolve`). |
 | `No machine named 'X'` from `fleet ls X` | The name matches nothing; `fleet ls` lists them all. |

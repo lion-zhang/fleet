@@ -38,6 +38,30 @@ UNAVAILABLE = "unavailable"
 MANUAL = ("run [bold]fleet center --listen[/bold] under whatever keeps processes alive "
           "here -- tmux, `nohup fleet center --listen &`, or the container's entrypoint")
 
+OK, WARN, FAIL = "ok", "warn", "fail"
+
+
+class Said(str):
+    """What installing the service came to: the sentence to show, and how it went.
+
+    A plain string used to carry both, and callers printed it after a green tick
+    whatever it said -- "✓ service: could not register it: Access is denied" told a user
+    their center would outlive the terminal when it would not. `level` is OK when it is
+    running and will come back, WARN when it runs but not durably (or there is nothing
+    to install into), FAIL when it is not running at all.
+    """
+
+    level: str
+
+    def __new__(cls, text: str, level: str = OK) -> "Said":
+        said = super().__new__(cls, text)
+        said.level = level
+        return said
+
+    @property
+    def ok(self) -> bool:
+        return self.level == OK
+
 
 def _run(argv: list[str], **kw) -> subprocess.CompletedProcess:
     try:
@@ -100,8 +124,9 @@ def _darwin_install(cmd: str, port: int) -> str:
     if p.returncode != 0:
         # The last line, not the first: systemd leads with warnings and ends with why.
         lines = [ln for ln in (p.stderr or p.stdout).strip().splitlines() if ln.strip()]
-        return f"could not start it: {(lines[-1] if lines else 'no reason given')[:200]}"
-    return f"running, and again at login ({path})"
+        return Said(f"could not start it: {(lines[-1] if lines else 'no reason given')[:200]}",
+                    FAIL)
+    return Said(f"running, and again at login ({path})")
 
 
 def _darwin_remove() -> str:
@@ -164,7 +189,8 @@ def _no_user_manager() -> bool:
 
 def _linux_install(cmd: str, port: int) -> str:
     if _no_user_manager():
-        return f"no service manager for this user here, so nothing to install -- {MANUAL}"
+        return Said(f"no service manager for this user here, so nothing to install -- {MANUAL}",
+                    WARN)
     path = _unit_path()
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(_unit(cmd, port), encoding="utf-8")
@@ -173,7 +199,8 @@ def _linux_install(cmd: str, port: int) -> str:
     if p.returncode != 0:
         # The last line, not the first: systemd leads with warnings and ends with why.
         lines = [ln for ln in (p.stderr or p.stdout).strip().splitlines() if ln.strip()]
-        return f"could not start it: {(lines[-1] if lines else 'no reason given')[:200]}"
+        return Said(f"could not start it: {(lines[-1] if lines else 'no reason given')[:200]}",
+                    FAIL)
     # Without this the unit stops when the last session for this user ends, which on a
     # headless box is the moment you close the ssh connection that installed it.
     import getpass
@@ -182,10 +209,10 @@ def _linux_install(cmd: str, port: int) -> str:
     if linger.returncode != 0:
         # Said, not swallowed: without lingering it stops at logout and does not come
         # back at boot, which "again at boot" would have promised anyway.
-        return (f"running ({path}), but only while you are logged in: lingering could "
-                f"not be enabled -- ask an admin for `loginctl enable-linger "
-                f"{getpass.getuser()}`")
-    return f"running, and again at boot ({path})"
+        return Said(f"running ({path}), but only while you are logged in: lingering could "
+                    f"not be enabled -- ask an admin for `loginctl enable-linger "
+                    f"{getpass.getuser()}`", WARN)
+    return Said(f"running, and again at boot ({path})")
 
 
 def _linux_remove() -> str:
@@ -240,10 +267,42 @@ def _windows_install(cmd: str, port: int) -> str:
     quiet = _windowless()
     exe, args = ((quiet, f"-m fleet center --listen --port {port}") if quiet
                  else (cmd, f"center --listen --port {port}"))
-    _run(["schtasks", "/delete", "/tn", TASK, "/f"])
-    # Registered with its settings spelled out. schtasks' defaults stop a task after
-    # three days, never start it on battery and stop it when the laptop is unplugged,
-    # and never restart it after a crash: a Windows center went quiet on its own.
+    # A task left by an earlier install has to go first, and when it will not go that is
+    # the answer, not a detail: a 0.4 task registered to run elevated could be neither
+    # deleted nor overwritten by an unelevated account, and with the failure discarded
+    # here the registration below failed with a bare "Access is denied".
+    gone = _run(["schtasks", "/delete", "/tn", TASK, "/f"])
+    if gone.returncode != 0 and _windows_task_exists():
+        return Said(f"a scheduled task named {TASK} is already here, from an earlier "
+                    f"install, and this account cannot replace it "
+                    f"({_first_line(gone)}). {_windows_remedy(cmd)}", FAIL)
+    p = _windows_register(exe, args, "Limited")
+    if p.returncode != 0:
+        why = _first_line(p)
+        if _windows_task_exists():
+            return Said(f"a scheduled task named {TASK} is already here and could not be "
+                        f"replaced ({why}). {_windows_remedy(cmd)}", FAIL)
+        return Said(f"could not register the scheduled task: Windows said \"{why}\". This "
+                    f"account may not be allowed to create scheduled tasks. "
+                    f"{_windows_remedy(cmd)}", FAIL)
+    _run(["schtasks", "/run", "/tn", TASK])
+    opened = _windows_open_port(port)
+    return Said(f"running, and again at logon (scheduled task {TASK})"
+                + (f"; {opened}" if opened else ""))
+
+
+def _windows_register(exe: str, args: str, level: str) -> subprocess.CompletedProcess:
+    """Register the task to run as this user at logon.
+
+    At the limited run level, as the user runs: the listener needs nothing an
+    administrator has. Asking for the highest level, as earlier versions did, is itself
+    something only an administrator may register, so a standard account -- or an admin
+    one without elevation -- was refused for a privilege the task never used.
+
+    Registered with its settings spelled out. schtasks' defaults stop a task after three
+    days, never start it on battery and stop it when the laptop is unplugged, and never
+    restart it after a crash: a Windows center went quiet on its own.
+    """
     lit = lambda v: str(v).replace("'", "''")  # noqa: E731
     p = _run(["powershell", "-NoProfile", "-Command",
               f"$a = New-ScheduledTaskAction -Execute '{lit(exe)}' -Argument '{lit(args)}'; "
@@ -253,20 +312,31 @@ def _windows_install(cmd: str, port: int) -> str:
               "-AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -RestartCount 999 "
               "-RestartInterval (New-TimeSpan -Minutes 1) -MultipleInstances IgnoreNew; "
               "$p = New-ScheduledTaskPrincipal -UserId $who -LogonType Interactive "
-              "-RunLevel Highest; "
+              f"-RunLevel {level}; "
               f"Register-ScheduledTask -TaskName '{TASK}' -Action $a -Trigger $t "
               "-Settings $s -Principal $p -Force | Out-Null"])
     if p.returncode != 0:
         # Older Windows without the ScheduledTasks module: the plain registration.
         task = f'"{exe}" {args}'
         p = _run(["schtasks", "/create", "/tn", TASK, "/tr", task,
-                  "/sc", "onlogon", "/rl", "highest", "/f"])
-    if p.returncode != 0:
-        return f"could not register it: {(p.stderr or p.stdout).strip()[:160]}"
-    _run(["schtasks", "/run", "/tn", TASK])
-    opened = _windows_open_port(port)
-    return (f"running, and again at logon (scheduled task {TASK})"
-            + (f"; {opened}" if opened else ""))
+                  "/sc", "onlogon", "/rl", level.upper(), "/f"])
+    return p
+
+
+def _windows_task_exists() -> bool:
+    return _run(["schtasks", "/query", "/tn", TASK]).returncode == 0
+
+
+def _first_line(p: subprocess.CompletedProcess) -> str:
+    lines = [ln.strip() for ln in (p.stderr or p.stdout or "").splitlines() if ln.strip()]
+    return (lines[0] if lines else f"exit {p.returncode}")[:160]
+
+
+def _windows_remedy(cmd: str) -> str:
+    """The one step on Windows that can need an administrator, spelled out exactly."""
+    return (f"In an administrator PowerShell, run: schtasks /delete /tn {TASK} /f -- then, "
+            f"as yourself: \"{cmd}\" service install. Until then, run "
+            f"\"{cmd}\" center --listen in a terminal you leave open")
 
 
 FIREWALL_RULE = "fleet center"
@@ -415,6 +485,8 @@ def install(cmd: str, port: int) -> str:
     anyone looked. Checked here the same way `status` checks.
     """
     said = _impl()[0](cmd, port)
+    if not isinstance(said, Said):
+        said = Said(said, OK if said.startswith("running") else FAIL)
     if not said.startswith("running") or not port:
         return said
     deadline = time.monotonic() + 10
@@ -423,8 +495,8 @@ def install(cmd: str, port: int) -> str:
             return said
         time.sleep(0.5)
     where = f"; its output is in {LOG_PATH()}" if sys.platform == "darwin" else ""
-    return (f"installed, but nothing answers on port {port} yet{where}. Until it does, "
-            + MANUAL)
+    return Said(f"installed, but nothing answers on port {port} yet{where}. Until it does, "
+                + MANUAL, WARN)
 
 
 def remove() -> str:
@@ -447,6 +519,36 @@ def status(port: int = 0) -> str:
     if state != RUNNING and port and _answers(port):
         return RUNNING
     return state
+
+
+def describe(port: int) -> tuple[str, list[str]]:
+    """`fleet service status`: the service and the port, each said for itself.
+
+    One word cannot carry both. A listener started by hand in a terminal holds the port
+    exactly as the service would, and `status` -- rightly, for "is this center serving"
+    -- calls that running; but asked about the *service*, "running" with no task
+    registered at all told someone their center would outlive the shell that started it.
+    Returns the summary line and any warnings.
+    """
+    managed = _impl()[2]()
+    answers = bool(port) and _answers(port)
+    name = {"win32": f"scheduled task {TASK}", "darwin": f"launchd agent {LABEL}"}.get(
+        "win32" if local_platform() == WINDOWS else sys.platform, f"systemd unit {UNIT}")
+    service_word = {ABSENT: "not installed", INSTALLED: "installed, not running",
+                    RUNNING: "running", UNAVAILABLE: "no service manager here"}[managed]
+    line = (f"service: {service_word} ({name})"
+            + (f"; port {port}: {'answers' if answers else 'nothing listening'}" if port else ""))
+    notes: list[str] = []
+    if answers and managed != RUNNING:
+        notes.append(f"port {port} answers, but not because of the service -- whatever "
+                     "holds it (a `fleet center --listen` started by hand?) stops when the "
+                     "terminal that started it closes"
+                     + ("" if managed == UNAVAILABLE else
+                        ": [bold]fleet service install[/bold] to make it last"))
+    elif managed == RUNNING and port and not answers:
+        notes.append(f"the service is running, but nothing answers on port {port} -- "
+                     f"its output is in {LOG_PATH()}")
+    return line, notes
 
 
 def _answers(port: int, timeout: float = 1.5) -> bool:

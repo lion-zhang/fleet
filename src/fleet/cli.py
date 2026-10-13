@@ -122,7 +122,11 @@ def _first_run(command: str) -> None:
     """On a machine in no fleet, start one here and teach the agents. See ops.firstrun."""
     from .ops import firstrun
 
-    firstrun.maybe(command, lambda line: err.print(f"[green]✓[/green] {line}"))
+    firstrun.maybe(command, lambda line, level="ok": err.print(f"{_MARK[level]} {line}"))
+
+
+# How a line reports its outcome: done, done but worth a look, or not done.
+_MARK = {"ok": "[green]✓[/green]", "warn": "[yellow]![/yellow]", "fail": "[red]✗[/red]"}
 
 
 @app.command("ls")
@@ -414,6 +418,16 @@ def cmd_add(ssh_command: str = typer.Argument(None, help='e.g. "ssh -p 58418 roo
             console.print(f"[green]✓[/green] added [bold]{dev.name}[/bold] "
                           f"({dev.kind.value}"
                           + (")" if enrolling else f", {res.status.value})"))
+            if action == "added" and not name:
+                # Said, because a guessed name is the one thing here nobody asked for,
+                # and the hostname a cloud image ships with is rarely the one you meant.
+                from .onboard import name_source
+
+                eps = inv.endpoints_of(dev)
+                source = name_source(res.snapshot, eps[0]) if eps else ""
+                if source:
+                    console.print(f"  [dim]named after {source}; to rename it: "
+                                  f"[bold]fleet edit {dev.name} --name NEW[/bold][/dim]")
             if enrolling:
                 console.print("  [dim]it does not accept a key from here yet -- "
                               "installing one[/dim]")
@@ -724,8 +738,18 @@ def cmd_invite(name: str = typer.Argument(None, help="what the machine will be c
         err.print(f"[red]An invite lasts at most {MAX_INVITE_TTL_S // 86400} days.[/red] "
                   "[dim]Issue a new one when it is needed.[/dim]")
         raise typer.Exit(2)
+    readmit = False
     if name:
-        if name in inv.handles(inv.load()):
+        devices = inv.load()
+        same = next((d for d in inv.live(devices) if d.name == name), None)
+        pinned = same is not None and any(m.get("device_id") == same.id
+                                          for fp, m in acc.keys.items() if fp != acc.center)
+        if pinned:
+            # The machine itself, back after a reinstall with a key it did not have before.
+            # An invite by its name is how its owner says so: the join then moves its
+            # grants to the new key rather than leaving them on one that no longer exists.
+            readmit = True
+        elif name in inv.handles(devices):
             err.print(f"[red]{name} is already the name of a machine here.[/red]")
             raise typer.Exit(2)
     invite, secret = invites_mod.create(name=name or "", ttl_s=seconds)
@@ -742,6 +766,9 @@ def cmd_invite(name: str = typer.Argument(None, help="what the machine will be c
               "center_url": url, "listening": serving}, json_out):
         return
     minutes = max(1, seconds // 60)
+    if readmit:
+        console.print(f"[dim]{name} is already in this fleet: this invite lets it back in "
+                      "with a new key (after a reinstall), and moves its grants to it[/dim]")
     console.print(f"[green]✓[/green] invite {invite.id}"
                   + (f" for [bold]{invite.name}[/bold]" if invite.name else "")
                   + f" -- single use, valid {minutes} minute{'s' if minutes != 1 else ''}")
@@ -803,6 +830,13 @@ def cmd_join(code: str = typer.Argument(..., help="the code `fleet invite` print
     if summary["reached_as"]:
         console.print(f"  [dim]the center will reach this machine as "
                       f"{summary['reached_as']}[/dim]")
+    if summary.get("rekeyed_grants") is not None:
+        n = summary["rekeyed_grants"]
+        console.print(f"  [yellow]![/yellow] this machine was in the fleet before, with a "
+                      f"different key; "
+                      + (f"its {n} grant(s) now use the new one, and the center puts them "
+                         "back in place on its next sweep" if n else
+                         "the center now knows it by the new one"))
     if summary["center_key_installed"]:
         console.print("  [dim]the center's key is in this machine's authorized_keys; "
                       "it keeps itself current from now on[/dim]")
@@ -1743,6 +1777,12 @@ def cmd_ssh(ctx: typer.Context,
     argv += ["--", f"{ep.user}@{ep.target}" if ep.user else ep.target]
     extra = [a for a in ctx.args if a != "--"]
     if extra:
+        from .ssh.cmd import expanded_here
+
+        if hint := expanded_here(extra, home=str(Path.home()),
+                                 here_windows=local_platform() == WINDOWS,
+                                 there_windows=platform == "windows"):
+            err.print(f"[yellow]![/yellow] {hint}")
         argv.append(remote_command(extra, windows=platform == "windows"))
 
     if sys.platform == "win32":
@@ -1781,6 +1821,54 @@ def _access_fp(acc, token: str) -> str:
         raise first
 
 
+def _prune(acc, *, target: str, fleets: set[str], yes: bool, json_out: bool) -> None:
+    """`fleet access --prune`: what the machines hold that the list no longer wants."""
+    from .ops import prune as prune_mod
+
+    if target and inv.find(inv.load(), target) is None:
+        err.print(f"[red]No device named {target!r}[/red]")
+        raise typer.Exit(1)
+    dev = inv.find(inv.load(), target) if target else None
+    with _chatter_to_stderr(json_out):
+        findings, unread = prune_mod.scan(acc, fleets=fleets, only=dev.name if dev else "")
+    doomed = [f for f in findings if f.action == prune_mod.REMOVE]
+    if not json_out:
+        if not findings:
+            console.print("[green]✓[/green] no stale fleet keys on any machine read")
+        for f in findings:
+            mark = {"remove": "[red]-[/red]", "other-fleet": "[dim]·[/dim]"}.get(f.action,
+                                                                             "[yellow]![/yellow]")
+            what = ("will be removed" if f.action == prune_mod.REMOVE else
+                    f"another fleet's ({f.fleet_id}), kept -- --fleet {f.fleet_id} removes it"
+                    if f.action == prune_mod.OTHER_FLEET else f.action)
+            console.print(f"{mark} {f.machine} [dim]({f.user})[/dim]: {f.label} -- {what}")
+        for name in unread:
+            console.print(f"[yellow]![/yellow] {name}: could not be read -- not checked")
+    if doomed and not yes:
+        if json_out or not sys.stdin.isatty():
+            if json_out:
+                _emit({"findings": [f.to_dict() for f in findings], "unread": unread,
+                       "removed": 0}, True)
+            else:
+                err.print(f"[dim]{len(doomed)} block(s) to remove: run again with "
+                          "[bold]--yes[/bold] to remove them[/dim]")
+            return
+        if not typer.confirm(f"Remove {len(doomed)} block(s)?"):
+            raise typer.Exit(1)
+    if doomed:
+        prune_mod.remove(acc, doomed)
+    if _emit({"findings": [f.to_dict() for f in findings], "unread": unread,
+              "removed": sum(f.done for f in doomed)}, json_out):
+        return
+    for f in doomed:
+        if f.done:
+            console.print(f"[green]✓[/green] removed from {f.machine}: {f.label}")
+        else:
+            console.print(f"[red]✗[/red] {f.machine}: {f.label} -- {escape(f.error)}")
+    if any(not f.done for f in doomed):
+        raise typer.Exit(1)
+
+
 @app.command("access")
 def cmd_access(target: str = typer.Argument(None, help="one machine, instead of all"),
                allow: str = typer.Option(None, "--allow", metavar="MACHINE",
@@ -1793,6 +1881,14 @@ def cmd_access(target: str = typer.Argument(None, help="one machine, instead of 
                                              "to every account"),
                migrate: bool = typer.Option(False, "--migrate",
                                             help="spend passwords an older fleet stored"),
+               prune: bool = typer.Option(False, "--prune",
+                                          help="find fleet keys on machines that the list "
+                                               "no longer wants, and remove them"),
+               fleets: list[str] = typer.Option(None, "--fleet", metavar="ID",
+                                                help="with --prune: also remove blocks "
+                                                     "another fleet, ID, left behind"),
+               yes: bool = typer.Option(False, "--yes", "-y",
+                                        help="with --prune: remove without asking"),
                json_out: bool = typer.Option(False, "--json", help="print JSON instead of a table, for scripts and agents")):
     """Who may reach what, and change it.
 
@@ -1818,6 +1914,10 @@ def cmd_access(target: str = typer.Argument(None, help="one machine, instead of 
             _not_in_a_fleet(json_out)
             return
         center = member.center_name()
+        if prune:
+            err.print(f"[red]Only the center can prune keys.[/red] On "
+                      f"[bold]{center}[/bold]: fleet access --prune")
+            raise typer.Exit(2)
         if allow or deny:
             # Refused and named, never queued. A request filed here used to land in an
             # outbox that nothing ever read -- reported as "filed", applied never.
@@ -1835,6 +1935,14 @@ def cmd_access(target: str = typer.Argument(None, help="one machine, instead of 
                       "answer for any one machine[/dim]")
         return
 
+    if prune:
+        if not acl.is_center(current):
+            err.print(f"[red]Only the center can prune keys.[/red] Run it on "
+                      f"[bold]{current.name_of(current.center)}[/bold].")
+            raise typer.Exit(2)
+        _prune(current, target=target or "", fleets=set(fleets or []), yes=yes,
+               json_out=json_out)
+        return
     if allow or deny:
         _refuse_while_handing_over(current)
     if (allow or deny) and _stepped_down(current):
@@ -2066,7 +2174,8 @@ def cmd_center(name: str = typer.Argument(None, help="hand the role to this mach
             # themselves current by asking the center, and a center that only listens
             # while someone holds a terminal open is not one they can ask.
 
-            console.print(f"  [dim]service: {service.install(fleet_executable(), DEFAULT_PORT)}[/dim]")
+            said = service.install(fleet_executable(), DEFAULT_PORT)
+            console.print(f"  {_MARK[getattr(said, 'level', 'ok')]} service: {said}")
         console.print(f"  [dim]key to pre-place on locked-down hosts: "
                       f"[bold]fleet center --pubkey[/bold][/dim]")
         return
@@ -2148,6 +2257,9 @@ def cmd_center(name: str = typer.Argument(None, help="hand the role to this mach
         state = service.status(DEFAULT_PORT)
         if state == "running":
             console.print(f"serving  {center_advertise_url(acc)}")
+            _, notes = service.describe(DEFAULT_PORT)
+            for note in notes:
+                console.print(f"[yellow]![/yellow] {note}")
         elif state == "installed":
             console.print("[yellow]![/yellow] the service is installed but not running "
                           "-- machines cannot refresh themselves")
@@ -2395,7 +2507,10 @@ def cmd_service(action: str = typer.Argument("status",
     """
 
     if action == "status":
-        console.print(service.status(DEFAULT_PORT))
+        line, notes = service.describe(DEFAULT_PORT)
+        console.print(line)
+        for note in notes:
+            console.print(f"[yellow]![/yellow] {note}")
         return
     if action == "install":
 
@@ -2404,7 +2519,11 @@ def cmd_service(action: str = typer.Argument("status",
         except acl.AccessError as exc:
             err.print(f"[red]{exc}[/red]")
             raise typer.Exit(2)
-        console.print(service.install(fleet_executable(), DEFAULT_PORT))
+        said = service.install(fleet_executable(), DEFAULT_PORT)
+        level = getattr(said, "level", "ok")
+        console.print(f"{_MARK[level]} {said}")
+        if level == service.FAIL:
+            raise typer.Exit(1)
         console.print(f"  [dim]machines will dial {center_advertise_url(acc)}[/dim]")
         return
     if action == "remove":
@@ -2431,8 +2550,9 @@ def cmd_mcp():
 
     # A desktop client launching this is someone using fleet here. The line goes to
     # stderr, which clients log, because stdout is the protocol.
-    firstrun.maybe("mcp", lambda line: print(f"fleet: {Text.from_markup(line).plain}",
-                                             file=sys.stderr))
+    firstrun.maybe("mcp", lambda line, level="ok": print(
+        f"fleet: {'' if level == 'ok' else level + ': '}{Text.from_markup(line).plain}",
+        file=sys.stderr))
     try:
         serve_mcp()
     except McpUnavailable as exc:
