@@ -1,4 +1,4 @@
-"""Deploying the newest fleet from git.
+"""Updating fleet on the machines that run it, the way it was installed on each.
 
 `fleet install` already re-ran as an update, one device at a time and always over ssh.
 The two things missing were the ones you actually reach for.
@@ -219,3 +219,62 @@ def test_a_background_update_that_never_started_is_a_failure(fleet_of, monkeypat
                         lambda script: (Path("C:/f/update.log"), False))
     r = runner.invoke(cli.app, ["update"])
     assert r.exit_code == 1 and "did not start" in r.output, r.output
+
+
+# ------------------------------------------- the way it was installed, unless git is asked for
+
+@pytest.fixture
+def scripts(monkeypatch):
+    """What each installer was built with, instead of the script itself."""
+    built = []
+
+    def fake(repo, **kw):
+        built.append(kw)
+        return "true"
+    monkeypatch.setattr(cli, "install_script", fake)
+    return built
+
+
+def test_an_update_asks_each_machine_how_fleet_is_installed_there(fleet_of, scripts):
+    """No `--repo` or `--ref`: the script decides per machine (uv, pipx, a checkout),
+    rather than every machine being redeployed from a checkout of `main`."""
+    runner, _, _ = fleet_of
+    r = runner.invoke(cli.app, ["update", "--all"])
+    assert r.exit_code == 0, r.output
+    assert scripts and not any(kw["from_git"] for kw in scripts)
+
+
+@pytest.mark.parametrize("args", [["--ref", "main"], ["--ref", "v0.5.2"],
+                                  ["--repo", "https://example.com/f.git"]])
+def test_naming_a_repo_or_a_ref_asks_for_git(fleet_of, scripts, args):
+    """Even `--ref main`: asking for the default by name is still asking for git."""
+    runner, _, _ = fleet_of
+    r = runner.invoke(cli.app, ["update", "--all", *args])
+    assert r.exit_code == 0, r.output
+    assert scripts and all(kw["from_git"] for kw in scripts)
+    if args[0] == "--ref":
+        assert {kw["ref"] for kw in scripts} == {args[1]}
+
+
+def test_a_machine_whose_fleet_was_kept_is_not_reported_as_updated(fleet_of, monkeypatch):
+    """The installer exits 0 when it leaves a source install alone -- nothing failed --
+    so a ✓ there read as "updated" for a machine nobody touched."""
+    runner, _, _ = fleet_of
+    said = f"{install.KEPT_MARK} fleet here is installed from a source checkout; kept as it is\nfleet 0.5.2\n"
+    monkeypatch.setattr(cli, "run_installer", lambda ep, script, **kw: (0, said))
+    monkeypatch.setattr(subprocess, "run",
+                        lambda argv, **kw: subprocess.CompletedProcess(argv, 0, said.encode(), b""))
+    r = runner.invoke(cli.app, ["update", "--all"])
+    assert r.exit_code == 0, r.output
+    assert "source checkout; kept as it is" in r.output
+    assert "✓" not in r.output
+    assert "0 updated, 0 failed, 2 skipped" in r.output
+
+
+def test_install_takes_the_release_unless_git_is_asked_for(fleet_of, scripts, monkeypatch):
+    runner, _, _ = fleet_of
+    monkeypatch.setattr(cli, "_hand_the_fleet_to", lambda dev: None)
+    assert runner.invoke(cli.app, ["install", "oracle"]).exit_code == 0
+    assert runner.invoke(cli.app, ["install", "oracle", "--ref", "v0.5.2"]).exit_code == 0
+    assert [(kw["from_git"], kw["ref"]) for kw in scripts] == [(False, "main"),
+                                                              (True, "v0.5.2")]

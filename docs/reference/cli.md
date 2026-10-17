@@ -193,7 +193,7 @@ fleet edit machine_A --ssh "ssh -p 40001 root@5.6.7.8"
 
 Install fleet on a device, so you and its agents can use the fleet from there.
 
-A machine only reached *by* fleet needs nothing installed; this is for one you also work on. It installs from git; re-running updates an existing install.
+A machine only reached *by* fleet needs nothing installed; this is for one you also work on. It installs the release from PyPI, or from git with `--repo` or `--ref`. A fleet already there is never replaced: it is updated the way it was installed, or kept as it is.
 
 ```
 fleet install [OPTIONS] [NAME]
@@ -211,8 +211,8 @@ fleet install machine_A
 
 | Option | |
 |---|---|
-| `--repo` `URL` | git URL to clone; defaults to config or this checkout |
-| `--ref` | branch or tag to install (default: `main`) |
+| `--repo` `URL` | install from this git URL instead of PyPI |
+| `--ref` | install this branch or tag from git instead of PyPI |
 | `--forward-agent`, `--no-forward-agent` | authenticate the clone as you, leaving no credential on the device |
 
 ## fleet update
@@ -240,8 +240,8 @@ fleet update --all
 | Option | |
 |---|---|
 | `--all` | every device that already runs fleet |
-| `--repo` `URL` | git URL to deploy from; defaults to config or this checkout |
-| `--ref` | branch or tag (default: `main`) |
+| `--repo` `URL` | update from this git URL, on every machine |
+| `--ref` | update to this branch or tag from git, on every machine |
 
 ## fleet sync
 

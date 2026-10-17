@@ -35,7 +35,7 @@ from .agents import (MCP_CLIENTS, TARGETS, config_command, detect_mcp_clients,
                      stale_mcp_clients, stale_targets, uninstall, uninstall_mcp)
 from .config import DEFAULT_PORT, INVENTORY_PATH, load_config
 from .edit import apply_edits, check_name
-from .install import (NOTHING_TO_UPDATE, build_install_argv, install_script,
+from .install import (KEPT_MARK, NOTHING_TO_UPDATE, build_install_argv, install_script,
                       install_source,
                       local_install_argv, payload_for)
 from .mcpserver import McpUnavailable, serve as serve_mcp
@@ -1056,12 +1056,28 @@ def run_installer(ep, script: str, *, forward_agent: bool = True,
     return p.returncode, (p.stdout + p.stderr).decode(errors="replace")
 
 
+def _kept(output: str | bytes | None) -> str:
+    """What the installer said when it left the fleet it found alone, or "".
+
+    It exits 0 then -- nothing failed -- so without this a machine whose fleet was not
+    touched read as updated.
+    """
+    if isinstance(output, bytes):
+        output = output.decode(errors="replace")
+    for line in (output or "").splitlines():
+        if line.startswith(KEPT_MARK):
+            return line[len(KEPT_MARK):].strip()
+    return ""
+
+
 @app.command("install")
 def cmd_install(name: str = typer.Argument(None,
                                           help="the machine to install fleet on"),
                 repo: str = typer.Option(None, "--repo", metavar="URL",
-                                         help="git URL to clone; defaults to config or this checkout"),
-                ref: str = typer.Option("main", "--ref", help="branch or tag to install"),
+                                         help="install from this git URL instead of PyPI"),
+                ref: str = typer.Option(None, "--ref",
+                                        help="install this branch or tag from git "
+                                             "instead of PyPI"),
                 role: str = typer.Option(None, "--role", hidden=True,
                                          help="kept for old scripts; only `none` is accepted"),
                 forward_agent: bool = typer.Option(True, "--forward-agent/--no-forward-agent",
@@ -1070,7 +1086,9 @@ def cmd_install(name: str = typer.Argument(None,
     """Install fleet on a device, so you and its agents can use the fleet from there.
 
     A machine only reached *by* fleet needs nothing installed; this is for one you also
-    work on. It installs from git; re-running updates an existing install.
+    work on. It installs the release from PyPI, or from git with `--repo` or `--ref`. A
+    fleet already there is never replaced: it is updated the way it was installed, or
+    kept as it is.
 
     [dim]Example:[/dim]  fleet install machine_A
     """
@@ -1110,10 +1128,12 @@ def cmd_install(name: str = typer.Argument(None,
 
     platform = _remote_platform_of(dev)
 
-    console.print(f"[dim]installing fleet on {dev.name} from {url} ({ref})[/dim]")
+    from_git = bool(repo or ref)
+    console.print(f"[dim]installing fleet on {dev.name}"
+                  + (f" from {url} ({ref or 'main'})" if from_git else "") + "[/dim]")
     code, output = run_installer(sorted(eps, key=lambda e: e.preference)[0],
-                                 install_script(url, ref=ref, platform=platform,
-                                                from_git=bool(repo) or ref != "main"),
+                                 install_script(url, ref=ref or "main", platform=platform,
+                                                from_git=from_git),
                                  forward_agent=forward_agent, platform=platform)
     if code != 0:
         err.print(f"[red]Install failed[/red] (exit {code})\n{output.strip()[-600:]}")
@@ -1144,6 +1164,8 @@ def cmd_install(name: str = typer.Argument(None,
     # The role only when it is one: "gpu is now none" read as a sentence about the
     # machine rather than about a field nobody had asked to change.
     what = output.strip().splitlines()[-1] if output.strip() else "installed"
+    if kept := _kept(output):
+        what = f"{what} [dim]-- {kept}[/dim]"
     console.print(f"[green]✓[/green] {dev.name}: {what}"
                   + (f" — role [bold]{role}[/bold]" if role and role != "none" else ""))
     _hand_the_fleet_to(dev)
@@ -1202,8 +1224,11 @@ def _before_any_command(
 def cmd_update(name: str = typer.Argument(None, help="defaults to this machine"),
                everywhere: bool = typer.Option(False, "--all",
                                                help="every device that already runs fleet"),
-               repo: str = typer.Option(None, "--repo", metavar="URL", help="git URL to deploy from; defaults to config or this checkout"),
-               ref: str = typer.Option("main", "--ref", help="branch or tag")):
+               repo: str = typer.Option(None, "--repo", metavar="URL",
+                                        help="update from this git URL, on every machine"),
+               ref: str = typer.Option(None, "--ref",
+                                       help="update to this branch or tag from git, on "
+                                            "every machine")):
     """Update fleet on the machines that have it, the way it was installed there.
 
     A machine with fleet from PyPI gets `uv tool upgrade` (or `pipx upgrade`), one with
@@ -1221,7 +1246,8 @@ def cmd_update(name: str = typer.Argument(None, help="defaults to this machine")
     url = repo or configured_repo()
     # Asking for a repo or a ref by name is asking for git. Otherwise each machine is
     # updated the way fleet was installed there (install.py, _how_installed_posix).
-    from_git = bool(repo) or ref != "main"
+    from_git = bool(repo or ref)
+    ref = ref or "main"
     if not url:
         err.print("[red]No repo to update from.[/red]  Pass [bold]--repo "
                   "git@github.com:you/fleet.git[/bold], or set [bold]repo:[/bold] in "
@@ -1250,7 +1276,8 @@ def cmd_update(name: str = typer.Argument(None, help="defaults to this machine")
     # exited: a running fleet holds the very files the update replaces.
     here_later = here and local_platform() == WINDOWS
     if here and not here_later:
-        console.print(f"[dim]updating this machine from {url} ({ref})[/dim]")
+        console.print("[dim]updating this machine"
+                      + (f" from {url} ({ref})" if from_git else "") + "[/dim]")
         # local_platform, not `sh -c`: on a Windows center that shell is git's, and the
         # POSIX script half-runs under it. This is the machine running the command, so
         # it certainly has fleet -- update_only would be true either way, and saying so
@@ -1260,7 +1287,10 @@ def cmd_update(name: str = typer.Argument(None, help="defaults to this machine")
         p = subprocess.run(local_install_argv(),
                            input=payload_for(local_script, local_platform()),
                            capture_output=True)
-        if p.returncode == 0:
+        if p.returncode == 0 and (kept := _kept(p.stdout)):
+            console.print(f"[dim]·[/dim] this machine [dim]-- {kept}[/dim]")
+            skipped += 1
+        elif p.returncode == 0:
             console.print("[green]✓[/green] this machine")
             ok += 1
         elif p.returncode == NOTHING_TO_UPDATE:
@@ -1288,7 +1318,10 @@ def cmd_update(name: str = typer.Argument(None, help="defaults to this machine")
                                      install_script(url, ref=ref, platform=platform,
                                                     update_only=True, from_git=from_git),
                                      platform=platform)
-        if code == 0:
+        if code == 0 and (kept := _kept(output)):
+            console.print(f"[dim]·[/dim] {dev.name} [dim]-- {kept}[/dim]")
+            skipped += 1
+        elif code == 0:
             console.print(f"[green]✓[/green] {dev.name}")
             ok += 1
         elif code == NOTHING_TO_UPDATE:

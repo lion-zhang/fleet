@@ -58,9 +58,9 @@ Anywhere. A name may be omitted where the obvious subject is the machine you are
   `--purge` deletes fleet's files too. It refuses on the center of a fleet with other
   machines in it. It prints the last step -- removing the program -- for the user to run
 - `{cmd} top` -- live view; needs a terminal, so not for an agent
-- `{cmd} update [NAME]` / `--all` -- deploy the newest fleet from git. It also
-  rewrites this description on each machine, so what you read here stays current;
-  `{cmd} setup --refresh` does just that part
+- `{cmd} update [NAME]` / `--all` -- update fleet on each machine the way it was
+  installed there. It also rewrites this description on each machine, so what you read
+  here stays current; `{cmd} setup --refresh` does just that part
 - Windows hosts work as targets: they are probed and keyed over PowerShell, and
   `{cmd} ssh box -- cmd` passes the command through rather than wrapping it in a
   POSIX shell. Nothing to configure -- it is read from the last probe, and the remote

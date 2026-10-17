@@ -86,24 +86,28 @@ fleet update                   # update this machine
 ```
 
 `fleet install` needs the machine's name (on the machine itself, use `fleet update`).
-It installs from git: a checkout of the repository's `main` branch in
-`~/.local/share/fleet`, or `--repo URL` and `--ref BRANCH` (a branch or a tag).
+On a machine with no fleet it installs the release from PyPI, as the one-line installer
+does (`uv tool install agents-fleet`, fetching uv first if the machine has none).
 
-`fleet update` updates fleet the way it was installed on that machine, and never
-replaces a copy you installed yourself:
+Neither command replaces a fleet that is already there. Both update it the way it was
+installed on that machine:
 
-| fleet there was installed | `fleet update` |
+| fleet there was installed | `fleet update` / `fleet install` |
 |---|---|
 | with uv from PyPI (the installer's way) | `uv tool upgrade agents-fleet` |
 | with pipx | `pipx upgrade agents-fleet` |
-| by `fleet install` (the checkout in `~/.local/share/fleet`) | fetches the ref and reinstalls from it |
+| from fleet's checkout in `~/.local/share/fleet` (what older releases of `fleet install` made) | fetches the ref and reinstalls from it |
 | under its name before 0.5, `fleet-broker` or `agent-fleet` | replaced by `agents-fleet` from PyPI, or rebuilt from fleet's checkout if the machine has one |
-| from a source checkout of yours, or some other way | kept as it is, and says which version it found and that it did not update it |
+| from a source checkout of yours (editable or not), or some other way | kept as it is: reported as skipped, with the version it found and why it left it |
+| not at all | `fleet install` installs the release; `fleet update` skips the machine |
 
-`--repo` or `--ref` asks for git by name, and then git it is. Both commands forward your
-SSH agent for a clone, so the machine fetches as you and no credential is left on it
-(`--no-forward-agent` turns that off). Each also refreshes what the agents on that
-machine are told, and restarts the center's background service if it ran.
+`--repo URL` or `--ref REF` (a branch or a tag, including `--ref main`) asks for git by
+name, and then every machine is installed from a checkout of that ref in
+`~/.local/share/fleet`, whatever was there before. For that clone both commands forward
+your SSH agent, so the machine fetches as you and no credential is left on it
+(`--no-forward-agent` turns that off). Updating never touches fleet's state: the
+inventory, keys and access list stay as they are. Each command also refreshes what the
+agents on that machine are told, and restarts the center's background service if it ran.
 
 ### From before 0.5
 

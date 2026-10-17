@@ -4,10 +4,13 @@ Everything else fleet touches needs nothing installed -- the probe is a POSIX sh
 piped over one connection, which is what makes onboarding a single pasted command. This
 is the deliberate exception: a machine you also work on runs fleet, so fleet has to be there.
 
-The device clones the repo over a forwarded SSH agent by default, so it authenticates to
-GitHub as you and no credential is left behind on a machine you may not fully control.
-Agent forwarding does let root on that box use your agent for as long as you are
-connected, so it can be declined for a host you do not trust with that.
+A fleet already on the device is never replaced: it is updated the way it was installed
+(see `_how_installed_posix`), and a bare device gets the release from PyPI. Git is used
+for fleet's own checkout, or when `--repo`/`--ref` asks for it -- and then the device
+clones over a forwarded SSH agent by default, so it authenticates to GitHub as you and
+no credential is left behind on a machine you may not fully control. Agent forwarding
+does let root on that box use your agent for as long as you are connected, so it can be
+declined for a host you do not trust with that.
 """
 
 from __future__ import annotations
@@ -25,6 +28,11 @@ WINDOWS_INSTALL_DIR = "$env:USERPROFILE\\.local\\share\\fleet"
 # returns, so the caller can tell them apart from a failure.
 NO_UV = 90                  # the device could not fetch uv -- probably no internet
 NOTHING_TO_UPDATE = 91      # update-only, and this device has no fleet to update
+
+# Printed by the script, first word of its own line, when it left the fleet it found as it
+# was. Exit 0 either way -- nothing failed -- so the caller looks for this to say "kept"
+# rather than a ✓ that reads as "updated".
+KEPT_MARK = "fleet-kept:"
 
 
 def _posix_script(repo: str, *, ref: str = "main", update_only: bool = False,
@@ -49,19 +57,22 @@ DIR="{INSTALL_DIR}"
 {_skip_unless_installed(update_only)}
 PATH="$HOME/.local/bin:$PATH"
 export PATH
-{_how_installed_posix(from_git, update_only)}
+{_how_installed_posix(from_git)}
 if [ "$MODE" = keep ]; then
-  echo "$KEPT"
+  echo "{KEPT_MARK} $KEPT"
   fleet setup --refresh >/dev/null 2>&1 || true
   fleet --version
+{_drop_timer_block()}
   exit 0
 fi
 
-if [ "$MODE" = git ]; then
+if [ "$MODE" = git ] || [ "$MODE" = new ]; then
   if ! command -v uv >/dev/null 2>&1; then
     curl -LsSf https://astral.sh/uv/install.sh | sh >/dev/null 2>&1 || exit 90
     if [ -f "$HOME/.local/bin/env" ]; then . "$HOME/.local/bin/env"; fi
   fi
+fi
+if [ "$MODE" = git ]; then
   if [ -d "$DIR/.git" ]; then
     # The repo we were given, not the one this clone happened to be made with. Without
     # this, `--repo` was silently ignored for every machine that already had fleet: the
@@ -99,6 +110,8 @@ trap 'PATH="$HOME/.local/bin:$PATH" fleet service start >/dev/null 2>&1 || true'
 case "$MODE" in
   uv)   uv tool upgrade --quiet agents-fleet ;;
   pipx) pipx upgrade agents-fleet >/dev/null ;;
+  new)  uv tool install --quiet agents-fleet ||
+          {{ echo "could not install agents-fleet from PyPI; pass --repo to install from git" >&2; exit 1; }} ;;
   old)  uv tool install --force --quiet agents-fleet ;;
   *)    uv tool install --force --reinstall-package agents-fleet --quiet "$DIR" ;;
 esac
@@ -134,21 +147,21 @@ PATH="$HOME/.local/bin:$PATH" fleet --version
 {_drop_timer_block()}"""
 
 
-def _how_installed_posix(from_git: bool, update_only: bool) -> str:
-    """Set MODE to how fleet is updated here: git, uv, pipx, old or keep.
+def _how_installed_posix(from_git: bool) -> str:
+    """Set MODE to how fleet is updated here: git, uv, pipx, old, new or keep.
 
     The rule the installer keeps -- an existing core is never replaced -- holds for
-    `fleet update` too. This script used to clone `main` and reinstall from it on every
-    machine, so updating a machine installed from PyPI swapped the release for whatever
-    the branch held that day, and a machine running your own checkout lost it. Now fleet
-    is updated the way it was installed: a uv tool from PyPI with `uv tool upgrade`, pipx
-    with `pipx upgrade`, and only fleet's own checkout (or `--repo`/`--ref`, asked for by
-    name) from git. A source install of yours is kept and named, and so -- when updating
-    -- is a fleet installed some other way; `fleet install` asked for fleet's checkout
-    by name, so there it is installed beside one.
+    `fleet update` and `fleet install` alike. This script used to clone `main` and
+    reinstall from it on every machine, so updating a machine installed from PyPI swapped
+    the release for whatever the branch held that day, and a machine running your own
+    checkout lost it. Now fleet is updated the way it was installed: a uv tool from PyPI
+    with `uv tool upgrade`, pipx with `pipx upgrade`, and only fleet's own checkout (or
+    `--repo`/`--ref`, asked for by name) from git. A source install of yours is kept and
+    named, and so is a fleet installed some other way -- `fleet install` included, which
+    used to put a second copy beside it that took the `fleet` command over. A machine
+    with no fleet at all gets the release from PyPI, as the one-line installer gives it.
     """
     forced = "1" if from_git else ""
-    other = "1" if update_only else ""
     return f"""MODE=git
 KEPT=""
 if [ -z "{forced}" ]; then
@@ -176,9 +189,11 @@ if [ -z "{forced}" ]; then
     fi
   elif command -v pipx >/dev/null 2>&1 && pipx list --short 2>/dev/null | grep -q '^agents-fleet '; then
     MODE=pipx
-  elif [ -n "{other}" ] && [ ! -d "$DIR/.git" ] && command -v fleet >/dev/null 2>&1; then
+  elif [ ! -d "$DIR/.git" ] && command -v fleet >/dev/null 2>&1; then
     MODE=keep
     KEPT="fleet here ($(fleet --version 2>/dev/null || echo 'version unknown'), $(command -v fleet)) was installed another way, not by uv, pipx or fleet itself -- NOT updated; update it the way it was installed"
+  elif [ ! -d "$DIR/.git" ]; then
+    MODE=new
   fi
 fi"""
 
@@ -356,18 +371,20 @@ $ref  = '{ref_lit}'
 $dir  = "{WINDOWS_INSTALL_DIR}"
 {_skip_unless_installed_ps(update_only)}
 $env:PATH = "$env:USERPROFILE\\.local\\bin;$env:PATH"
-{_how_installed_ps(from_git, update_only)}
+{_how_installed_ps(from_git)}
 if ($mode -eq 'keep') {{
-  Write-Output $kept
+  Write-Output "{KEPT_MARK} $kept"
   try {{ fleet setup --refresh 2>&1 | Out-Null }} catch {{ }}
   fleet --version
   exit 0
 }}
 
-if ($mode -eq 'git') {{
+if ($mode -eq 'git' -or $mode -eq 'new') {{
   if (-not (Get-Command uv -ErrorAction SilentlyContinue)) {{
     try {{ irm https://astral.sh/uv/install.ps1 | iex }} catch {{ exit 90 }}
   }}
+}}
+if ($mode -eq 'git') {{
   if (Test-Path (Join-Path $dir '.git')) {{
     # The repo we were given, not the one this clone happened to be made with. And
     # whatever was fetched, checked out as it is: a branch or a tag alike.
@@ -432,6 +449,9 @@ if ($mode -eq 'uv') {{
   uv tool upgrade --quiet agents-fleet
 }} elseif ($mode -eq 'pipx') {{
   pipx upgrade agents-fleet | Out-Null
+}} elseif ($mode -eq 'new') {{
+  uv tool install --quiet agents-fleet
+  if ($LASTEXITCODE -ne 0) {{ throw 'could not install agents-fleet from PyPI; pass --repo to install from git' }}
 }} else {{
   # The new one first, and nothing removed unless it worked: uninstalled first, a
   # failed install left the machine with no fleet at all.
@@ -474,10 +494,9 @@ if (Test-Path $fleet) {{
 """
 
 
-def _how_installed_ps(from_git: bool, update_only: bool) -> str:
+def _how_installed_ps(from_git: bool) -> str:
     """The PowerShell half of `_how_installed_posix`: sets $mode and $kept."""
     forced = "$true" if from_git else "$false"
-    other = "$true" if update_only else "$false"
     return f"""$mode = 'git'
 $kept = ''
 if (-not {forced}) {{
@@ -512,11 +531,13 @@ if (-not {forced}) {{
   }} elseif ((Get-Command pipx -ErrorAction SilentlyContinue) -and
              $(try {{ ((& pipx list --short 2>$null) -join "`n") -match '(?m)^agents-fleet ' }} catch {{ $false }})) {{
     $mode = 'pipx'
-  }} elseif ({other} -and -not (Test-Path (Join-Path $dir '.git')) -and (Get-Command fleet -ErrorAction SilentlyContinue)) {{
+  }} elseif (-not (Test-Path (Join-Path $dir '.git')) -and (Get-Command fleet -ErrorAction SilentlyContinue)) {{
     $v = 'version unknown'
     try {{ $v = ((& fleet --version 2>$null) | Out-String).Trim() }} catch {{ }}
     $mode = 'keep'
     $kept = "fleet here ($v, $((Get-Command fleet).Source)) was installed another way, not by uv, pipx or fleet itself -- NOT updated; update it the way it was installed"
+  }} elseif (-not (Test-Path (Join-Path $dir '.git'))) {{
+    $mode = 'new'
   }}
 }}"""
 

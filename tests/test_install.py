@@ -13,6 +13,7 @@ import sys
 
 import pytest
 
+from fleet import install
 from fleet.install import build_install_argv, install_script
 from fleet.ssh.cmd import Endpoint
 
@@ -85,7 +86,7 @@ def _run(script: str, tmp_path):
 
 
 def test_a_fresh_device_gets_a_clone(tmp_path):
-    result = _run(install_script(str(_origin(tmp_path))), tmp_path)
+    result = _run(install_script(str(_origin(tmp_path)), from_git=True), tmp_path)
     assert result.returncode == 0, result.stderr
     assert (tmp_path / ".local" / "share" / "fleet" / "marker.txt").read_text(encoding="utf-8") == "v1\n"
 
@@ -94,14 +95,14 @@ def test_running_it_twice_updates_instead_of_failing(tmp_path):
     """`fleet install` doubles as `fleet update`; a second run must not die on an
     existing directory."""
     origin = _origin(tmp_path)
-    assert _run(install_script(str(origin)), tmp_path).returncode == 0
-    second = _run(install_script(str(origin)), tmp_path)
+    assert _run(install_script(str(origin), from_git=True), tmp_path).returncode == 0
+    second = _run(install_script(str(origin), from_git=True), tmp_path)
     assert second.returncode == 0, second.stderr
 
 
 def test_an_update_picks_up_new_commits(tmp_path):
     origin = _origin(tmp_path)
-    assert _run(install_script(str(origin)), tmp_path).returncode == 0
+    assert _run(install_script(str(origin), from_git=True), tmp_path).returncode == 0
 
     clone = tmp_path / "work"
     env = {"PATH": "/usr/bin:/bin", "HOME": str(tmp_path), "GIT_AUTHOR_NAME": "t",
@@ -112,13 +113,13 @@ def test_an_update_picks_up_new_commits(tmp_path):
                  ["git", "push", "--quiet", "origin", "main"]):
         subprocess.run(args, cwd=str(clone), env=env, check=True, capture_output=True)
 
-    assert _run(install_script(str(origin)), tmp_path).returncode == 0
+    assert _run(install_script(str(origin), from_git=True), tmp_path).returncode == 0
     assert (tmp_path / ".local" / "share" / "fleet" / "marker.txt").read_text(encoding="utf-8") == "v2\n"
 
 
 def test_the_installer_hands_the_checkout_to_uv(tmp_path):
     bin_dir, log = _fake_uv(tmp_path)
-    subprocess.run(["sh", "-c", install_script(str(_origin(tmp_path)))],
+    subprocess.run(["sh", "-c", install_script(str(_origin(tmp_path)), from_git=True)],
                    capture_output=True, text=True, timeout=60,
                    env={"HOME": str(tmp_path), "PATH": f"{bin_dir}:/usr/bin:/bin"})
     assert "tool install" in log.read_text(encoding="utf-8")
@@ -605,3 +606,186 @@ def test_installing_on_a_machine_makes_it_a_member_at_once(tmp_path, monkeypatch
     monkeypatch.setattr(sync, "run_sync", lambda ep, payload: sent.append(ep.target) or (0, ""))
     cli._hand_the_fleet_to(inv.find_exact(inv.load(), "gpu"))
     assert sent == ["gpu"]
+
+
+# ------------------------------------------- updated the way it was installed, never replaced
+
+FLEET_STUB = '#!/bin/sh\ncase "$1" in --version) echo "fleet 0.5.2";; *) exit 0;; esac\n'
+
+
+def _machine(tmp_path, *, uv_tool: str | None = None, pipx: bool = False,
+             fleet_on_path: bool = False):
+    """A machine with fleet installed one way or another, and a log of what was run.
+
+    `uv_tool` is the uv receipt's requirement line for an `agents-fleet` tool -- from
+    PyPI, a checkout, or fleet's own clone -- or None for no uv tool at all. The stubs
+    only record: nothing here installs anything, and the script's own branches are what
+    is under test.
+    """
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir(exist_ok=True)
+    log = tmp_path / "ran.log"
+    log.write_text("")
+    tool_bin = tmp_path / ".local" / "bin"
+    tool_bin.mkdir(parents=True, exist_ok=True)
+    tooldir = tmp_path / "uvtools"
+    tools = ""
+    if uv_tool is not None:
+        (tooldir / "agents-fleet").mkdir(parents=True)
+        (tooldir / "agents-fleet" / "uv-receipt.toml").write_text(
+            f"[tool]\nrequirements = [{{ name = \"agents-fleet\", {uv_tool} }}]\n")
+        tools = "agents-fleet v0.5.2"
+        fleet_on_path = True
+    # `uv tool install` puts the `fleet` command where uv puts commands, as the real
+    # one does, so the script's closing `fleet --version` finds it.
+    (bin_dir / "uv").write_text(f"""#!/bin/sh
+echo "uv $*" >> {log}
+case "$1 $2" in
+  "tool list") echo "{tools}" ;;
+  "tool dir") if [ "$3" = --bin ]; then echo {tool_bin}; else echo {tooldir}; fi ;;
+  "tool install") printf '%s' '{FLEET_STUB}' > {tool_bin}/fleet; chmod +x {tool_bin}/fleet ;;
+esac
+""")
+    if pipx:
+        (bin_dir / "pipx").write_text(f"""#!/bin/sh
+echo "pipx $*" >> {log}
+[ "$1" = list ] && echo "agents-fleet 0.5.2"
+exit 0
+""")
+        fleet_on_path = True
+    if fleet_on_path:
+        (bin_dir / "fleet").write_text(FLEET_STUB)
+    (bin_dir / "crontab").write_text("#!/bin/sh\nexit 0\n")
+    (bin_dir / "git").write_text(f'#!/bin/sh\necho "git $*" >> {log}\nexit 0\n')
+    for f in bin_dir.iterdir():
+        f.chmod(0o755)
+    return bin_dir, log
+
+
+def _install(tmp_path, bin_dir, **kw):
+    return subprocess.run(
+        ["sh", "-c", install_script("https://example.invalid/fleet.git", **kw)],
+        capture_output=True, text=True, timeout=60,
+        env={"HOME": str(tmp_path), "PATH": f"{bin_dir}:/usr/bin:/bin"})
+
+
+@pytest.mark.parametrize("update_only", [True, False], ids=["update", "install"])
+def test_fleet_from_pypi_is_upgraded_from_pypi(tmp_path, update_only):
+    """A machine installed with `uv tool install agents-fleet` -- the one-line installer's
+    way -- used to be swapped for a checkout of `main` by the next `fleet update`."""
+    bin_dir, log = _machine(tmp_path, uv_tool='specifier = ">=0.5"')
+    r = _install(tmp_path, bin_dir, update_only=update_only)
+    assert r.returncode == 0, r.stderr
+    ran = log.read_text()
+    assert "uv tool upgrade --quiet agents-fleet" in ran
+    assert "tool install" not in ran and "git " not in ran, ran
+
+
+def test_fleet_from_pipx_is_upgraded_with_pipx(tmp_path):
+    bin_dir, log = _machine(tmp_path, pipx=True)
+    r = _install(tmp_path, bin_dir, update_only=True)
+    assert r.returncode == 0, r.stderr
+    ran = log.read_text()
+    assert "pipx upgrade agents-fleet" in ran
+    assert "tool install" not in ran and "git " not in ran, ran
+
+
+@pytest.mark.parametrize("receipt", ['editable = "/home/me/src/fleet"',
+                                     'directory = "/home/me/src/fleet"'])
+@pytest.mark.parametrize("update_only", [True, False], ids=["update", "install"])
+def test_a_source_install_is_kept_and_says_so(tmp_path, receipt, update_only):
+    """Your own checkout is a development install: never replaced by a release, and
+    never by fleet's checkout either."""
+    bin_dir, log = _machine(tmp_path, uv_tool=receipt)
+    r = _install(tmp_path, bin_dir, update_only=update_only)
+    assert r.returncode == 0, r.stderr
+    assert f"{install.KEPT_MARK} " in r.stdout and "source checkout" in r.stdout
+    ran = log.read_text()
+    assert "tool install" not in ran and "tool upgrade" not in ran and "git " not in ran, ran
+
+
+@pytest.mark.parametrize("update_only", [True, False], ids=["update", "install"])
+def test_a_fleet_installed_some_other_way_is_kept(tmp_path, update_only):
+    """pip, a virtualenv, a package manager: fleet cannot update it, and `fleet install`
+    used to put a second copy beside it that took the `fleet` command over."""
+    bin_dir, log = _machine(tmp_path, fleet_on_path=True)
+    r = _install(tmp_path, bin_dir, update_only=update_only)
+    assert r.returncode == 0, r.stderr
+    assert install.KEPT_MARK in r.stdout and "0.5.2" in r.stdout and "NOT updated" in r.stdout
+    assert "tool install" not in log.read_text()
+
+
+def test_fleets_own_checkout_is_updated_from_git(tmp_path):
+    """Installed by an older `fleet install`: the clone in ~/.local/share/fleet is what
+    the uv tool was built from, so that is what is updated."""
+    clone = tmp_path / ".local" / "share" / "fleet"
+    (clone / ".git").mkdir(parents=True)
+    bin_dir, log = _machine(tmp_path, uv_tool=f'directory = "{clone}"')
+    r = _install(tmp_path, bin_dir, update_only=True)
+    assert r.returncode == 0, r.stderr
+    ran = log.read_text()
+    assert "fetch --quiet origin main" in ran
+    assert f"tool install --force --reinstall-package agents-fleet --quiet {clone}" in ran
+    assert install.KEPT_MARK not in r.stdout
+
+
+def test_a_machine_with_no_fleet_gets_the_release(tmp_path):
+    """`fleet install` on a bare machine installs what the one-line installer would --
+    the release from PyPI -- not whatever `main` holds today."""
+    bin_dir, log = _machine(tmp_path)
+    r = _install(tmp_path, bin_dir)
+    assert r.returncode == 0, r.stderr
+    ran = log.read_text()
+    assert "uv tool install --quiet agents-fleet" in ran
+    assert "git " not in ran, ran
+    assert not (tmp_path / ".local" / "share" / "fleet").exists(), "no clone is made"
+
+
+def test_asking_for_git_by_name_gets_git(tmp_path):
+    """`--repo` or `--ref` is an explicit request, and overrides how fleet was installed."""
+    bin_dir, log = _machine(tmp_path, uv_tool='specifier = ">=0.5"')
+    r = _install(tmp_path, bin_dir, update_only=True, from_git=True, ref="v0.5.2")
+    assert r.returncode == 0, r.stderr
+    ran = log.read_text()
+    assert "git clone --quiet --branch v0.5.2" in ran
+    assert "tool upgrade" not in ran
+
+
+def test_a_tag_can_be_installed_over_an_existing_clone(tmp_path):
+    """`--ref` says "branch or tag", but an existing clone checked out `origin/$REF`,
+    which a tag does not have -- so `--ref v1` failed on every machine that already had
+    fleet's checkout. Run for real against a git repo."""
+    origin = _origin(tmp_path)
+    env = {"PATH": "/usr/bin:/bin", "HOME": str(tmp_path), "GIT_AUTHOR_NAME": "t",
+           "GIT_AUTHOR_EMAIL": "t@e", "GIT_COMMITTER_NAME": "t", "GIT_COMMITTER_EMAIL": "t@e"}
+    work = tmp_path / "work"
+    subprocess.run(["git", "clone", "--quiet", str(origin), str(work)], env=env, check=True)
+    git = lambda *a: subprocess.run(["git", *a], cwd=str(work), env=env, check=True,
+                                    capture_output=True)
+    git("tag", "v1")
+    (work / "marker.txt").write_text("v2\n")
+    git("commit", "--quiet", "-am", "v2")
+    git("push", "--quiet", "origin", "main", "v1")
+
+    assert _run(install_script(str(origin), from_git=True), tmp_path).returncode == 0
+    marker = tmp_path / ".local" / "share" / "fleet" / "marker.txt"
+    assert marker.read_text(encoding="utf-8") == "v2\n"
+    r = _run(install_script(str(origin), ref="v1", from_git=True), tmp_path)
+    assert r.returncode == 0, r.stderr
+    assert marker.read_text(encoding="utf-8") == "v1\n"
+
+
+def test_the_windows_installer_decides_the_same_way():
+    """Not run here -- there is no PowerShell -- but every mode the sh script has must
+    exist in the PowerShell one too, or a Windows machine falls back to git."""
+    from fleet.ssh.cmd import WINDOWS
+
+    ps = install_script("https://e/f.git", platform=WINDOWS, update_only=True)
+    for mode in ("'uv'", "'pipx'", "'keep'", "'new'", "'old'"):
+        assert f"$mode = {mode}" in ps or f"$mode -eq {mode}" in ps, mode
+    assert "uv tool upgrade --quiet agents-fleet" in ps
+    assert "pipx upgrade agents-fleet" in ps
+    assert "uv tool install --quiet agents-fleet" in ps
+    assert install.KEPT_MARK in ps
+    forced = install_script("https://e/f.git", platform=WINDOWS, from_git=True)
+    assert "if (-not $true)" in forced, "--repo/--ref skips the detection"
