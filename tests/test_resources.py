@@ -199,6 +199,11 @@ def test_model_servers_are_asked_what_they_serve(tmp_path, monkeypatch):
                        f'users:(("vllm",pid=1,fd=3))\n' for p in port.values())
         (bin_ / "ss").write_text(f"#!/bin/sh\nprintf '%s' '{rows}'\n")
         (bin_ / "ss").chmod(0o755)
+        # macOS reads ports from lsof, not ss: the same three, in lsof's columns.
+        lsof = "COMMAND PID USER FD TYPE DEVICE SIZE/OFF NODE NAME\n" + "".join(
+            f"vllm 1 me 3u IPv4 0x1 0t0 TCP 127.0.0.1:{p} (LISTEN)\n" for p in port.values())
+        (bin_ / "lsof").write_text(f"#!/bin/sh\nprintf '%s' '{lsof}'\n")
+        (bin_ / "lsof").chmod(0o755)
         home = make_home(tmp_path)
         out = probe(home, PATH=f"{bin_}:{os.environ['PATH']}")
         snap = parse_payload(out)
