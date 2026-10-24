@@ -15,7 +15,7 @@ _DIRS = PlatformDirs(appname="fleet", appauthor=False, roaming=False)
 CONFIG_DIR = Path(os.environ.get("FLEET_CONFIG_DIR") or _DIRS.user_config_dir)
 STATE_DIR = Path(os.environ.get("FLEET_STATE_DIR") or _DIRS.user_state_dir)
 # The machines added by hand. Not `inventory.yaml`, which fleet 0.5 kept with the access
-# list and the center's record: 0.6 starts from a clean list (docs/guides/upgrading.md).
+# list and the center's record: 0.6 starts from a clean list (docs/guides/upgrading-from-0.5.md).
 INVENTORY_PATH = CONFIG_DIR / "machines.yaml"
 CONFIG_PATH = CONFIG_DIR / "config.yaml"
 DB_PATH = STATE_DIR / "cache.db"

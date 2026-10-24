@@ -67,8 +67,9 @@ Turn the server on first, if it is not:
 | Windows | in an administrator PowerShell: `Add-WindowsCapability -Online -Name OpenSSH.Server~~~~0.0.1.0; Start-Service sshd; Set-Service sshd -StartupType Automatic` |
 
 Then put your public key on it, once. `fleet doctor NAME` prints these lines with your
-key already in them (it uses `~/.ssh/id_ed25519.pub`, else `id_ecdsa.pub`, else
-`id_rsa.pub`). If you have no key yet, `ssh-keygen -t ed25519` makes one.
+key already in them: the `.pub` beside the key file the machine was added with (`-i`),
+or else `~/.ssh/id_ed25519.pub`, `id_ecdsa.pub`, `id_rsa.pub` or any other `.pub` there. If
+you have no key yet, `ssh-keygen -t ed25519` makes one.
 
 **On a Mac** (or Linux), in a terminal on that machine:
 

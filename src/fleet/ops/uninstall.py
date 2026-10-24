@@ -69,6 +69,7 @@ def _fleet_files() -> list[Path]:
     cfg, st = config.CONFIG_DIR, config.STATE_DIR
     named = [
         inv.INVENTORY_PATH, config.CONFIG_PATH, identity.device_id_file(),
+        st / "first-run-done",
         store.DB_PATH, store.DB_PATH.with_name(store.DB_PATH.name + "-wal"),
         store.DB_PATH.with_name(store.DB_PATH.name + "-shm"),
         st / "update.log", st / "update.ps1", st / "update-run.ps1", st / "update-run.log",

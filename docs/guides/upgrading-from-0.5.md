@@ -219,8 +219,9 @@ launchctl bootout "gui/$(id -u)" ~/Library/LaunchAgents/io.fleet.center.plist
 rm -f ~/Library/LaunchAgents/io.fleet.center.plist
 ```
 
-**Windows** — a scheduled task, and two firewall rules for port 7373, which the
-installer does not remove. In an administrator PowerShell:
+**Windows** — a scheduled task, and two firewall rules for port 7373. The 0.6 installer
+removes both, but the firewall rules only when it runs as an administrator. To check, or
+to do it by hand, in an administrator PowerShell:
 
 ```powershell
 schtasks /query /tn fleet-center                # "cannot find" means it is gone

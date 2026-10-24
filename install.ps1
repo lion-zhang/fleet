@@ -125,6 +125,9 @@ function Install-Fleet {
         if ($exe -and $fleet -and (Test-Path $fleet)) {
             try { schtasks /end /tn fleet-center 2>&1 | Out-Null } catch { }
             try { schtasks /delete /tn fleet-center /f 2>&1 | Out-Null } catch { }
+            # And the firewall rules 0.5 opened for its listener.
+            try { netsh advfirewall firewall delete rule name="fleet center" 2>&1 | Out-Null } catch { }
+            try { netsh advfirewall firewall delete rule name="fleet center app" 2>&1 | Out-Null } catch { }
             $listeners = { Get-CimInstance Win32_Process | Where-Object {
                 $_.Name -match '^(fleet|pythonw?)\.exe$' -and $_.CommandLine -like '*center*--listen*' } }
             & $listeners | ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }

@@ -208,9 +208,8 @@ fi
 def _drop_timer_block() -> str:
     """Remove the cron entry earlier versions installed.
 
-    It ran `fleet sync` on a timer, which dialled the center. Sync is center-initiated
-    now -- nothing connects to the center at all -- so the entry can only fail, silently,
-    every ten minutes forever. Filtered by the same marker it was written with, so the
+    It ran `fleet sync` on a timer, which dialled the center. There is no center or sync
+    any more, so the entry can only fail, silently, every ten minutes forever. Filtered by the same marker it was written with, so the
     user's own entries are untouched.
     """
     marker = "# fleet-sync"
@@ -380,6 +379,9 @@ if ($mode -eq 'git') {{
 # center, which could not be updated at all until this was written like this.
 try {{ schtasks /end /tn fleet-center 2>&1 | Out-Null }} catch {{ }}
 try {{ schtasks /delete /tn fleet-center /f 2>&1 | Out-Null }} catch {{ }}
+# And the firewall rules 0.5 opened for its listener.
+try {{ netsh advfirewall firewall delete rule name="fleet center" 2>&1 | Out-Null }} catch {{ }}
+try {{ netsh advfirewall firewall delete rule name="fleet center app" 2>&1 | Out-Null }} catch {{ }}
 try {{ taskkill /f /im fleet.exe 2>&1 | Out-Null }} catch {{ }}
 Get-CimInstance Win32_Process -Filter "Name='pythonw.exe'" |
   Where-Object {{ $_.CommandLine -like '*-m*fleet*center*--listen*' }} |

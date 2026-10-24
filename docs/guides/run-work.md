@@ -1,6 +1,6 @@
 # Running work
 
-Once a machine is in the fleet, your agent can run things on it. You ask for the work;
+Once you have added a machine, your agent can run things on it. You ask for the work;
 it picks the machine and connects.
 
 > **You:** run the test suite on the Linux box and tell me what failed
@@ -20,13 +20,12 @@ PowerShell does it even inside double quotes, so from Windows `fleet ssh gpu-box
 machine as you typed it, and that machine expands it. fleet warns when a command bound
 for a Linux or macOS machine contains your Windows home folder.
 
-`fleet ssh` finds the machine's address and the right key, so the agent needs neither
-and never builds an `ssh` command by hand. It works on every
-OS: on a Windows machine the command goes to its shell as it is, and the remote
+`fleet ssh` finds the machine's address, user, port and key file, and runs your own
+`ssh` with them, so the agent needs none of them and never builds an `ssh` command by
+hand. It connects exactly as `ssh` does from this machine — your ssh config, keys and
+agent, Tailscale SSH — and with keys only: it never prompts for a password. It works on
+every OS: on a Windows machine the command goes to its shell as it is, and the remote
 command's exit code comes back in every case.
-
-From the center it reaches every machine. From a member it reaches the machines that
-member has been [granted](access.md).
 
 ## Long jobs
 
@@ -50,13 +49,15 @@ longer.
 
 fleet has no copy command. Get code onto a machine the way you would by hand: clone it
 there (`fleet ssh gpu-box -- 'git clone …'`), or pull from wherever your data lives.
-Machines you have [granted access](access.md) to one another can also copy between
-themselves with `scp` or `rsync`.
+`scp` and `rsync` work as they always do: fleet's machines are reached with your ssh, so
+any route it uses, they can use too.
 
 ## When a machine refuses
 
 | What you see | What it means |
 |---|---|
-| `NAME rejected our key` | The machine is up but does not accept the key. Only the center can put one back: on the center, `fleet add "ssh …"` for it again, or `fleet sync` if this machine was granted access to it and the grant is still pending. |
+| `NAME refused us a moment ago` | The machine is up but did not let fleet in on the last reading. `fleet doctor NAME` says why and gives the fix — usually your key on the machine ([more](reaching-machines.md)). |
+| `Permission denied (publickey)` | The same, from ssh itself: `fleet doctor NAME`. |
 | `No device named …` | Check the name with `fleet ls`; an alias works too. |
-| `NAME has no endpoint recorded` | fleet knows the machine but not how to reach it, e.g. a former center. `fleet edit NAME --ssh "ssh user@host"` on the center. |
+| `NAME has no endpoint recorded` | fleet knows the machine but not how to reach it. `fleet edit NAME --ssh "ssh user@host"`. |
+| `NAME is this machine` | Run the command here, without `fleet ssh`. |

@@ -122,7 +122,8 @@ costing money*, whatever its price.
 `fleet ls` puts the first alert for each machine in its NOTE column; the agent reads all
 of them, and treats them as blocking:
 
-- the machine is up but **refused the fleet's key** — this is not "offline";
+- the machine is up but **refused us** — this is not "offline"; `fleet doctor NAME` says
+  why ([more](reaching-machines.md#when-a-machine-refuses));
 - **VRAM held by processes fleet cannot see** — do not treat it as free;
 - a **disk at 90%** or more;
 - **`nvidia-smi` failing**;

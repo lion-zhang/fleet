@@ -13,16 +13,16 @@ Task by task: what to say to your agent, and the command it runs.
 
 | Guide | For when you want to… |
 |---|---|
-| [Adding machines](guides/add-machines.md) | add a server, a rental, a password-only host, one behind NAT, or one that does not exist yet |
+| [Adding machines](guides/add-machines.md) | add a server, a rental, one from your ssh config or tailnet; names, tags, clones, removing |
+| [Reaching your machines](guides/reaching-machines.md) | let fleet in: Tailscale SSH, Windows and Mac, rentals, LAN; what to do when a machine refuses |
 | [Finding the right machine](guides/find-machines.md) | let the agent pick by GPU, memory or OS; tag machines; track costs and idle rentals |
 | [What is on each machine](guides/resources.md) | see GPU jobs, served models, installed software, and where models and data live |
 | [Running work](guides/run-work.md) | run commands and long jobs on another machine |
-| [Access between machines](guides/access.md) | let one machine reach another, and take it back |
-| [The center](guides/center.md) | understand what the center does, what happens when it is off, and move it |
 | [Agents](guides/agents.md) | add fleet to a specific agent or app — 35+ of them |
-| [What fleet changes](guides/what-fleet-changes.md) | see exactly what fleet writes on each machine, check it, and take it all back |
+| [What fleet changes](guides/what-fleet-changes.md) | see exactly what fleet writes on each machine, and take it back |
 | [Installing and upgrading](guides/install.md) | install by hand, upgrade, put fleet on more machines, remove it |
-| [Windows](guides/windows.md) | add Windows machines to a fleet, or run fleet on Windows |
+| [Upgrading from 0.5](guides/upgrading-from-0.5.md) | what changed in 0.6, and removing what 0.5 left on your machines |
+| [Windows](guides/windows.md) | watch Windows machines, or run fleet on Windows |
 | [Troubleshooting](guides/troubleshooting.md) | find out what a message means and what to do |
 
 ## Reference
@@ -38,12 +38,8 @@ Exact and complete; generated from the code where it can be.
 Why fleet works the way it does.
 
 - [How fleet works](design/how-it-works.md) — what happens, step by step, when you install,
-  add a machine, measure, grant access, sync and join; and which code does it.
+  add a machine, measure, diagnose a refusal and run a job; and which code does it.
 - [Core, skill and MCP](design/layers.md) — one `fleet` per machine, shared by every agent.
-- [Access](design/access.md) — how keys are placed, signed, handed over and revoked; the
-  threat model.
-- [Sync](design/sync.md) — how machines share the inventory, and why the center is allowed
-  to be offline.
 
 ## Contributing
 

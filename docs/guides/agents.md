@@ -6,7 +6,7 @@ This page is for adding fleet from inside one particular agent or app, or to an 
 `fleet setup` does not know.
 
 Every way in runs the same `fleet` from PyPI ([agents-fleet](https://pypi.org/project/agents-fleet/)),
-so all your agents share one fleet: one inventory, one set of keys
+so all your agents on a machine share one fleet: one list of machines, one cache
 ([why](../design/layers.md)). Two kinds of entry:
 
 - **Skills** are for agents that can run commands. A skill is text that tells the agent
@@ -15,10 +15,10 @@ so all your agents share one fleet: one inventory, one set of keys
 - **MCP** is for apps that cannot run commands. The app launches `uvx agents-fleet mcp`,
   which runs the same commands for it. It needs only [uv](https://docs.astral.sh/uv/).
 
-> **Center or member.** On a machine in no fleet yet, the first use of fleet makes it the
-> **center** of a new fleet, however it was installed. If this machine should join a
-> fleet you already have, run the line `fleet invite` prints on that fleet's center
-> *first*, then add the agent.
+> **However it is installed, it is the same fleet.** There are no modes to choose. The
+> first use of fleet on a machine — through a plugin, an MCP app or a shell — records the
+> machine and teaches the other agents found there, once (`FLEET_NO_FIRST_RUN=1` skips
+> that). fleet then reaches other machines with your own ssh, exactly as you do.
 
 **✓** = run here, and the agent registered (or connected to) the server.
 **docs** = from the agent's official documentation, not run here.
@@ -212,6 +212,27 @@ npx skills add lion-zhang/fleet          # ✓ — installs into every agent it 
 
 For Hermes, install the CLI and run `fleet setup --target hermes`, which writes into
 Hermes' own home (`%LOCALAPPDATA%\hermes` on Windows, or `$HERMES_HOME`).
+
+## What the MCP server offers
+
+Each tool runs one `fleet` command and returns what it says, so an app without a shell
+gets the same answers as an agent with one.
+
+| Tool | Runs |
+|---|---|
+| `list_machines` | `fleet ls --json`, with `tag` to pick by what a machine has |
+| `show_machine` | `fleet show NAME --json` |
+| `list_gpu_jobs` | `fleet ps --json` |
+| `list_models` | `fleet models --json` |
+| `run_on_machine` | `fleet ssh NAME -- COMMAND`: its output and exit code, within two minutes |
+| `add_machine` | `fleet add "ssh …" --json` |
+| `discover_machines` | `fleet ls --discover --json` |
+| `doctor_machine` | `fleet doctor [NAME] --json` |
+| `edit_machine` | `fleet edit NAME`: tags, cost, address, disks, name, alias |
+| `set_machine_paths` | `fleet edit NAME --path KIND=PATH` |
+
+Removing a machine, and installing, updating or uninstalling fleet, are not tools: they
+are yours to run, in a terminal.
 
 ## What `fleet setup` does
 
