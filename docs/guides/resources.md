@@ -25,7 +25,8 @@ fleet ps --json          # for scripts and agents
 <img src="../assets/fleet-ps.svg" alt="fleet ps: three jobs across two machines, and three idle GPUs" width="100%">
 
 Each job shows who runs it, the VRAM it holds, how long it has been running and its
-command line. Desktop programs that hold a little VRAM (a browser, the window manager)
+command line. NVIDIA cards are read with `nvidia-smi`, AMD cards with `amd-smi` (or
+`rocm-smi` on ROCm before 6.1), and both list their jobs the same way. Desktop programs that hold a little VRAM (a browser, the window manager)
 are not counted as jobs. `fleet top` shows the same in its JOBS column, and `fleet show
 NAME` lists them under each GPU.
 

@@ -83,12 +83,12 @@ You describe the work; the agent finds where it fits. It checks what each machin
 | You say | How the agent finds it |
 |---|---|
 | "what's free right now?" | every machine checked, the free ones listed |
-| "find me a box with a 24 GB card" | matched by what machines have — NVIDIA, VRAM, cores, RAM — not by name |
+| "find me a box with a 24 GB card" | matched by what machines have — NVIDIA or AMD, VRAM, cores, RAM — not by name |
 | "run the tests on the Linux box" | the machine that runs Linux, results brought back |
 | "what's costing me money?" | idle paid rentals flagged, with their hourly price |
 | "who is using the GPUs?" | every job on every card — user, VRAM, how long, the command |
 | "is Llama 3 already served somewhere?" | every model server's models, and the URL or ssh tunnel to reach it |
-| "which box has torch 2.5 and CUDA 12?" | each machine's CUDA, Python environments and package versions |
+| "which box has torch 2.5 and CUDA 12?" | each machine's CUDA or ROCm, Python environments and package versions |
 | "download the dataset where datasets go" | the folder that machine says holds datasets, and the room left there |
 
 Keys and passwords never go into the conversation, and anything irreversible waits for
@@ -148,6 +148,7 @@ Then drive it yourself:
 ```bash
 fleet ls                            # every machine, with what is free right now
 fleet ls --tag cuda --tag vram-24g  # by capability: NVIDIA, a card of 24 GB or more
+fleet ls --tag rocm                 # every AMD machine
 fleet top                           # live view, like htop for the whole fleet
 fleet show gpu-box                  # one machine in detail: jobs, software, models, folders
 fleet ps                            # every job on every GPU, and which GPUs are idle
