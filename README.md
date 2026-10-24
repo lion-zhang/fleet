@@ -179,13 +179,21 @@ or WireGuard? fleet just needs an address it can route to.
 
 fleet is about the machines you already have. It complements tools that launch new ones.
 
-| | `ssh` + `nvidia-smi` | nvitop / gpustat | SkyPilot / dstack | **fleet** |
-|---|:---:|:---:|:---:|:---:|
-| All your machines in one view | ✗ | ✗ one machine | ✓ the ones it manages | ✓ |
-| Built for coding agents (skill / MCP) | ✗ | ✗ | partly | ✓ |
-| Nothing installed on target machines | ✓ | ✗ | ✗ | ✓ |
-| Jobs, served models, software, data folders | ✗ | jobs, one machine | ✗ | ✓ |
-| Launches new cloud VMs | ✗ | ✗ | ✓ | ✗ |
+| | `ssh` + `nvidia-smi` | nvitop / gpustat | all-smi / gpuwho | SkyPilot / dstack | **fleet** |
+|---|:---:|:---:|:---:|:---:|:---:|
+| All your machines in one view | ✗ | ✗ one machine | ✓ | ✓ the ones it manages | ✓ |
+| Built for coding agents (skill / MCP) | ✗ | ✗ | ✗ | partly | ✓ |
+| Nothing installed on target machines | ✓ | ✗ | gpuwho ✓, all-smi ✗ | ✗ | ✓ |
+| Jobs, served models, software, data folders | ✗ | jobs, one machine | jobs | ✗ | ✓ |
+| NVIDIA, AMD and Apple GPUs | NVIDIA | NVIDIA | all-smi ✓ | ✓ | ✓ |
+| Launches new cloud VMs | ✗ | ✗ | ✗ | ✓ | ✗ |
+| History, alerts sent to you | ✗ | ✗ | all-smi ✓ | partly | ✗ alerts when asked |
+
+**When to use something else.** To rent GPUs on demand at the lowest price, use SkyPilot
+or dstack: they launch and stop machines, and fleet does not. For weeks of metrics and
+paging on a large cluster, use DCGM with Prometheus and Grafana. For a live dashboard of
+many accelerator kinds (Gaudi, NPUs), use all-smi. fleet is for the machines you already
+have, and for letting your agent use them.
 
 **Why not just Tailscale, Ansible, or an `~/.ssh/config`?** Use them with fleet, not
 instead of it. Tailscale connects your machines, and fleet runs over it happily, but it

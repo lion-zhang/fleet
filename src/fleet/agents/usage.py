@@ -32,7 +32,7 @@ A name may be omitted where the obvious subject is the machine you are on.
   servers are in `show` and `models`; `served_models` lists what each one serves
 - `{cmd} ls --tag NAME --json` -- **the right way to pick a machine.** Repeatable, and
   all must match: `--tag cuda --tag vram-24g` finds NVIDIA boxes with a card of at
-  least 24G. Matches two things at once -- what someone declared about a machine, and
+  least 24G (`rocm` for AMD). Matches two things at once -- what someone declared about a machine, and
   what the last probe measured. Never pick a machine by remembering its name
 - `{cmd} show [NAME] --json` -- full detail; no name means this machine. Beyond the
   hardware: `software` (cuda, nvcc, python, docker, and each Python environment with
@@ -144,7 +144,7 @@ A name may be omitted where the obvious subject is the machine you are on.
   and nothing to sync. Machines added by hand are in this machine's list only
   (`{cmd} paths`); the user may share that file with their dotfiles.
 - **Facts are measured; tags are declared.** `facts` in the JSON is recomputed from the
-  last probe, so it is current by construction -- `gpu`, `cuda`, `metal`, `multi-gpu`,
+  last probe, so it is current by construction -- `gpu`, `cuda`, `rocm`, `metal`, `multi-gpu`,
   `vram-NNg`, `linux`/`macos`/`windows`, `x86_64`/`arm64`, `cores-NN`, `ram-NNg`,
   `storage-NNt`, `public-ip`/`mesh`/`lan`, `rental`/`shared`/`appliance`. `tags` is
   whatever a human wrote, here or in the machine's own machine.yaml. `--tag` searches both.
@@ -153,8 +153,9 @@ A name may be omitted where the obvious subject is the machine you are on.
 - Size facts mean **at least**: a machine with `vram-48g` also reports `vram-24g`, so
   `--tag vram-24g` is how you ask for "24G or more". `cores-NN` counts logical CPUs,
   so a 16-core part with hyperthreading reports `cores-32`.
-- `gpu` without `cuda` means the card is there and the driver is not answering -- do not
-  send CUDA work to it. `metal` is an Apple GPU, which reports no VRAM figure.
+- `gpu` without `cuda` or `rocm` means the card is there and the driver is not
+  answering -- do not send GPU work to it. `rocm` is an AMD card: run ROCm builds
+  (torch from the ROCm index), never CUDA ones. `metal` is an Apple GPU, which reports no VRAM figure.
 - A machine with no telemetry has no facts and matches no `--tag`. `{cmd} ls --tag`
   says on stderr how many it could not judge; report that rather than concluding the
   fleet has nothing suitable.

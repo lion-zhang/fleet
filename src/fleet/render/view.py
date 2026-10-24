@@ -116,7 +116,9 @@ def facts(dev: Device, snap: dict | None, state: dict | None) -> list[str]:
     # sends a job to a box that dies at torch.cuda.init.
     if gpus:
         out.append("gpu")
-        out.append("cuda")
+        # What a job needs to run on it: CUDA for NVIDIA, ROCm for AMD. An older probe
+        # says no vendor, and only ever read nvidia-smi.
+        out.append("rocm" if snap.get("gpu_vendor") == "amd" else "cuda")
         if len(gpus) > 1:
             out.append("multi-gpu")
         # The largest single card, never the total: a model fits in one card's VRAM or it
@@ -197,7 +199,7 @@ def matches_tag(row: dict, tag: str) -> bool:
 # shadows a fact -- never to refuse one. A hand-set `gpu` on a box whose nvidia-smi is
 # wedged, or on an accelerator fleet has no probe for, is the correct use of the field.
 FACT_WORDS = frozenset({
-    "gpu", "cuda", "metal", "multi-gpu",
+    "gpu", "cuda", "rocm", "metal", "multi-gpu",
     "linux", "macos", "windows", "x86_64", "arm64",
     "public-ip", "mesh", "lan",
     "rental", "shared", "appliance",
@@ -389,7 +391,10 @@ def _alerts(dev: Device, snap: dict | None, state: dict | None) -> list[str]:
                 out.append(f"disk {dv['mount']}: {dv['use_pct']}% full, "
                            f"{dv['free_gb']}G left -- a long job will die on this")
         if snap.get("gpu_present") == "err":
-            out.append(f"nvidia-smi present but failing: {snap.get('gpu_error', '')[:80]}")
+            if snap.get("gpu_vendor") == "amd":
+                out.append(snap.get("gpu_error", "")[:120] or "an AMD GPU tool is here but read no GPU")
+            else:
+                out.append(f"nvidia-smi present but failing: {snap.get('gpu_error', '')[:80]}")
         if snap.get("notes_error"):
             out.append(f"{snap['notes_error'][:160]} -- its notes and paths were not read")
         for st in snap.get("storage", []):

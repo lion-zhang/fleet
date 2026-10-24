@@ -171,6 +171,7 @@ class Snapshot:
     mem_total_kb: int | None = None
     mem_avail_kb: int | None = None
     gpu_present: str = "0"       # "1" | "0" | "err"
+    gpu_vendor: str = ""         # "nvidia" | "amd"; older probes say nothing, and mean nvidia
     gpu_driver: str = ""
     gpu_error: str = ""
     gpus: list[Gpu] = field(default_factory=list)
