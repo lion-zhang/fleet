@@ -20,16 +20,10 @@ _DESCRIPTION = ("Use when the task needs a remote machine or GPU, or the user as
 
 
 def _usage(cmd: str) -> str:
-    """What an agent needs to know, split by what it is allowed to do.
-
-    Deliberately two lists. Most machines can only read the fleet and connect to what
-    they were already granted; the center can also change who reaches what. An agent
-    that does not know the difference will either not try things that would work, or
-    try things that cannot and report a confusing failure as a fault.
-    """
+    """What an agent needs to know about fleet, and the rules for using it."""
     return f"""## Commands
 
-Anywhere. A name may be omitted where the obvious subject is the machine you are on.
+A name may be omitted where the obvious subject is the machine you are on.
 
 - `{cmd} ls --json` -- every machine, with what is free right now
 - `{cmd} ls NAME... --json` -- only those, `-r` to force a fresh probe,
@@ -56,40 +50,21 @@ Anywhere. A name may be omitted where the obvious subject is the machine you are
   `$HOME` would arrive as *this* machine's home -- PowerShell does it even inside double
   quotes. Quoted, the machine that runs the command expands them
 - `{cmd} ssh NAME` -- an interactive shell, exactly as plain ssh
-- `{cmd} access [NAME]` -- who may reach what, and what is still pending
-- `{cmd} center --json` -- `role` (center or member), who decides, and when it was last heard from
-- `{cmd} center --pubkey` -- on the center: the key to pre-place on a host that takes
-  no password; works with nothing reachable, which is the point. On a member it prints
-  that member's own key, which the center does not use
-- `{cmd} center --export` -- the access list and pins, worth keeping off the machine
-- `{cmd} center --leave` -- take this machine out of the fleet (a member; the center
-  refuses -- it hands the role on or dissolves). Needs nobody's permission: you own the
-  machine you are on
-- `{cmd} uninstall` -- only when the user asks to remove fleet from this machine: leaves
-  its fleet, removes fleet from the agents here (this skill included) and the service;
-  `--purge` deletes fleet's files too. It refuses on the center of a fleet with other
-  machines in it. It prints the last step -- removing the program -- for the user to run
-- `{cmd} top` -- live view; needs a terminal, so not for an agent
-- `{cmd} update [NAME]` / `--all` -- deploy the newest fleet from git. It also
-  rewrites this description on each machine, so what you read here stays current;
-  `{cmd} setup --refresh` does just that part
-- Windows hosts work as targets: they are probed and keyed over PowerShell, and
-  `{cmd} ssh box -- cmd` passes the command through rather than wrapping it in a
-  POSIX shell. Nothing to configure -- it is read from the last probe, and the remote
-  command's exit code comes back on every OS
-- `{cmd} add "ssh user@host"` -- add a machine to the fleet. It must answer, or it is
-  not recorded at all: a machine the center cannot reach cannot be managed. Run on the
-  center this also enrols it; run anywhere else it is recorded and the center enrols it
-  on the next `{cmd} sync`, and it can be granted nothing until then. `--name` and
-  `--kind` override what is guessed, `--alias SHORT` gives it a short handle you can
-  type anywhere a name goes, and `--tag NAME` (repeatable) labels it. Use the `name`
-  in its `--json` reply from then on: a machine already known (one box at a second
-  address) keeps its own name, whatever `--name` asked for
+- `{cmd} add "ssh user@host"` -- watch a machine, from the ssh command the user already
+  uses (a rental's is the one its provider shows). It must let us in, or it is not
+  recorded: the reply then has `why` and `fix`. `--name` and `--kind` override what is
+  guessed, `--alias SHORT` gives it a short handle you can type anywhere a name goes,
+  and `--tag NAME` (repeatable) labels it. Use the `name` in its `--json` reply from
+  then on: a machine already known (one box at a second address) keeps its own name
+- `{cmd} ls --discover --json` -- machines the user can already reach that are not added
+  yet: the Host entries of their ~/.ssh/config, and the machines on their tailnet.
+  `{cmd} add NAME` adds one by that name. Offer, do not add them all: a tailnet has
+  phones on it, and an ssh config has hosts nobody uses any more
 - `{cmd} add --self` -- record the machine you are on, without ssh
-- `{cmd} join CODE` -- join a fleet with an invite the center issued. The machine dials
-  the center, so no password is typed and a machine the center cannot reach can still
-  join. `--name` names it if the invite did not, `--ssh "ssh user@addr"` says how the
-  center reaches it back when the address it sees is not that (NAT, a jump host)
+- `{cmd} doctor [NAME] --json` -- why a machine will not let us in, and the exact fix:
+  the line that puts the user's key on it (per OS, and for a Windows administrator), the
+  rental provider's page to add the key to, or the Tailscale SSH policy rule. It
+  changes nothing; give the user its `fix`
 - `{cmd} edit [NAME] --ssh "ssh ..."` -- a rental moved; point the record at the new
   address. `--disk-path /workspace` to watch the volume that matters, `--name` to
   rename, `--alias` to set or clear the short handle, `--tag`/`--untag` to add and
@@ -98,63 +73,28 @@ Anywhere. A name may be omitted where the obvious subject is the machine you are
   `models`, `datasets`, `media`, `scratch`, `envs` (Python environments to look in), or
   a kind of your own. Repeat a kind for several folders; `models=` clears it. It is
   written to `machine.yaml` on that machine, so everyone who looks at it sees the same
-- `{cmd} install NAME` -- put fleet on a machine that has none
-- `{cmd} paths` -- where the inventory, keys and access list live on this machine
-
-Only on the center. `{cmd} center --json` says which this machine is: `role` is
-`center` or `member` (empty when it is in no fleet), and `center` names the machine
-that decides. These refuse anywhere else and say
-where to run them: report that to the user, nothing is queued.
-
-- `{cmd} access NAME --allow MACHINE` -- grant, and it is applied on the spot, as the
-  account NAME is reached as. `--user` names another, since a box can answer as both
-  root@ and ubuntu@. A machine that is off stays pending; the center applies it once the
-  machine is back (`{cmd} sync` on the center tries at once).
-- `{cmd} access NAME --deny MACHINE` -- revoke, for every account unless `--user` names one
-- `{cmd} access [NAME] --prune` -- list fleet keys on machines that the list no longer
-  wants (a reinstalled machine's old key, a fleet rebuilt from scratch), and remove them
-  once the user agrees; `--yes` skips asking. Another fleet's keys are kept unless
-  `--fleet ID` names it. Show the user the list before removing anything
-- `{cmd} sync` -- on the center, the sweep: enrol anything not yet enrolled, install and
-  remove keys, and collect telemetry. On a member, fetch a fresh copy from the center
-  now. Rarely needed: a grant applies itself, and machines refresh on their own. Reach
-  for it to retry something left pending
-- `{cmd} sync --from URL` -- run on a machine the center cannot reach, to dial the
-  center instead. A machine learns where the center is only when the center reaches it,
-  so one behind a firewall, or on a path that fails in that direction, is a full member
-  with no way to find it. This is the way in. Ask the user for the address
-- `{cmd} center --listen` -- serve the fleet so machines refresh themselves instead of
-  waiting to be swept. Long-running: tell the user to run it, do not start it yourself
-- `{cmd} center NAME` -- hand the role over. Grants NAME everything and delivers the
-  handover to it (fleet must be installed there); then NAME runs `{cmd} center
-  --accept`, which verifies it can write every machine before taking the role. Every
-  machine, and the old center, follows by itself. Irreversible: a human runs it.
-  Until NAME accepts, the old center refuses changes (they would not carry over);
-  `{cmd} center --cancel` there keeps the role if NAME never will
-- `{cmd} center --init` / `--dissolve` -- create a fleet, or take it down. Dissolving
-  removes every key from every machine first; never delete the access list by hand,
-  which orphans those keys instead of removing them
-- `{cmd} rm NAME` -- remove another machine: its keys come off every other machine and
-  the fleet's keys come off it, at once. Any machine may remove *itself*
-- `{cmd} invite [NAME]` -- let one machine join by itself: prints `{cmd} join CODE` to
-  run there, and one line that installs fleet and joins in one go on a machine that
-  has no fleet yet (`--json`: `command`, `install`, `install_windows`). Single use; `--ttl 30m` for how long (default 15m), `--list` for what
-  became of recent ones, `--revoke ID` to withdraw one, `--url` when the machine must
-  dial some other address than the one the center listens on. The code admits a
-  machine, so hand it to the user and nowhere else: not into a file, a commit or a
-  message to anyone. Prefer this to `{cmd} add` when the host takes no key from here.
-  To give the user the install line, take `{cmd} invite NAME --json` and hand over its
-  `install` (or `install_windows`) field exactly as printed -- never re-assemble it from
-  the code. A code lost on the way (an empty `FLEET_JOIN`, a quote that ate it) makes
-  the machine start a fleet of its own instead of joining this one
+- `{cmd} rm NAME` -- stop watching a machine. Nothing on it changes
+- `{cmd} top` -- live view; needs a terminal, so not for an agent
+- `{cmd} install NAME` -- put fleet on a machine that has none, for agents there
+- `{cmd} update [NAME]` / `--all` -- deploy the newest fleet. It also rewrites this
+  description on each machine, so what you read here stays current;
+  `{cmd} setup --refresh` does just that part
+- `{cmd} uninstall` -- only when the user asks to remove fleet from this machine: removes
+  fleet from the agents here (this skill included); `--purge` deletes fleet's files too.
+  It prints the last step -- removing the program -- for the user to run
+- `{cmd} paths` -- where fleet keeps its list of machines and its cache here
+- Windows hosts work as targets: they are probed over PowerShell, and `{cmd} ssh box --
+  cmd` passes the command through rather than wrapping it in a POSIX shell. Nothing to
+  configure -- it is read from the last probe, and the remote command's exit code comes
+  back on every OS
 
 ## Rules
 
 - **Right after you install fleet for the user**, say in a few lines what they can do
   next, in their words, not commands: add a machine by giving you the SSH command they
-  already use ("add `ssh user@host`"), or ask for an invite line to paste on a machine
-  you cannot get into; then ask for what they need ("what's free?", "run this where a
-  24 GB card is free") and you will pick the machine. Offer to add the first one.
+  already use ("add `ssh user@host`"), or let you look in their ssh config and tailnet
+  for machines to add; then ask for what they need ("what's free?", "run this where a
+  24 GB card is free", "is Llama 3 served anywhere?") and you will pick the machine.
 - Check `{cmd} ls --json` before assuming work must run locally. A free remote GPU is
   usually the better place for training, evaluation, or anything long-running.
 - **Use what is already there.** Before downloading a model, check `{cmd} models --json`:
@@ -167,44 +107,33 @@ where to run them: report that to the user, nothing is queued.
 - A GPU with `jobs` belongs to whoever runs them, even when it shows free VRAM. Do not
   start work there without asking unless the job is yours.
 - Connect with `{cmd} ssh NAME`. Never hand-build an `ssh` invocation from inventory
-  fields: the wrapper resolves the endpoint and uses the fleet key.
+  fields: the wrapper resolves the endpoint and connects as the user does.
 - Treat `alerts` as blocking. A device reporting unattributed VRAM is not free, and a
   rental flagged idle is costing money right now.
-- `status` is not a boolean. `auth_failed` means the host is UP but rejected our key.
-  Report it; do not try to fix it -- only the center can, and it may be offline.
-- **Never type a password or accept one from the user.** The only command that asks for
-  one is `{cmd} add` on the center, for a host that accepts no key yet, and a human must
-  run that themselves. You are not stuck, though: `{cmd} center --pubkey` prints the key
-  to put on the host instead, after which enrolment needs no password at all, or
-  `{cmd} invite` issues a code the machine joins with by itself. Say that rather than
-  giving up.
-- **Ask rather than guess.** These commands need a machine name, sometimes a user,
-  sometimes a whole ssh command. If the request does not say, ask -- do not infer a
-  machine from a partial name or from whatever was being discussed. `{cmd} rm`,
-  `{cmd} access --deny`, `{cmd} center --dissolve`, `{cmd} uninstall` and
+- `status` is not a boolean. `auth_failed` means the host is UP but refused us. fleet
+  manages no access -- it connects exactly as the user does, with their ssh config,
+  keys, agent and Tailscale SSH -- so the fix is the user's to make: run `{cmd} doctor
+  NAME --json` and give them its `fix`.
+- **Never type a password or accept one from the user.** fleet never asks for one. A
+  machine that only takes a password needs the user's key on it once: `{cmd} doctor`
+  prints the line, and in a terminal `{cmd} add` offers `ssh-copy-id`, which asks the
+  user for the password itself.
+- **Ask rather than guess.** These commands need a machine name, sometimes a whole ssh
+  command. If the request does not say, ask -- never infer a machine from a partial name
+  or from whatever was being discussed. `{cmd} rm`, `{cmd} uninstall` and
   `{cmd} update --all` are not undone by running them again.
-- A row in `{cmd} access` has `state` present, pending or revoking. `pending`: a grant
-  that has not reached its machine yet, not one that failed. `revoking`: the key is
-  still on the machine. A listening center retries both by itself; say so rather than
-  retrying. But if `last_error` stays the same over many `attempts` -- a wrong
-  `--user`, an account that does not exist -- it will not land: report it.
-- Reading the fleet refreshes it. `{cmd} ls` and `{cmd} show` pull from the center when
-  this machine's copy has gone stale, so you do not need `{cmd} sync` to see current
-  data -- and a center that is down costs you freshness, never the command.
 - A machine that keeps not answering is asked less often by a bare `{cmd} ls`: the
   wait doubles per miss, up to half an hour. So `timeout` with an old "last seen" can
   be minutes stale. Before concluding a machine is down -- or when the user says it
   is back -- ask it directly: `{cmd} ls NAME -r --json`
-- The center is expected to be offline -- it is usually a laptop. Everything already
-  granted keeps working without it; only *changes* wait. "The center was last seen 3h
-  ago" is a normal state to report, not an error.
-- A relayed row (`via <machine>` in `{cmd} top`, `source: broadcast` in JSON) was
-  measured by the center, not here. Quote its age; do not present it as live.
+- Every machine running fleet sees the machines its own ssh reaches; there is no center
+  and nothing to sync. Machines added by hand are in this machine's list only
+  (`{cmd} paths`); the user may share that file with their dotfiles.
 - **Facts are measured; tags are declared.** `facts` in the JSON is recomputed from the
   last probe, so it is current by construction -- `gpu`, `cuda`, `metal`, `multi-gpu`,
   `vram-NNg`, `linux`/`macos`/`windows`, `x86_64`/`arm64`, `cores-NN`, `ram-NNg`,
   `storage-NNt`, `public-ip`/`mesh`/`lan`, `rental`/`shared`/`appliance`. `tags` is
-  whatever a human wrote. `--tag` searches both.
+  whatever a human wrote, here or in the machine's own machine.yaml. `--tag` searches both.
 - Size facts mean **at least**: a machine with `vram-48g` also reports `vram-24g`, so
   `--tag vram-24g` is how you ask for "24G or more". `cores-NN` counts logical CPUs,
   so a 16-core part with hyperthreading reports `cores-32`.

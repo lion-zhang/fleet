@@ -1,94 +1,26 @@
-"""Bootstrap key auth using a password typed once.
+"""Your key, and how to get it onto a machine that does not take it yet.
 
-fleet's whole credential story is that secrets never cross into an agent transcript or
-a log. A password is therefore not something to hold: it is used for exactly one
-connection, to append a public key to the host's authorized_keys, and then discarded.
-Every later connection is key auth, which is what the rest of the codebase already
-assumes.
-
-The password reaches ssh through a pty, never through argv -- argv is readable by every
-process on the machine via `ps`.
+fleet has no key of its own and writes no authorized_keys. It connects the way you do --
+your ssh config, your agent, your keys, Tailscale SSH -- so a machine that refuses you
+refuses fleet, and the fix is the one you would make anyway: put your public key on it,
+once. These are the words for that, per platform, and the one standard tool that does it
+for you (`ssh-copy-id`, which asks for the password itself; fleet never sees it).
 """
 
 from __future__ import annotations
 
-import os
 import re
-import select
 import shlex
-import signal
-import subprocess
-import time
-from contextlib import suppress
+import shutil
 from pathlib import Path
 
-from .. import config
-from .cmd import Endpoint, build_enroll_argv, run as sshrun
-
-# sshd's prompt varies ("Password:", "root@host's password:", a PAM phrasing), so match
-# the one word they reliably share, case-insensitively.
-_PROMPT = re.compile(rb"password.*:\s*$", re.IGNORECASE)
-
-def ensure_keypair(path: Path | None = None) -> tuple[Path, str]:
-    """This machine's own fleet keypair, created once. Returns (private path, public text).
-
-    Dedicated rather than reusing ~/.ssh/id_*: this key is fleet's handle on the
-    machine, so it can be revoked fleet-wide without touching the key you push to
-    GitHub with, and an entry in someone's authorized_keys says plainly where it came
-    from.
-
-    **Never regenerates.** A new key would orphan every authorized_keys entry already
-    placed for this machine -- on every host, in every fleet -- with nothing left to
-    match them by and no way to find them again. Same rule, and same reason, as the age
-    identity this replaces.
-    """
-    path = path or config.FLEET_KEY     # at call time: a redirected key must be the one made
-    pub = path.with_suffix(".pub")
-    if path.exists() and pub.exists():
-        return path, pub.read_text(encoding="utf-8").strip()
-
-    from ..state.writes import turn
-
-    path.parent.mkdir(parents=True, exist_ok=True)
-    # In turn, and looked at again inside it. Two agents starting fleet at once used to
-    # race here: the second saw the first one's private key before its .pub existed,
-    # took it for an interrupted run, deleted it, and made its own -- after which the
-    # first pinned a public key whose private half was gone.
-    with turn(path):
-        if path.exists() and pub.exists():
-            return path, pub.read_text(encoding="utf-8").strip()
-        return _make_keypair(path, pub)
-
-
-def _make_keypair(path: Path, pub: Path) -> tuple[Path, str]:
-    import socket
-    import subprocess
-
-    # ssh-keygen refuses to overwrite, which is the behaviour we want, but a half-made
-    # pair from an interrupted run would wedge it forever. Clear only that case.
-    if path.exists() or pub.exists():
-        with suppress(OSError):
-            path.unlink(missing_ok=True)
-        with suppress(OSError):
-            pub.unlink(missing_ok=True)
-    try:
-        subprocess.run(
-            ["ssh-keygen", "-t", "ed25519", "-N", "", "-q",
-             "-C", f"fleet:{socket.gethostname()}", "-f", str(path)],
-            check=True, capture_output=True, text=True)
-    except FileNotFoundError as exc:
-        raise KeyError("ssh-keygen not found -- install OpenSSH") from exc
-    except subprocess.CalledProcessError as exc:
-        raise KeyError(f"ssh-keygen failed: {(exc.stderr or '').strip()[:200]}") from exc
-    os.chmod(path, 0o600)
-    return path, pub.read_text(encoding="utf-8").strip()
-
+from .cmd import Endpoint
 
 _KEY_PREFERENCE = ("id_ed25519.pub", "id_ecdsa.pub", "id_rsa.pub")
 
 
 def public_key(ssh_dir: Path | None = None) -> tuple[Path, str] | None:
-    """The public key to install, preferring modern algorithms. None if there is none."""
+    """Your public key, preferring modern algorithms. None if there is none."""
     d = ssh_dir or (Path.home() / ".ssh")
     for name in _KEY_PREFERENCE:
         candidate = d / name
@@ -103,161 +35,46 @@ def public_key(ssh_dir: Path | None = None) -> tuple[Path, str] | None:
     return None
 
 
-def authorized_keys_command(pubkey: str) -> str:
-    """Append the key, tightening permissions on the way.
+def posix_install_line(pubkey: str) -> str:
+    """What to run on a Linux or macOS machine to let this key in."""
+    return ("umask 077; mkdir -p ~/.ssh && "
+            f"printf '%s\\n' {shlex.quote(pubkey.strip())} >> ~/.ssh/authorized_keys")
 
-    sshd silently ignores authorized_keys when ~/.ssh is group-writable, so umask is
-    part of the operation rather than an afterthought. The key is quoted because it is
-    user-supplied text being placed into a shell command.
+
+def windows_install_line(pubkey: str, *, admin: bool) -> str:
+    """What to run in PowerShell on a Windows machine to let this key in.
+
+    An administrator's keys live in ProgramData, not in their home, and sshd ignores that
+    file unless only SYSTEM and Administrators can write it -- both fail silently, which
+    is why the line does both.
     """
-    return ("umask 077; mkdir -p ~/.ssh; "
-            f"printf '%s\\n' {shlex.quote(pubkey)} >> ~/.ssh/authorized_keys")
+    quoted = pubkey.strip().replace("'", "''")
+    if admin:
+        return ("$f=\"$env:ProgramData\\ssh\\administrators_authorized_keys\"; "
+                f"Add-Content -LiteralPath $f -Value '{quoted}'; "
+                "icacls $f /inheritance:r /grant 'SYSTEM:F' 'Administrators:F'")
+    return ("New-Item -ItemType Directory -Force \"$HOME\\.ssh\" | Out-Null; "
+            f"Add-Content -LiteralPath \"$HOME\\.ssh\\authorized_keys\" -Value '{quoted}'")
 
 
-def build_password_argv(ep: Endpoint, *, timeout: int = 15) -> list[str]:
-    """ssh invocation that will actually ask for a password.
+def copy_id_argv(ep: Endpoint) -> list[str] | None:
+    """`ssh-copy-id` for this endpoint, or None where there is none (Windows).
 
-    The opposite of the probe path in sshcmd.build_argv: there BatchMode=yes guarantees
-    ssh never blocks on a prompt, here the prompt is the entire point. Public key auth
-    is disabled outright -- the missing key is why we are here, and leaving it enabled
-    risks succeeding via some other agent-loaded key and never installing anything.
+    It asks for the password itself, in the terminal, and puts your key on the machine;
+    fleet only starts it and never sees what is typed.
     """
-    argv = [
-        "ssh",
-        "-o", "PubkeyAuthentication=no",
-        "-o", "PreferredAuthentications=password,keyboard-interactive",
-        "-o", "StrictHostKeyChecking=accept-new",
-        "-o", f"ConnectTimeout={timeout}",
-        "-o", "NumberOfPasswordPrompts=1",
-    ]
+    tool = shutil.which("ssh-copy-id")
+    if not tool:
+        return None
+    argv = [tool]
     if ep.port and ep.port != 22:
         argv += ["-p", str(ep.port)]
-    # -J, but deliberately not -i: under PubkeyAuthentication=no an identity is
-    # meaningless, while without the jump host a device reached through a bastion
-    # cannot be bootstrapped at all.
+    if ep.identity:
+        argv += ["-i", ep.identity]
     if ep.jump:
-        argv += ["-J", ep.jump]
-    argv += ["--", f"{ep.user}@{ep.target}" if ep.user else ep.target]
+        argv += ["-o", f"ProxyJump={ep.jump}"]
+    argv.append(f"{ep.user}@{ep.target}" if ep.user else ep.target)
     return argv
-
-
-def pty_available() -> bool:
-    """Whether this machine can drive a password prompt at all.
-
-    Windows has no `pty`: it imports `tty`, which imports `termios`, which does not
-    exist there. That is a real limitation of the machine rather than a missing feature,
-    and it is checkable in advance -- which matters, because the caller can offer
-    `fleet center --pubkey` instead of failing halfway through an enrolment.
-    """
-    try:
-        import pty  # noqa: F401
-    except ImportError:
-        return False
-    return True
-
-
-def run_with_password(argv: list[str], password: str, *, timeout: float = 20.0) -> tuple[int, str]:
-    """Run a command under a pty, answering the first password prompt.
-
-    Returns (exit_code, output) with the password scrubbed from the output -- the
-    caller prints that output on failure, and it must be safe to show.
-
-    Imported here rather than at module scope so that a center running on Windows can
-    still start. Everything else in fleet is portable; this one function is not, and a
-    top-level import would take the whole CLI down with it.
-    """
-    import pty
-
-    pid, fd = pty.fork()
-    if pid == 0:                                    # child: becomes the command
-        try:
-            os.execvp(argv[0], argv)
-        finally:
-            os._exit(127)
-
-    chunks: list[bytes] = []
-    answered = False
-    deadline = time.monotonic() + timeout
-    try:
-        while True:
-            remaining = deadline - time.monotonic()
-            if remaining <= 0:
-                os.kill(pid, signal.SIGKILL)
-                os.waitpid(pid, 0)
-                return 1, _scrub(b"".join(chunks), password) + "\n[timed out]"
-            if not select.select([fd], [], [], min(0.5, remaining))[0]:
-                continue
-            try:
-                data = os.read(fd, 4096)
-            except OSError:                         # pty closes when the child exits
-                break
-            if not data:
-                break
-            chunks.append(data)
-            if not answered and _PROMPT.search(b"".join(chunks[-2:]).rstrip()):
-                os.write(fd, password.encode() + b"\n")
-                answered = True
-    finally:
-        with suppress(OSError):
-            os.close(fd)
-
-    _, status = os.waitpid(pid, 0)
-    code = os.waitstatus_to_exitcode(status) if hasattr(os, "waitstatus_to_exitcode") else status
-    return code, _scrub(b"".join(chunks), password)
-
-
-def _scrub(raw: bytes, password: str) -> str:
-    text = raw.decode(errors="replace")
-    return text.replace(password, "***") if password else text
-
-
-def ensure_remote_keypair_command(*, platform: str = "posix") -> str:
-    """Give a machine its own fleet keypair, if it has none, and print the public half.
-
-    A machine needs an identity of its own, not just our key in its authorized_keys: the
-    fingerprint of *its* key is what the access list is keyed on, what a grant installs
-    elsewhere, and what `is_center` checks. Without this, enrolment produced a host we
-    could reach and could never grant anything to.
-
-    Never regenerates, for the same reason `ensure_keypair` does not: a new key orphans
-    every authorized_keys entry already placed for that machine, everywhere, with
-    nothing left to match them by.
-    """
-    if platform == "windows":
-        # platformdirs puts a non-roaming user config under LOCALAPPDATA, which is where
-        # fleet on that machine will look for it.
-        return (
-            "$d=Join-Path $env:LOCALAPPDATA 'fleet';"
-            "if(!(Test-Path $d)){New-Item -ItemType Directory -Path $d|Out-Null};"
-            "$k=Join-Path $d 'id_ed25519';"
-            "if(!(Test-Path \"$k.pub\")){"
-            "if(Test-Path $k){Remove-Item -LiteralPath $k -Force};"
-            "ssh-keygen -t ed25519 -N '\"\"' -q -C \"fleet:$env:COMPUTERNAME\" -f $k|Out-Null};"
-            "Get-Content -LiteralPath \"$k.pub\""
-        )
-    return (
-        # Where *that machine* will look for its own key, which is not the same
-        # directory on every POSIX system: platformdirs puts a user config under
-        # ~/.config on Linux and under ~/Library/Application Support on macOS.
-        # Hardcoding the Linux path meant the center created and pinned a key on every
-        # Mac that the Mac itself never used -- invisible for as long as only the center
-        # ever dialled, and an instant 403 the moment a machine had to prove it is itself.
-        'case "$(uname -s)" in '
-        'Darwin) d="$HOME/Library/Application Support/fleet" ;; '
-        '*) d="$HOME/.config/fleet" ;; '
-        'esac; mkdir -p "$d"; k="$d/id_ed25519"; '
-        # An earlier fleet wrote it under ~/.config everywhere. Move it rather than make
-        # a new one: a new key orphans every authorized_keys entry already placed for
-        # this machine, with nothing left to match them by.
-        'legacy="$HOME/.config/fleet/id_ed25519"; '
-        'if [ ! -f "$k.pub" ] && [ -f "$legacy.pub" ] && [ "$k" != "$legacy" ]; then '
-        'mv "$legacy" "$k" 2>/dev/null; mv "$legacy.pub" "$k.pub" 2>/dev/null; fi; '
-        # the .pub is the test, not the private half: an interrupted keygen leaves the
-        # private key alone and ssh-keygen then refuses to overwrite it, forever
-        'if [ ! -f "$k.pub" ]; then rm -f "$k"; '
-        'ssh-keygen -t ed25519 -N "" -q -C "fleet:$(hostname)" -f "$k" >/dev/null 2>&1; fi; '
-        'cat "$k.pub"'
-    )
 
 
 def remote_device_id_command(device_id: str, *, platform: str = "posix") -> str:
@@ -265,11 +82,9 @@ def remote_device_id_command(device_id: str, *, platform: str = "posix") -> str:
 
     Two machines cloned from one image share a machine-id, so the id derived from it
     cannot tell them apart; the second is given `<machine-id id>:<suffix>`. Written
-    where that machine's own fleet looks (`identity.DEVICE_ID_FILE`) and where the probe
-    reads it, so the center, the machine itself and every later probe all agree.
+    where fleet on that machine looks (`identity.DEVICE_ID_FILE`) and where the probe
+    reads it, so every fleet that looks at it, and every later probe, agree.
     """
-    import re
-
     if not re.fullmatch(r"[A-Za-z0-9:._-]{1,200}", device_id):
         raise ValueError(f"not a device id: {device_id!r}")
     if platform == "windows":
@@ -281,85 +96,3 @@ def remote_device_id_command(device_id: str, *, platform: str = "posix") -> str:
             'Darwin) d="$HOME/Library/Application Support/fleet" ;; '
             '*) d="$HOME/.config/fleet" ;; '
             f'esac; mkdir -p "$d" && echo {device_id} > "$d/device-id" && echo ok')
-
-
-def windows_authorized_keys_command(pubkey: str) -> str:
-    """The first-contact twin for Windows, as a single PowerShell -Command string.
-
-    Not the full marker-block machinery: this runs before the host is in any fleet, with
-    one password and one connection, and all it has to do is get a key in. The reconciler
-    takes over from there.
-
-    Same two traps as everywhere else on Windows -- an admin's keys live in ProgramData,
-    and sshd refuses a file with inherited ACEs -- and both fail silently, so getting
-    them wrong here means an enrolment that reports success and never works.
-    """
-    quoted = pubkey.strip().replace("'", "''")
-    return (
-        "powershell -NoProfile -Command "
-        "\"$id=[Security.Principal.WindowsIdentity]::GetCurrent();"
-        "$a=(New-Object Security.Principal.WindowsPrincipal($id)).IsInRole("
-        "[Security.Principal.WindowsBuiltInRole]::Administrator);"
-        "if($a){$f=Join-Path $env:ProgramData 'ssh\\administrators_authorized_keys'}"
-        "else{$f=Join-Path $env:USERPROFILE '.ssh\\authorized_keys'};"
-        "$d=Split-Path $f;if(!(Test-Path $d)){New-Item -ItemType Directory -Path $d|Out-Null};"
-        f"Add-Content -LiteralPath $f -Value '{quoted}';"
-        "icacls $f /inheritance:r /grant 'SYSTEM:F' 'Administrators:F' | Out-Null\""
-    )
-
-
-# cmd.exe's answer to a POSIX one-liner. The host is up and we are in; it simply has no
-# `sh`, so the same append is retried in PowerShell.
-_NO_POSIX_SHELL = ("is not recognized as an internal or external command",
-                   "operable program or batch file")
-
-
-def _append_pubkey(run, pubkey: str, posix_command: str = "") -> tuple[bool, str]:
-    """POSIX first, PowerShell on the characteristic failure. `run` is the transport.
-
-    The platform cannot be known in advance here: this is first contact, so there is no
-    probe to read, and asking the user to declare it would be asking them to know
-    something fleet can find out. Same shape as the probe's own fallback, and the cost is
-    one extra connection on Windows only.
-
-    Split out from `install_key` so the same two commands can go over a password pty or
-    over access we already hold, without either transport knowing about the other.
-    """
-    code, output = run(posix_command or authorized_keys_command(pubkey))
-    if code == 0:
-        return True, output
-    if any(sig in output.lower() for sig in _NO_POSIX_SHELL):
-        code, output = run(windows_authorized_keys_command(pubkey))
-    return code == 0, output
-
-
-def install_key(ep: Endpoint, password: str, pubkey: str, *,
-                timeout: float = 20.0, posix_command: str = "") -> tuple[bool, str]:
-    """Append pubkey to the host's authorized_keys, paying with a password typed once.
-
-    Returns (ok, output-safe-to-print) -- the password is scrubbed from the output.
-    """
-    def run(command: str) -> tuple[int, str]:
-        return run_with_password(build_password_argv(ep) + [command], password,
-                                 timeout=timeout)
-    return _append_pubkey(run, pubkey, posix_command)
-
-
-def install_key_over_existing_access(ep: Endpoint, pubkey: str, *,
-                                     timeout: float = 20.0,
-                                     posix_command: str = "") -> tuple[bool, str]:
-    """The same append, over access we already have. No password, and never a prompt.
-
-    This is the common case and the one that used to be missing: a cloud VM with
-    `PasswordAuthentication no` and a key that lives in your agent. `build_enroll_argv`
-    omits IdentitiesOnly so the agent can answer, and carries BatchMode=yes so a host
-    that will not have us fails immediately instead of blocking on a prompt nobody is
-    there to fill in. That is what makes it safe to try first, and safe for an agent.
-    """
-    def run(command: str) -> tuple[int, str]:
-        proc = sshrun(build_enroll_argv(ep) + [command], text=True, timeout=timeout)
-        return proc.returncode, proc.stdout + proc.stderr
-    try:
-        return _append_pubkey(run, pubkey, posix_command)
-    except subprocess.TimeoutExpired:
-        return False, f"no response within {timeout:.0f}s"

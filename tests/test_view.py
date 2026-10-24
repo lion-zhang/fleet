@@ -105,20 +105,9 @@ def test_auth_is_recomputed_rather_than_remembered():
     after a later failure. It therefore disagreed with the cached probe status, which is
     the thing the retry path actually consulted."""
     d = make("ds720")
-    assert auth_of(d, STATE_AUTH_FAILED) == "needs_key"
+    assert auth_of(d, STATE_AUTH_FAILED) == "refused"
     assert auth_of(d, STATE_OK) == "ok", "a good probe clears it"
     assert auth_of(d, None) == "ok", "never probed is not the same as known broken"
-
-
-def test_a_host_that_authorizes_upstream_is_not_told_to_install_a_key():
-    """There is no file on such a host that would change the answer, so advising a key
-    install would be advice that cannot work."""
-    d = make("tailnet-box", ssh_auth="external")
-    assert auth_of(d, STATE_AUTH_FAILED) == "external"
-    v = device_view(d, STATE_AUTH_FAILED, None, Detail.COMPACT)
-    assert not any("key install" in a for a in v["alerts"])
-    assert any("upstream" in a for a in v["alerts"])
-    assert connect_view(d, STATE_AUTH_FAILED)["auth"] == "external"
 
 
 # ------------------------------------------------------------------ the security boundary
@@ -126,8 +115,7 @@ def test_connect_view_never_returns_a_credential():
     """Anything returned here lands in an agent transcript and is replayed forever."""
     d = make("ds720")
     c = connect_view(d, STATE_AUTH_FAILED)
-    assert c["ssh_command"] is None
-    assert "fleet access ds720" in c["hint"]
+    assert "fleet doctor ds720" in c["hint"]
     blob = json.dumps(device_view(d, STATE_AUTH_FAILED, None, Detail.FULL)).lower()
     for banned in ("password", "passphrase", "secret_value", "hunter"):
         assert f'"{banned}":' not in blob
@@ -256,5 +244,5 @@ def test_show_works_before_anything_is_set_up(monkeypatch):
                                                         os="Ubuntu 24.04"))))
     r = CliRunner().invoke(cli.app, ["show"])
     assert r.exit_code == 0, r.output
-    assert "laptop" in r.output and "fleet center --init" in " ".join(r.output.split())
+    assert "laptop" in r.output and "fleet add --self" in " ".join(r.output.split())
     assert inv.load() == []

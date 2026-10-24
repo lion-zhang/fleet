@@ -20,8 +20,8 @@ runner = CliRunner()
 
 COMMANDS = [
     ("ls",), ("show",), ("add",), ("edit",), ("rm",), ("probe",),
-    ("ssh",), ("setup",), ("paths",), ("top",), ("install",), ("update",), ("sync",),
-    ("access",), ("center",), ("invite",), ("join",),
+    ("ssh",), ("setup",), ("paths",), ("top",), ("install",), ("update",), ("ps",),
+    ("models",), ("doctor",), ("uninstall",),
 ]
 
 

@@ -15,12 +15,11 @@ would slowly grow a second surface that answers differently -- which is the fail
 the other side: the CLI, not MCP, is the universal interface. So every tool here is a
 thin wrapper over the command a human would type, and the two cannot drift apart.
 
-The surface is what a person may ask an agent to do by conversation: read the fleet, run
-work, add and invite machines, grant and revoke, tag. Writes go through the CLI, so they
-take their turn in the same queue as everyone else's. What is missing is missing for a
-reason -- `top` needs a terminal to be worth anything, and the irreversible commands
-(`rm`, `center --dissolve`, handing the role over) are the ones the skill reserves for a
-person.
+The surface is what a person may ask an agent to do by conversation: read the fleet, its
+jobs and models, run work, add machines, say why one refuses, tag, record folders. Writes
+go through the CLI, so they take their turn in the same queue as everyone else's. What is
+missing is missing for a reason -- `top` needs a terminal to be worth anything, and `rm`
+is the one the skill reserves for a person.
 """
 
 from __future__ import annotations
@@ -61,8 +60,8 @@ def _clean(text: str) -> str:
     return _ANSI.sub("", text or "").strip()
 
 
-# Commands that do a lot over the network get longer: adding a machine probes it,
-# checks for a clone and enrols it; a sync on the center reaches every machine.
+# Commands that do a lot over the network get longer: adding a machine probes it and
+# checks for a clone; doctor dials every failing machine.
 SLOW_TIMEOUT_S = 300
 
 
@@ -121,9 +120,9 @@ def _run(args: list[str], timeout: float | None = None) -> Any:
     Errors come back as a value rather than an exception: an agent needs to read what
     went wrong and say so, and an MCP error frame tends to surface as "the tool is
     broken" when the honest answer is "that machine is switched off". The JSON is read
-    even when the command failed -- `fleet add` reports an enrolment that did not work
-    as a document and exit 1 -- and whatever fleet said on stderr comes along as
-    `notes` (how many machines could not be judged, why a grant is pending).
+    even when the command failed -- `fleet add` reports a machine that refused us as a
+    document, with the fix, and exit 1 -- and whatever fleet said on stderr comes along
+    as `notes` (how many machines could not be judged).
     """
     try:
         p = _exec(args, timeout)
@@ -168,26 +167,28 @@ def build_server():
         name="fleet",
         version=package_version(),
         instructions=(
-            "Your personal compute inventory. Use it to find a machine to run work on "
-            "and to see what the machines are doing.\n\n"
+            "Every machine the user has: what is free on it, what is running on its "
+            "GPUs, which models its servers serve, its software, and where it keeps "
+            "models and data. Use it to find a machine to run work on, and to use what "
+            "is already there rather than downloading or installing it again.\n\n"
             "Pick a machine by what it can do, not by remembering its name: "
             "`list_machines(tag=['cuda','vram-24g'])` finds NVIDIA boxes with a card of "
             "at least 24G. Size facts mean *at least*, so a machine with vram-48g also "
             "reports vram-24g. `facts` in the result is measured from the last probe; "
             "`tags` is what a human wrote. A machine with no telemetry has neither.\n\n"
             "`alerts` is blocking: a rental flagged idle is costing money now, and a "
-            "device reporting unattributed VRAM is not free. `status` is not a boolean "
-            "-- auth_failed means the host is up and refused our key, which only the "
-            "center can fix.\n\n"
+            "device reporting unattributed VRAM is not free. A GPU with `jobs` is "
+            "someone's: ask before using it. `status` is not a boolean -- auth_failed "
+            "means the host is up and refused us; `doctor_machine` says what the user "
+            "does about it.\n\n"
             "Ask rather than guess. Adding a machine needs how the user connects to it "
-            "(an ssh command); a grant needs which machine may reach which; if the "
-            "request does not say, ask -- never infer a machine from a partial name. "
-            "Never ask for, type or accept a password: if a machine takes no key, offer "
-            "`invite_machine` (one line the user pastes there) or the key `add_machine` "
-            "returns for the user to put on it. An invite code admits a machine: give it to the "
-            "user and nowhere else. Revoking, and anything that touches every machine, "
-            "is the user's call: ask first. Removing a machine, dissolving the fleet and "
-            "moving the center are not tools here -- tell the user the command.\n\n"
+            "(an ssh command, or a name from discover_machines); if the request does not "
+            "say, ask -- never infer a machine from a partial name. fleet manages no "
+            "access: it connects as the user does. Never ask for, type or accept a "
+            "password; if a machine refuses, give the user the fix doctor_machine "
+            "returns. Anything that touches every machine is the user's call: ask "
+            "first. Removing a machine is not a tool here -- tell the user the "
+            "command.\n\n"
             "`run_on_machine` returns within 120 seconds; start anything longer "
             "detached (`nohup ... > log 2>&1 &`) and read the log later."
         ),
@@ -247,7 +248,7 @@ def build_server():
 
     @server.tool(description="Run one command on a machine and return its output and "
                              "exit code. This is how work actually gets started -- fleet "
-                             "resolves the address and uses the fleet key, so never build "
+                             "resolves the address and connects as the user does, so never build "
                              "an ssh command by hand. Returns within 120 seconds: start "
                              "long jobs detached (nohup ... > log 2>&1 &).")
     def run_on_machine(machine: str, command: str) -> Any:
@@ -261,12 +262,12 @@ def build_server():
         return {"ok": p.returncode == 0, "exit_code": p.returncode,
                 "stdout": (p.stdout or "")[-8000:], "stderr": _clean(p.stderr)[-2000:]}
 
-    @server.tool(description="Add a machine to the fleet from how the user connects to "
-                             "it: an ssh command such as `ssh -p 40001 root@1.2.3.4`. Ask "
-                             "for it if the user did not give one. Key-based only: if the "
-                             "machine accepts no key from here, this says so and returns "
-                             "the key to put on it -- or use invite_machine. Never ask "
-                             "for a password.")
+    @server.tool(description="Add a machine from how the user connects to it: an ssh "
+                             "command such as `ssh -p 40001 root@1.2.3.4`, or a name from "
+                             "discover_machines. Ask for it if the user did not give one. "
+                             "If the machine refuses, the result has `why` and `fix` -- the "
+                             "one thing the user does to let fleet in. Never ask for a "
+                             "password.")
     def add_machine(ssh_command: str, name: str | None = None,
                     tags: list[str] | None = None, alias: str | None = None,
                     kind: str | None = None) -> Any:
@@ -281,38 +282,23 @@ def build_server():
             args += ["--kind", kind]
         for t in tags or []:
             args += ["--tag", t]
-        result = _run(args, SLOW_TIMEOUT_S)
-        refused = result.get("enrolment") == "failed" or any(
-            w in str(result.get("error", "")).lower()
-            for w in ("permission denied", "auth", "password", "publickey"))
-        if refused:
-            # It answered and would not take our key: the way in that needs no password.
-            key = _run(["center", "--pubkey"])
-            result["next"] = ("the machine takes no key from here yet. Either put this "
-                              "key in its ~/.ssh/authorized_keys and add it again, or "
-                              "call invite_machine and give the user the line to paste "
-                              "there.")
-            result["center_pubkey"] = key.get("output", "")
-        return result
+        # A refusal comes back with `why` and `fix`: the one thing the user does to let
+        # fleet in (put their key on it, add it to the provider, a Tailscale SSH rule).
+        return _run(args, SLOW_TIMEOUT_S)
 
-    @server.tool(description="Let a machine join by itself: returns one line for the user "
-                             "to paste on it (`install` for macOS/Linux, `install_windows` "
-                             "for PowerShell; `command` where fleet is installed already). "
-                             "No password anywhere. Single use and short-lived; the code "
-                             "admits a machine, so give it to the user and nowhere else.")
-    def invite_machine(name: str | None = None, valid_for: str = "15m") -> Any:
-        return _run(["invite", *([name] if name else []), "--ttl", valid_for, "--json"])
+    @server.tool(description="Machines the user can already reach that are not added yet: "
+                             "the Host entries of their ~/.ssh/config, and the machines on "
+                             "their tailnet. Offer the ones that look relevant; add one "
+                             "with add_machine(ssh_command=its name) once the user agrees.")
+    def discover_machines() -> Any:
+        return _run(["ls", "--discover", "--json"])
 
-    @server.tool(description="Invites issued in the last day and what became of each: "
-                             "open, used (by which machine), expired or withdrawn.")
-    def list_invites() -> Any:
-        return _run(["invite", "--list", "--json"])
-
-    @server.tool(description="Withdraw an invite that has not been used yet -- one given "
-                             "to the wrong person, or no longer needed. Takes its id from "
-                             "invite_machine or list_invites.")
-    def withdraw_invite(invite_id: str) -> Any:
-        return _run(["invite", "--revoke", invite_id, "--json"])
+    @server.tool(description="Why a machine will not let fleet in, and the exact fix for "
+                             "it: the key line to run there, the provider account to add "
+                             "the key to, or the Tailscale SSH rule. Changes nothing; tell "
+                             "the user what it says -- access is theirs to grant.")
+    def doctor_machine(name: str | None = None) -> Any:
+        return _run(["doctor", *([name] if name else []), "--json"], SLOW_TIMEOUT_S)
 
     @server.tool(description="Label a machine, or change what it costs per hour (for the "
                              "$/HR column and burn rate), how it is reached, or which disks "
@@ -346,44 +332,6 @@ def build_server():
         if ssh_command:
             args += ["--ssh", ssh_command]
         return _run(args)
-
-    @server.tool(description="Who may reach what, and what has not landed yet. `state` "
-                             "is present, pending (a grant not on the machine yet) or "
-                             "revoking (a revoked key still there). A listening center "
-                             "retries both by itself; if last_error stays the same over "
-                             "many attempts, it will not land -- report it.")
-    def show_access(machine: str | None = None) -> Any:
-        return _run(["access", *([machine] if machine else []), "--json"])
-
-    @server.tool(description="Which machine decides who reaches what, whether this is "
-                             "it, and when it was last heard from. A center that has "
-                             "been offline for hours is normal -- it is usually a laptop "
-                             "-- and everything already granted keeps working.")
-    def center_status() -> Any:
-        return _run(["center", "--json"])
-
-    @server.tool(description="Let one machine reach another over ssh, as the account the "
-                             "machine is reached as unless `user` names another. Applied on "
-                             "the spot; a machine that is off stays pending, and the center "
-                             "applies it once the machine is back. "
-                             "Only the center can do this. Ask before calling it: access "
-                             "is the user's decision.")
-    def grant_access(machine: str, may_be_reached_by: str, user: str | None = None) -> Any:
-        return _run(["access", machine, "--allow", may_be_reached_by,
-                     *(["--user", user] if user else []), "--json"])
-
-    @server.tool(description="Take that access away again, for every account unless "
-                             "`user` names one, applied on the spot. Ask before calling it: "
-                             "the other machine loses its way in.")
-    def revoke_access(machine: str, reached_by: str, user: str | None = None) -> Any:
-        return _run(["access", machine, "--deny", reached_by,
-                     *(["--user", user] if user else []), "--json"])
-
-    @server.tool(description="Bring this machine up to date. On the center: apply "
-                             "pending access changes and share the inventory. On a member: "
-                             "fetch a fresh copy from the center. Safe to repeat.")
-    def sync_fleet() -> Any:
-        return _run(["sync", "--json"], SLOW_TIMEOUT_S)
 
     return server
 

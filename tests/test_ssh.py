@@ -69,19 +69,6 @@ def test_the_process_is_replaced_rather_than_wrapped(box):
     assert "subprocess.run" not in src
 
 
-def test_the_fleet_key_is_offered(box, tmp_path, monkeypatch):
-    """Otherwise the most-used command connects with a personal key that fleet no longer
-    installs anywhere."""
-    import fleet.config
-
-    key = tmp_path / "id_ed25519"
-    key.write_text("x")
-    monkeypatch.setattr(fleet.config, "FLEET_KEY", key)
-    CliRunner().invoke(cli.app, ["ssh", "lin-xps"])
-    argv = box[-1][1]
-    assert "-i" in argv and str(key) in argv
-
-
 def test_a_non_default_port_and_a_jump_host_are_carried(tmp_path, monkeypatch):
     monkeypatch.setattr(inv, "INVENTORY_PATH", tmp_path / "inventory.yaml")
     monkeypatch.setattr(store, "DB_PATH", tmp_path / "cache.db")
@@ -99,12 +86,12 @@ def test_a_non_default_port_and_a_jump_host_are_carried(tmp_path, monkeypatch):
 
 def test_a_host_that_rejected_our_key_says_how_to_fix_it(box, monkeypatch):
     """Better than handing you a connection that will just fail."""
-    monkeypatch.setattr(cli, "auth_of", lambda *a, **k: "needs_key")
+    monkeypatch.setattr(cli, "auth_of", lambda *a, **k: "refused")
     monkeypatch.setattr(store, "latest",
                         lambda *a, **k: ({"last_probe_at": int(time.time())}, None))
     r = CliRunner().invoke(cli.app, ["ssh", "lin-xps"])
     assert r.exit_code == 2
-    assert "Only the center can install one" in r.output
+    assert "fleet doctor lin-xps" in r.output
     assert not box, "and it does not try to connect anyway"
 
 
@@ -121,7 +108,6 @@ def test_a_stale_rejection_does_not_block_a_grant_that_has_since_landed(box, mon
     assert r.exit_code == 0, r.output
     assert box, "it must try the connection rather than refuse on an old reading"
     assert box[-1][1][-1] == "lin@lin-xps.example.ts.net"
-
 
 
 def test_fleet_ssh_never_falls_back_to_a_password(box, monkeypatch):

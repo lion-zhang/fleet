@@ -38,10 +38,10 @@ def test_a_setting_that_is_not_a_number_falls_back_to_its_default(tmp_path, monk
 
 def test_the_cli_reports_it_in_one_line_and_as_json(tmp_path):
     (tmp_path / "c").mkdir()
-    (tmp_path / "c" / "inventory.yaml").write_text("devices:\n  - name: a\n    id: x\n    kind: laptop\n",
+    (tmp_path / "c" / "machines.yaml").write_text("devices:\n  - name: a\n    id: x\n    kind: laptop\n",
                                                    encoding="utf-8")
     env = {"FLEET_CONFIG_DIR": str(tmp_path / "c"), "FLEET_STATE_DIR": str(tmp_path / "s"),
-           "FLEET_NO_AUTO_CENTER": "1", "PYTHONUTF8": "1", "NO_COLOR": "1",
+           "FLEET_NO_FIRST_RUN": "1", "PYTHONUTF8": "1", "NO_COLOR": "1",
            "PATH": "", "SYSTEMROOT": __import__("os").environ.get("SYSTEMROOT", "")}
     p = subprocess.run([sys.executable, "-m", "fleet", "ls", "--json"], env=env,
                        capture_output=True, text=True, timeout=60)

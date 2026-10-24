@@ -35,14 +35,10 @@ def _posix_script(repo: str, *, ref: str = "main", update_only: bool = False,
     3.12 and most servers ship something older, and uv will fetch its own interpreter
     rather than requiring one to be present.
 
-    Earlier versions left a cron entry here so an idle broker kept syncing itself. Sync
-    is center-initiated now -- the center dials out and nothing connects to it -- so that
-    entry can only fail, silently, forever. Installing removes it.
+    Earlier versions left a cron entry here that synced with a center, which no longer
+    exists, so that entry can only fail, silently, forever. Installing removes it.
     """
     return f"""set -e
-# Everything this script runs is part of making the machine a member, or updating one:
-# none of it may start a fleet here.
-export FLEET_NO_AUTO_CENTER=1
 REPO={shlex.quote(repo)}
 REF={shlex.quote(ref)}
 DIR="{INSTALL_DIR}"
@@ -80,15 +76,11 @@ if [ "$MODE" = git ]; then
   fi
 fi
 
-# Stop the center's service before replacing the files it is running from. Not
-# politeness: on Windows a live fleet.exe holds its own installation open and the install
-# fails against it with an error that mentions nothing about why. Quiet and best-effort,
-# because a machine that is not a center has nothing to stop.
-PATH="$HOME/.local/bin:$PATH" fleet service stop >/dev/null 2>&1 || true
-# And started again however this ends -- set -e stops at the first failure, and an
-# upgrade that failed on a network blip left the center not listening until a reboot.
-# `service start` does nothing on a machine that never had one.
-trap 'PATH="$HOME/.local/bin:$PATH" fleet service start >/dev/null 2>&1 || true' EXIT
+# fleet 0.5 ran a listening service on the machine that was a fleet's center. 0.6 has no
+# center and no service, so it is taken off now, by the fleet that installed it -- the
+# new one has no `fleet service` to do it with -- before its files are replaced (on
+# Windows a live fleet holds its own installation open). Nothing to do anywhere else.
+PATH="$HOME/.local/bin:$PATH" fleet service remove >/dev/null 2>&1 || true
 
 # --reinstall-package, not --reinstall: the problem is uv reusing a cached build of
 # fleet when the version has not changed, and rebuilding every dependency to fix that
@@ -248,13 +240,6 @@ def build_install_argv(ep: Endpoint, *, forward_agent: bool = True,
         argv += ["-p", str(ep.port)]
     if ep.identity:
         argv += ["-i", ep.identity]
-    # The fleet key, the same one the probe and `fleet ssh` offer. Without it the
-    # installer authenticated with whatever personal key the machine happened to have,
-    # so it worked from the laptop whose own key was everywhere and failed with
-    # "Permission denied (publickey)" from any machine fleet had enrolled -- which is
-    # every machine that would ever run `fleet update` on its own behalf.
-    if config.FLEET_KEY.exists() and str(config.FLEET_KEY) != ep.identity:
-        argv += ["-i", str(config.FLEET_KEY)]
     if ep.jump:
         argv += ["-J", ep.jump]
     argv += ["--", f"{ep.user}@{ep.target}" if ep.user else ep.target]
@@ -339,18 +324,17 @@ def _windows_script(repo: str, ref: str = "main", *, update_only: bool = False,
     and the failure is a half-finished install rather than a refusal.
 
     Everything the POSIX script explains applies here: uv is fetched when missing because
-    it also solves the Python problem, the service is stopped before its files are
-    replaced (on Windows a live fleet holds its own installation open and the install
-    fails against it saying nothing about why), and --reinstall-package rather than
-    --reinstall because the problem is a cached build of fleet, not of the world.
+    it also solves the Python problem, fleet 0.5's service is taken off and every running
+    fleet stopped before its files are replaced (on Windows a live fleet holds its own
+    installation open and the install fails against it saying nothing about why), and
+    --reinstall-package rather than --reinstall because the problem is a cached build of
+    fleet, not of the world.
 
     No cron block: that cleanup is for machines that had one, and Windows never did.
     """
     repo_lit = repo.replace("'", "''")
     ref_lit = ref.replace("'", "''")
     return f"""$ErrorActionPreference = 'Stop'
-# Making this machine a member, or updating one: none of it may start a fleet here.
-$env:FLEET_NO_AUTO_CENTER = '1'
 $repo = '{repo_lit}'
 $ref  = '{ref_lit}'
 $dir  = "{WINDOWS_INSTALL_DIR}"
@@ -380,8 +364,9 @@ if ($mode -eq 'git') {{
   }}
 }}
 
-# Stop the center before replacing the files it runs from -- and do it here rather than
-# by calling `fleet service stop`, which was the mistake this replaces. `fleet.exe` is a
+# Stop every fleet before replacing the files it runs from: fleet 0.5's center service
+# (taken off for good -- 0.6 has no center), and anything else still running. Done here
+# rather than by calling `fleet service stop`, which was the mistake this replaces. `fleet.exe` is a
 # uv trampoline that executes Scripts\\python.exe, so stopping fleet *by running fleet*
 # holds open the directory uv is about to remove. It fails with "Access is denied" on
 # Scripts, and that is not a failed update: uv has deleted most of the installation by
@@ -391,9 +376,10 @@ if ($mode -eq 'git') {{
 # `$ErrorActionPreference = 'Stop'` that record is terminating -- so "ERROR: The process
 # fleet.exe not found", which is the normal answer on a machine whose service is not
 # running, aborted the installer before it reached uv. Redirecting the stream away does
-# not help on Windows PowerShell 5: the record is raised either way. Measured on the
+# not help on Windows PowerShell 5: the record is raised either way. Measured on a
 # center, which could not be updated at all until this was written like this.
 try {{ schtasks /end /tn fleet-center 2>&1 | Out-Null }} catch {{ }}
+try {{ schtasks /delete /tn fleet-center /f 2>&1 | Out-Null }} catch {{ }}
 try {{ taskkill /f /im fleet.exe 2>&1 | Out-Null }} catch {{ }}
 Get-CimInstance Win32_Process -Filter "Name='pythonw.exe'" |
   Where-Object {{ $_.CommandLine -like '*-m*fleet*center*--listen*' }} |
@@ -425,9 +411,6 @@ $fleet = Find-Fleet
 
 # The package was `fleet-broker` until 0.5, then `agent-fleet`; both would claim the
 # `fleet` command.
-# In try/finally: an install that fails -- a network blip, a locked file -- must still
-# start the center's service again, or it stays down until the next logon.
-try {{
 if ($mode -eq 'uv') {{
   uv tool upgrade --quiet agents-fleet
 }} elseif ($mode -eq 'pipx') {{
@@ -453,12 +436,7 @@ if ($mode -eq 'uv') {{
     }}
   }}
 }}
-}} finally {{
-  $fleet = Find-Fleet
-  if (Test-Path $fleet) {{
-    try {{ & $fleet service start 2>&1 | Out-Null }} catch {{ }}
-  }}
-}}
+$fleet = Find-Fleet
 
 # So `fleet` works in a terminal the user opens later, not just in this script. Without
 # it the shim lands in a directory nothing has ever added to PATH, and fleet installs

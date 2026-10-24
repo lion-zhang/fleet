@@ -467,18 +467,6 @@ def test_target_all_covers_every_supported_agent(tmp_path, monkeypatch):
 
 # ------------------------------------------- what the agent is told it may do
 
-def test_the_instructions_separate_what_needs_the_center():
-    """An agent that does not know the difference either avoids things that would work,
-    or tries things that cannot and reports a confusing refusal as a fault."""
-    from fleet.agents import skill_text
-
-    text = skill_text("fleet")
-    assert "Only on the center" in text
-    assert "`role` (center or member)" in text, "and says how to find out, rather than guessing"
-    for center_only in ("--allow", "--deny", "fleet sync"):
-        assert center_only in text
-
-
 # Commands deliberately kept out of the agent instructions, each with the reason.
 # Anything not here must appear, so adding a command forces the decision rather than
 # letting it default to silence.
@@ -487,8 +475,6 @@ NOT_FOR_AGENTS = {
     "setup": "circular -- an agent reading these instructions is the result of it",
     "mcp": "the transport an agent arrives over, not something it calls; a desktop "
            "client launches it from the config setup writes",
-    "service": "plumbing `--init` and `update` call for themselves; an agent that had "
-               "to manage it would be doing the job this removes",
 }
 
 # Flags deliberately left out, each with the reason. The command guard below forces a
@@ -497,21 +483,12 @@ NOT_FOR_AGENTS = {
 FLAGS_NOT_FOR_AGENTS = {
     "--dry-run": "conventional, and an agent should not be rehearsing",
     "--yes": "skips a confirmation, which is the opposite of what an agent should do",
-    "--serve": "the center's own transport, never invoked by hand",
-    "--migrate": "a one-off move off stored passwords, run once by a human",
     "--raw": "captures parser fixtures; belongs to whoever maintains the parser",
     "--repo": "install plumbing", "--ref": "install plumbing",
-    "--role": "the only role a device takes is none; moving the center is `fleet center`",
     "--forward-agent": "install plumbing", "--no-forward-agent": "install plumbing",
     "--clear-disk-paths": "the inverse of --disk-path, which is documented",
     "--interval": "top needs a terminal, so no agent reaches this",
     "--target": "setup's own", "--project": "setup's own", "--uninstall": "setup's own",
-    "--dissolve": "documented in prose as the counterpart to --init",
-    "--init": "documented in prose",
-    "--force": "overrides a refusal; an agent must report the refusal, not override it",
-    "--port": "where --listen binds; the user's choice, not an agent's",
-    "--advertise": "--listen plumbing, for a center behind a different address",
-    "--no-service": "opts out of the thing that makes a center useful; a user's call",
 }
 
 
@@ -542,14 +519,13 @@ def test_the_exclusions_are_real_commands():
 
 
 def test_the_agent_is_told_never_to_handle_a_password():
-    """The only command that asks for one needs a human, and an agent offering to type
-    it would put a credential in a transcript that is replayed forever."""
+    """fleet never asks for one, and an agent offering to type it would put a credential
+    in a transcript that is replayed forever."""
     from fleet.agents import skill_text
 
     text = skill_text("fleet")
     assert "Never type a password" in text
-    assert "a human must" in text
-    assert "--pubkey" in text, "and the way round it, or the agent just gives up"
+    assert "doctor" in text, "and the way round it, or the agent just gives up"
 
 
 def test_the_agent_is_told_to_ask_rather_than_guess_a_name():
@@ -560,22 +536,6 @@ def test_the_agent_is_told_to_ask_rather_than_guess_a_name():
     text = skill_text("fleet")
     assert "Ask rather than guess" in text
     assert "partial name" in text
-
-
-def test_the_agent_is_told_an_absent_center_is_normal():
-    """It is usually a laptop. Reporting a closed lid as a fault would be noise."""
-    from fleet.agents import skill_text
-
-    text = skill_text("fleet")
-    assert "expected to be offline" in text
-    assert "not an error" in text
-
-
-def test_the_agent_is_told_relayed_telemetry_is_second_hand():
-    from fleet.agents import skill_text
-
-    text = skill_text("fleet")
-    assert "broadcast" in text and "do not present it as live" in text
 
 
 def test_every_flag_is_either_listed_or_deliberately_excluded():
@@ -676,7 +636,8 @@ def test_the_full_command_surface_reaches_every_agent():
     from fleet.agents import agents_block, hermes_skill_text, skill_text
 
     bodies = [skill_text("fleet"), hermes_skill_text("fleet"), agents_block("fleet")]
-    for command in ("fleet ls", "fleet ssh", "fleet access", "fleet sync", "fleet top"):
+    for command in ("fleet ls", "fleet ssh", "fleet ps", "fleet models", "fleet doctor",
+                    "fleet top"):
         for body in bodies:
             assert command in body, f"{command} missing from one of the agent bodies"
 

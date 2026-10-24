@@ -13,7 +13,6 @@ import time
 import pytest
 
 from fleet.models import Device, Kind, ProbeResult, Status
-from fleet.state import access as acl
 from fleet.state import inventory as inv
 from fleet.state import store
 
@@ -123,87 +122,3 @@ def test_once_the_wait_is_over_it_is_asked_again(one_dead_machine):
     conn.close()
     rows.snapshot()
     assert dialled == ["dead"]
-
-
-# ------------------------------------------------------------------- the center
-
-@pytest.fixture
-def a_member(monkeypatch):
-    from fleet.ops import sync
-
-    acl.pin_center_pubkey("ssh-ed25519 AAAA center")
-    acl.note_center_url("http://hub.example/sync")
-    monkeypatch.setattr(acl, "seal", lambda *a, **k: "sealed")
-    asked = []
-    monkeypatch.setattr(sync, "post", lambda url, payload, **k: asked.append(url) or None)
-    return sync, asked
-
-
-def test_a_center_that_did_not_answer_is_not_asked_on_every_read(a_member):
-    sync, asked = a_member
-    sync.ensure_fresh()
-    sync.ensure_fresh()
-    sync.ensure_fresh()
-    assert len(asked) == 1
-
-
-def test_it_is_asked_again_once_the_wait_is_over(a_member, monkeypatch):
-    sync, asked = a_member
-    sync.ensure_fresh()
-    later = time.time() + 61
-    monkeypatch.setattr(time, "time", lambda: later)
-    sync.ensure_fresh()
-    assert len(asked) == 2
-
-
-def test_forcing_asks_regardless(a_member):
-    sync, asked = a_member
-    sync.ensure_fresh()
-    sync.ensure_fresh(force=True)
-    assert len(asked) == 2
-
-
-@pytest.fixture
-def pinned():
-    """A member: a center pinned, which is when there is a center to wait for."""
-    acl.pin_center_pubkey("ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIOMqqnkVzrm0SdG6UOoqKLsabgH5C9okWi0dh2l9GKJl c")
-
-
-def test_the_wait_doubles_per_miss_up_to_the_ceiling(pinned):
-    for _ in range(3):
-        acl.note_center_unanswered()
-    assert 230 <= acl.center_retry_after(60, 1800) <= 240
-    for _ in range(10):
-        acl.note_center_unanswered()
-    assert 1790 <= acl.center_retry_after(60, 1800) <= 1800
-
-
-def test_hearing_from_the_center_ends_the_wait(pinned):
-    acl.note_center_unanswered()
-    assert acl.center_retry_after(60, 1800) > 0
-    acl.note_center_seen()
-    assert acl.center_retry_after(60, 1800) == 0
-
-
-def test_a_reply_from_the_wrong_key_is_backed_off_too(a_member, monkeypatch):
-    sync, asked = a_member
-    monkeypatch.setattr(sync, "post", lambda url, payload, **k: asked.append(url) or "junk")
-    sync.ensure_fresh()
-    sync.ensure_fresh()
-    assert len(asked) == 1
-
-
-def test_a_center_that_refuses_is_not_a_center_that_is_off(pinned, monkeypatch):
-    """Found in the final audit: a member re-imaged with a new key is refused for good,
-    and was recorded as "unanswered" -- it looked like the center was switched off."""
-    from fleet.ops import sync
-    from fleet.render.staleness import staleness_note
-
-    acl.note_center_url("http://hub:7373/sync")
-    monkeypatch.setattr(sync, "post", lambda *a, **k: (403, "not a machine this fleet knows\n"))
-    monkeypatch.setattr(acl, "seal", lambda *a, **k: "sealed")
-    sync._refresh("http://hub:7373/sync", "ssh-ed25519 AAAA")
-    note = staleness_note()
-    assert "refused" in note and "403" in note and "not a machine" in note
-    acl.note_center_seen()                     # it answers again later
-    assert "refused" not in staleness_note()

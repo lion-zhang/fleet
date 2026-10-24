@@ -4,12 +4,9 @@ Every path fleet writes to is redirected into a temp directory for every test, w
 the test asks or not. Tests that sandbox explicitly still work -- their monkeypatching
 runs after this and simply wins.
 
-This exists because the alternative kept happening. A `--serve` test once pinned a
-center into the real `~/Library/Application Support/fleet`; a `bootstrap()` call in a
-unit test created a real `access.yaml` and made this laptop believe it was a center; and
-once commands began refreshing themselves from the center, any test that ran `fleet ls`
-started making live HTTP requests to the production fleet -- which was slow, and was
-reading a real machine's state into test assertions.
+This exists because the alternative kept happening: tests that wrote into the real
+`~/Library/Application Support/fleet`, and ones that read a real machine's state into
+their assertions.
 
 The rule worth keeping: a test that has not said where state lives must not be able to
 find any.
@@ -24,39 +21,25 @@ import pytest
 def _sandbox_fleet_state(tmp_path_factory, monkeypatch):
     root = tmp_path_factory.mktemp("fleet-state")
 
-    from fleet.state import access as acl
     from fleet import config
     from fleet.state import inventory as inv, store
 
-    for name in ("ACCESS_PATH", "LEDGER_PATH", "CACHE_PATH", "OUTBOX_PATH",
-                 "CHAIN_PATH", "INBOX_PATH", "HANDING_PATH"):
-        monkeypatch.setattr(acl, name, root / getattr(acl, name).name, raising=False)
-    monkeypatch.setattr(inv, "INVENTORY_PATH", root / "inventory.yaml", raising=False)
-    from fleet.state import invites
-    monkeypatch.setattr(invites, "INVITES_PATH", root / "access-invites.yaml", raising=False)
+    monkeypatch.setattr(inv, "INVENTORY_PATH", root / "machines.yaml", raising=False)
     monkeypatch.setattr(store, "DB_PATH", root / "cache.db", raising=False)
-    from fleet.state import clock
-    monkeypatch.setattr(clock, "OFFSET_PATH", root / "clock.yaml", raising=False)
-    monkeypatch.setattr(config, "FLEET_KEY", root / "id_ed25519", raising=False)
     monkeypatch.setattr(config, "CONFIG_PATH", root / "config.yaml", raising=False)
-    monkeypatch.setattr(config, "INVENTORY_PATH", root / "inventory.yaml", raising=False)
+    monkeypatch.setattr(config, "INVENTORY_PATH", root / "machines.yaml", raising=False)
     # The two directories themselves, because `fleet paths` reports them. Left alone,
     # every test saw the real platformdirs answer, which differs by OS: config and state
     # are one directory on macOS and two on Linux. Pointing both at the sandbox root
     # makes them equal on every platform -- a test that cares about them being separate
-    # says so itself, as test_sweep does.
+    # says so itself.
     monkeypatch.setattr(config, "CONFIG_DIR", root, raising=False)
     monkeypatch.setattr(config, "STATE_DIR", root, raising=False)
     monkeypatch.setattr(config, "DB_PATH", root / "cache.db", raising=False)
 
-    # Belt and braces for the one that reaches the network: a command that refreshes
-    # itself must not dial anything real, even if some path above is missed.
-    from fleet.ops import sync
-
-    monkeypatch.setattr(sync, "post", lambda *a, **k: None, raising=False)
-    # The first run starts a fleet and writes agent skills into the home directory -- the
-    # real one, under test. Off unless a test turns it on (test_firstrun).
-    monkeypatch.setenv("FLEET_NO_AUTO_CENTER", "1")
+    # The first run records this machine and writes agent skills into the home directory
+    # -- the real one, under test. Off unless a test turns it on (test_firstrun).
+    monkeypatch.setenv("FLEET_NO_FIRST_RUN", "1")
     return root
 
 
@@ -69,7 +52,7 @@ def _no_network(monkeypatch, request):
     """Fail a test that reaches the network, naming what it dialled.
 
     This exists for the reorganisation, and it earns its place regardless. Tests patch
-    dozens of names on `fleet.cli` -- `run_probe`, `onboard`, `install_key` -- because
+    dozens of names on `fleet.cli` -- `run_probe`, `onboard` -- because
     that is the module the code reads them from. Move a function into `fleet.ops` and
     those patches still apply to `cli`, still pass, and no longer intercept anything: the
     call goes through to a real machine. That failure is silent, slow, and indistinguish-
@@ -108,7 +91,7 @@ def _no_network(monkeypatch, request):
 
     # The case that actually matters here. fleet reaches machines by spawning ssh, not by
     # opening a socket in Python, so a socket guard alone protects the minority path --
-    # `run_probe`, `apply_edge`, `run_sync` and `install_key` would all still dial out.
+    # `run_probe` and `machinefile.change` would still dial out.
     # Matched on the basename exactly: `ssh-keygen` is local and tests run it for real.
     import subprocess
 
@@ -141,50 +124,3 @@ def _no_network(monkeypatch, request):
 
     monkeypatch.setattr(subprocess, "run", guarded_run)
     monkeypatch.setattr(subprocess, "Popen", GuardedPopen)
-
-
-@pytest.fixture(autouse=True)
-def _windows_authorized_keys_stay_in_the_test(monkeypatch):
-    """On Windows, an authorized_keys edit with no explicit path resolves the real file
-    -- %USERPROFILE%\\.ssh, or ProgramData's administrators_authorized_keys for an admin
-    -- and the joining and leaving tests were editing the CI runner's own. The same
-    PowerShell edit, pointed at the test's home instead."""
-    import os
-    import sys
-
-    if sys.platform != "win32":
-        return
-    from pathlib import Path
-
-    from fleet.ssh import authkeys
-
-    real = authkeys.sync_command
-
-    def in_the_test_home(*a, path: str = "", platform: str = "posix", **k):
-        if platform == "windows" and not path:
-            home = os.environ.get("HOME") or os.environ.get("USERPROFILE") or "."
-            path = str(Path(home) / ".ssh" / "authorized_keys")
-        return real(*a, path=path, platform=platform, **k)
-    from fleet import reconcile
-    from fleet.ops import handover, lifecycle, member
-
-    # every module that took its own reference at import
-    for mod in (authkeys, reconcile, handover, lifecycle, member):
-        monkeypatch.setattr(mod, "sync_command", in_the_test_home)
-
-
-@pytest.fixture(autouse=True)
-def _no_real_service_manager(monkeypatch, request):
-    """No test may install, start, stop or remove the developer's real fleet service.
-
-    Dissolving a fleet removes the center's service, and a test that dissolves one ran
-    `systemctl --user disable fleet-center` (or launchctl, or schtasks) on whatever
-    machine ran the suite. test_service.py tests those functions themselves, against
-    mocked commands, and is left alone.
-    """
-    if request.module.__name__.endswith("test_service"):
-        return
-    from fleet import service
-
-    for name in ("install", "remove", "start", "stop"):
-        monkeypatch.setattr(service, name, lambda *a, _n=name, **k: f"{_n} (test: not run)")

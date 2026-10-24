@@ -2,9 +2,9 @@
 clone learns the id it was given.
 
 Found in review: telling them apart relied on a hostname stored in cache.db -- clones
-that kept the image's hostname, or a center whose cache was cleared, merged them into
-one record -- and the id given to the clone existed only on the center, so the clone's
-own fleet still believed it was the machine it was copied from.
+that kept the image's hostname, or a machine whose cache was cleared, merged them into
+one record -- and the id given to the clone existed only where it was added, so fleet on
+the clone still believed it was the machine it was copied from.
 """
 
 from __future__ import annotations
@@ -18,7 +18,6 @@ import pytest
 from typer.testing import CliRunner
 
 from fleet import cli
-from fleet import reconcile
 from fleet.models import Device, Kind, ProbeResult, Snapshot, Status
 from fleet.onboard import derive_id
 from fleet.ops import identity
@@ -39,9 +38,8 @@ def _snap(host: str, *, booted_ago: int, device_id: str = "") -> Snapshot:
 def known(monkeypatch):
     inv.save([Device(id=BASE, name="web", kind=Kind.PERMANENT,
                      endpoints=[{"target": "10.0.0.5", "user": "root", "port": 22}])])
-    monkeypatch.setattr(cli, "_fleet_membership", lambda: "member")
     written = []
-    monkeypatch.setattr(reconcile, "_remote",
+    monkeypatch.setattr(cli, "_run_script",
                         lambda ep, script, **k: written.append((ep.target, script)) or (True, "ok"))
     return written
 

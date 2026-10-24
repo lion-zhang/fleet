@@ -107,15 +107,15 @@ def check_name(name: str, what: str = "name") -> str:
 
 
 def apply_edits(dev: Device, *, endpoint: Endpoint | None = None,
-                disk_paths: list[str] | None = None, role: str | None = None,
+                disk_paths: list[str] | None = None,
                 name: str | None = None, alias: str | None = None,
                 add_tags: list[str] | None = None, drop_tags: list[str] | None = None,
                 taken: set[str] | None = None, usd_per_hour: float | None = None) -> Edits:
     out = Edits()
     if name is not None and name != dev.name:
         check_name(name)
-        # The name is a label, not an identity -- the id is what merge and the access
-        # list key on -- so renaming is safe and needs no cascade. It is also the only
+        # The name is a label, not an identity -- the cache keys on the id -- so
+        # renaming is safe and needs no cascade. It is also the only
         # way to fix a bad one: `fleet add` restores a tombstoned record under its old
         # name, so a device that was named wrongly once stays that way otherwise.
         if name in (taken or set()):
@@ -144,9 +144,6 @@ def apply_edits(dev: Device, *, endpoint: Endpoint | None = None,
             out.changes.append(f"tags {' '.join(before) or 'none'} -> "
                                f"{' '.join(after) or 'none'}")
             dev.tags = after
-    if role is not None and role != dev.role:
-        out.changes.append(f"role {dev.role} -> {role}")
-        dev.role = role
     if endpoint is not None:
         _replace_primary(dev, endpoint, out)
         _migrate_identity(dev, endpoint, out)

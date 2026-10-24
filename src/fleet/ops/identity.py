@@ -1,8 +1,8 @@
 """Which machine this is.
 
-Its own module because everything asks: the sweep, so the center does not ssh to itself;
-the row builder, so the local machine is probed without a network; `fleet center`, to
-notice it holds the role. Answering from `cli.py` meant an operation could not ask
+Its own module because everything asks: the row builder, so the local machine is probed
+without a network; `fleet show`, for the machine you are on; `fleet edit`, to change this
+machine's own notes without ssh. Answering from `cli.py` meant an operation could not ask
 without importing the argument parser.
 
 Callers reach it as `identity.local_device_id()` rather than importing the name. That is
@@ -24,12 +24,11 @@ from ..ssh.cmd import local_platform
 def local_device_id() -> str:
     """This machine's identity, in the same shape onboard.py stamps on a probed device.
 
-    Used to notice that we ARE a given machine -- the center, or the row `fleet show`
-    describes. A machine with no machine-id at all (many containers) falls back to its
-    fleet key, as joining does (`join._stable_id`): otherwise every such machine was
-    `net:localhost:22`, one id for all of them, and none ever recognised its own record.
+    Used to notice that we ARE a given machine -- the row `fleet show` describes. A
+    machine with no machine-id at all (many containers) answers "": no machine is then
+    taken for this one, which is the safe way to be wrong.
     """
-    base = _machine_id() or _key_id()
+    base = _machine_id()
     return assigned_id(base) or base
 
 
@@ -59,7 +58,7 @@ def adopt_id(device_id: str) -> None:
     one (see `assigned_id`). Removes the file when they agree again."""
     from ..state.writes import atomic_write
 
-    base = _machine_id() or _key_id()
+    base = _machine_id()
     path = device_id_file()
     if device_id and device_id.startswith(base + ":"):
         path.parent.mkdir(parents=True, exist_ok=True)
@@ -68,23 +67,12 @@ def adopt_id(device_id: str) -> None:
         path.unlink()
 
 
-def _key_id() -> str:
-    from .. import config
-    from ..state import access as acl
-
-    try:
-        pub = config.FLEET_KEY.with_suffix(".pub").read_text(encoding="utf-8")
-        return f"key:{acl.fingerprint(pub)}"
-    except (OSError, acl.AccessError):
-        return ""
-
-
 @lru_cache(maxsize=1)
 def _machine_id() -> str:
     if local_platform() == "windows":
         # The same registry value payload.ps1 reads, so this agrees with the id
         # `derive_id` stamps from a probe -- which is the whole point: without it a
-        # Windows center did not recognise its own row, tried to ssh to itself, and
+        # Windows machine did not recognise its own row, tried to ssh to itself, and
         # reported "device has no endpoints" about the machine it was running on.
         try:
             import winreg

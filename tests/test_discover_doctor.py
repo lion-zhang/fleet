@@ -1,0 +1,218 @@
+"""Finding the machines you can already reach, and saying why one will not let us in.
+
+fleet manages no access, so these two are how it stays easy: discovery reads the places
+you already list machines (ssh config, tailnet), and doctor turns a refusal into the one
+line that fixes it -- for the user to run, since access is theirs to grant.
+"""
+
+from __future__ import annotations
+
+import json
+
+import pytest
+from typer.testing import CliRunner
+
+from fleet import cli
+from fleet.models import Device, Kind, ProbeResult, Status
+from fleet.ops import discover, doctor
+from fleet.ssh import keys
+from fleet.state import inventory as inv
+
+# What `tailscale status --json` says, trimmed to the fields read.
+STATUS = {"Peer": {
+    "n1": {"HostName": "GPU-Box", "DNSName": "gpu-box.example.ts.net.", "OS": "linux",
+           "Online": True, "TailscaleIPs": ["100.64.0.5"]},
+    "n2": {"HostName": "iPhone", "DNSName": "iphone.example.ts.net.", "OS": "iOS",
+           "Online": True, "TailscaleIPs": ["100.64.0.6"]},
+    "n3": {"HostName": "studio", "DNSName": "studio.example.ts.net.", "OS": "macOS",
+           "Online": False, "TailscaleIPs": ["100.64.0.7"]},
+}}
+
+
+@pytest.fixture
+def home(tmp_path):
+    (tmp_path / ".ssh").mkdir()
+    return tmp_path
+
+
+def test_hosts_are_read_from_ssh_config_with_includes_and_without_patterns(home):
+    (home / ".ssh" / "config").write_text(
+        "Host *\n  ServerAliveInterval 30\nHost lab lab-alt\n  HostName 10.0.0.9\n"
+        "Host !nope *.corp\nInclude conf.d/*\nHost localhost\n")
+    (home / ".ssh" / "conf.d").mkdir()
+    (home / ".ssh" / "conf.d" / "vast").write_text("Host vast-a100  # rental\n  Port 40001\n")
+    names = [c.name for c in discover.ssh_config(home)]
+    assert names == ["lab", "lab-alt", "vast-a100"]
+
+
+def test_an_include_that_includes_itself_is_read_once(home):
+    (home / ".ssh" / "config").write_text("Include config\nHost a\n")
+    assert [c.name for c in discover.ssh_config(home)] == ["a"]
+
+
+def test_tailnet_peers_that_can_run_sshd_are_listed_and_phones_are_not():
+    got = {c.name: c for c in discover.tailnet(STATUS)}
+    assert set(got) == {"gpu-box", "studio"}
+    assert got["gpu-box"].target == "gpu-box.example.ts.net"
+    assert got["gpu-box"].ssh_command == "ssh gpu-box.example.ts.net"
+    assert got["studio"].online is False and got["studio"].os == "macos"
+
+
+def test_no_tailscale_is_no_tailnet_not_an_error(monkeypatch):
+    monkeypatch.setattr(discover, "_tailscale", lambda: "")
+    assert discover.tailnet_status() is None and discover.tailnet() == []
+
+
+def test_a_machine_already_added_is_marked_with_its_name(home):
+    (home / ".ssh" / "config").write_text("Host gpu-box\n")
+    inv.save([Device(id="id:g", name="big",
+                     endpoints=[{"target": "gpu-box.example.ts.net", "user": "me"}])])
+    got = discover.candidates(home=home, status=STATUS)
+    # one machine, from whichever source named it first
+    assert [c.name for c in got].count("gpu-box") == 1
+    by = {c.name: c for c in got}
+    assert by["studio"].added == ""
+
+
+def test_ls_discover_lists_them_as_json(home, monkeypatch):
+    monkeypatch.setattr(discover, "candidates",
+                        lambda **k: discover.tailnet(STATUS))
+    r = CliRunner().invoke(cli.app, ["ls", "--discover", "--json"])
+    assert r.exit_code == 0, r.output
+    names = [c["name"] for c in json.loads(r.stdout)["candidates"]]
+    assert names == ["gpu-box", "studio"]
+
+
+def test_adding_a_discovered_name_uses_the_command_that_reaches_it(monkeypatch):
+    monkeypatch.setattr(discover, "candidates", lambda **k: discover.tailnet(STATUS))
+    assert cli._discovered_command("gpu-box") == "ssh gpu-box.example.ts.net"
+    assert cli._discovered_command("ssh root@1.2.3.4") == "ssh root@1.2.3.4"
+    assert cli._discovered_command("unknown") == "unknown"   # a bare ssh alias of its own
+
+
+# ---------------------------------------------------------------- doctor
+def _dev(**kw):
+    d = Device(id="id:x", name="box", kind=kw.pop("kind", Kind.PERMANENT),
+               endpoints=[{"target": "10.0.0.5", "user": "me", "port": 22}])
+    for k, v in kw.items():
+        setattr(d, k, v)
+    return d
+
+
+@pytest.fixture
+def mykey(tmp_path, monkeypatch):
+    pub = "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIEfO2BAfm3M8YGY39abf7HwQ9kNkKOR7nesP3z7/PatB me"
+    monkeypatch.setattr(keys, "public_key", lambda *a: (tmp_path / "id.pub", pub))
+    return pub
+
+
+def test_a_refused_linux_machine_is_told_the_line_that_puts_your_key_on_it(mykey):
+    v = doctor.advise(_dev(), Status.AUTH_FAILED.value, "Permission denied (publickey)")
+    assert "does not accept your key" in v.why
+    assert any(mykey in line and "authorized_keys" in line for line in v.fix)
+
+
+def test_a_refused_windows_machine_gets_powershell_for_both_kinds_of_user(mykey):
+    v = doctor.advise(_dev(), Status.AUTH_FAILED.value, "denied",
+                      server="OpenSSH_for_Windows_9.5")
+    text = "\n".join(v.fix)
+    assert "administrators_authorized_keys" in text and "$HOME\\.ssh\\authorized_keys" in text
+    assert "icacls" in text, "sshd ignores the admin file unless only SYSTEM and admins can write it"
+
+
+def test_tailscale_ssh_points_at_the_policy_not_at_a_key(mykey):
+    v = doctor.advise(_dev(), Status.AUTH_FAILED.value, "denied", server="Tailscale")
+    assert "policy" in v.why and not any("authorized_keys" in f for f in v.fix)
+
+
+def test_a_tailscale_check_rule_is_named_for_what_it_is(mykey):
+    v = doctor.advise(_dev(), Status.AUTH_FAILED.value, "",
+                      server="Tailscale",
+                      verbose="# Tailscale SSH requires an additional check. To authenticate, "
+                              "visit: https://login.tailscale.com/a/abc")
+    assert "browser" in v.why and any('"accept"' in f for f in v.fix)
+
+
+def test_a_rental_is_told_to_add_the_key_to_the_provider_account(mykey):
+    v = doctor.advise(_dev(kind=Kind.RENTAL, provider="vastai"), Status.AUTH_FAILED.value,
+                      "denied")
+    assert "provider" in v.fix[0] and "vast.ai" in v.fix[0]
+
+
+def test_no_key_at_all_says_to_make_one_first(monkeypatch):
+    monkeypatch.setattr(keys, "public_key", lambda *a: None)
+    v = doctor.advise(_dev(), Status.AUTH_FAILED.value, "denied")
+    assert "ssh-keygen" in v.fix[0]
+
+
+@pytest.mark.parametrize("status, word", [
+    (Status.TIMEOUT.value, "nothing answered"),
+    (Status.REFUSED.value, "no ssh server"),
+    (Status.HOST_KEY_MISMATCH.value, "host key changed"),
+])
+def test_every_other_failure_has_its_own_answer(status, word):
+    assert word in doctor.advise(_dev(), status, "").why
+
+
+def test_doctor_changes_nothing_and_answers_as_json(monkeypatch, mykey):
+    inv.save([_dev()])
+    monkeypatch.setattr(doctor, "diagnose", lambda dev, **k: doctor.advise(
+        dev, Status.AUTH_FAILED.value, "denied"))
+    before = inv.INVENTORY_PATH.read_text()
+    r = CliRunner().invoke(cli.app, ["doctor", "box", "--json"])
+    assert r.exit_code == 0, r.output
+    (m,) = json.loads(r.stdout)["machines"]
+    assert m["name"] == "box" and m["fix"]
+    assert inv.INVENTORY_PATH.read_text() == before
+
+
+# ---------------------------------------------------------------- add
+def test_a_machine_that_refuses_us_is_not_recorded_and_the_fix_is_said(monkeypatch, mykey):
+    monkeypatch.setattr(cli, "onboard", lambda cmd, **k: (
+        _dev(), ProbeResult(status=Status.AUTH_FAILED, error_detail="Permission denied")))
+    r = CliRunner().invoke(cli.app, ["add", "ssh me@10.0.0.5", "--json"])
+    assert r.exit_code == 1
+    out = json.loads(r.stdout)
+    assert out["ok"] is False and out["fix"] and "authorized_keys" in "\n".join(out["fix"])
+    assert inv.live(inv.load()) == []
+
+
+def test_ssh_copy_id_is_offered_only_at_a_terminal(monkeypatch, mykey):
+    """An agent cannot type a password, so without a terminal it is never started."""
+    started = []
+    monkeypatch.setattr(cli.subprocess, "run", lambda argv, **k: started.append(argv))
+    dev = _dev()
+    res = ProbeResult(status=Status.AUTH_FAILED)
+    monkeypatch.setattr(cli.sys.stdin, "isatty", lambda: False, raising=False)
+    assert cli._offer_copy_id("ssh me@10.0.0.5", dev, res, name=None, kind=None,
+                              alias="", taken=set()) == (dev, res)
+    assert not started
+
+
+def test_ssh_copy_id_argv_carries_port_identity_and_jump(tmp_path, monkeypatch):
+    from fleet.ssh.cmd import Endpoint
+
+    monkeypatch.setattr(keys.shutil, "which", lambda name: "/usr/bin/ssh-copy-id")
+    argv = keys.copy_id_argv(Endpoint(target="1.2.3.4", user="root", port=40001,
+                                      identity="/k", jump="bastion"))
+    assert argv == ["/usr/bin/ssh-copy-id", "-p", "40001", "-i", "/k", "-o",
+                    "ProxyJump=bastion", "root@1.2.3.4"]
+
+
+# ---------------------------------------------------------------- first run
+def test_the_first_run_records_this_machine_once_and_starts_no_fleet(monkeypatch):
+    from fleet.ops import firstrun, identity
+
+    monkeypatch.delenv("FLEET_NO_FIRST_RUN", raising=False)
+    monkeypatch.setattr(firstrun, "teach_agents", lambda: ["claude"])
+    monkeypatch.setattr(identity, "local_device_id", lambda: "id:me")
+    import fleet.onboard as onboard
+
+    monkeypatch.setattr(onboard, "onboard_self", lambda **k: (
+        Device(id="id:me", name="laptop"), ProbeResult(status=Status.OK)))
+    said = []
+    assert firstrun.maybe("ls", said.append) is True
+    assert "recorded laptop" in said[0] and "taught claude" in said[0]
+    assert "center" not in said[0]
+    assert [d.name for d in inv.load()] == ["laptop"]
+    assert firstrun.maybe("ls", said.append) is False          # once
