@@ -1,7 +1,7 @@
 # Installing and upgrading
 
 The usual way to install fleet is to ask your agent: "Install fleet from
-https://github.com/lion-zhang/fleet". The agent follows [INSTALL.md](../../INSTALL.md),
+https://github.com/lion-zhang/fleet". The agent follows [INSTALL.md](https://github.com/lion-zhang/fleet/blob/main/INSTALL.md),
 which tells it to run the installer and to ask you for permission if its sandbox blocks
 the install. There is nothing to choose: every machine running fleet is installed the
 same way. This page covers what the installer does, the other ways to install,
@@ -65,7 +65,7 @@ To install from inside one particular agent — a plugin, an extension, an MCP e
 one-click button — see [Agents](agents.md).
 
 To work on fleet itself: `git clone https://github.com/lion-zhang/fleet && uv tool install
---editable ./fleet`. See [CONTRIBUTING.md](../../CONTRIBUTING.md).
+--editable ./fleet`. See [CONTRIBUTING.md](https://github.com/lion-zhang/fleet/blob/main/CONTRIBUTING.md).
 
 ## Upgrading
 

@@ -43,7 +43,7 @@ dependencies = [
 
 [project.urls]
 Homepage = "https://github.com/lion-zhang/fleet"
-Documentation = "https://github.com/lion-zhang/fleet/blob/main/docs/README.md"
+Documentation = "https://lion-zhang.github.io/fleet/"
 Issues = "https://github.com/lion-zhang/fleet/issues"
 
 [project.optional-dependencies]
@@ -52,6 +52,8 @@ mcp = []
 
 [dependency-groups]
 dev = ["pytest>=8"]
+# The documentation site (mkdocs.yml); not installed by `uv sync`.
+docs = ["mkdocs-material==9.7.7", "mkdocs>=1.6,<2"]
 
 [project.scripts]
 fleet = "fleet.cli:main"

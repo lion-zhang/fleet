@@ -80,6 +80,21 @@ These are written by scripts and checked by tests; edit the source, then regener
 
 `tests/test_dist.py` fails when a committed copy differs from what the script writes.
 
+## The documentation site
+
+`docs/` is also published as a website, [lion-zhang.github.io/fleet](https://lion-zhang.github.io/fleet/),
+by `.github/workflows/docs.yml` on every push to main. The pages are the same Markdown files
+GitHub shows; `mkdocs.yml` only adds the sidebar. A new page goes in two places: the index,
+`docs/README.md`, and `nav:` in `mkdocs.yml`.
+
+```bash
+uv run --group docs mkdocs serve      # http://127.0.0.1:8000, rebuilt as you edit
+uv run --group docs mkdocs build      # what CI runs: a broken link or anchor fails it
+```
+
+Link to files outside `docs/` (`INSTALL.md`, `SECURITY.md`) by their GitHub URL, since the
+site has no copy of them.
+
 ## Supporting another agent
 
 Most agents are one entry in `AGENTS` (or `MCP_CLIENTS` for apps without a shell) in
