@@ -1,6 +1,8 @@
 <!-- mcp-name: io.github.lion-zhang/fleet -->
 <div align="center">
 
+<img src="docs/assets/logo.svg" alt="" width="88">
+
 # fleet — let your coding agent use every machine you have
 
 **Claude Code, Codex and Gemini see one machine: the one they run on.<br>
