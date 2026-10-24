@@ -184,6 +184,8 @@ class Snapshot:
     storage: list[StorePath] = field(default_factory=list)
     # cuda, nvcc, cudnn, rocm, python, uv, docker, ... -> version (or where it is)
     software: dict[str, str] = field(default_factory=dict)
+    # When the software list was read on the machine (it is cached there for hours).
+    software_at: int | None = None
     pyenvs: list[PyPackage] = field(default_factory=list)
     # None when the probe did not look (a light probe, or no docker), not "none running".
     containers: list[Container] | None = None
@@ -214,7 +216,7 @@ class ProbeResult:
 
 @dataclass(slots=True)
 class Device:
-    """Durable identity. Lives in inventory.yaml, hand-editable, survives cache loss."""
+    """Durable identity. Lives in machines.yaml, hand-editable, survives cache loss."""
 
     id: str
     name: str
@@ -226,31 +228,19 @@ class Device:
     # --json, and never set by anything.
     alias: str = ""
     probe_policy: str = "auto"             # auto | on_demand | never
-    role: str = "none"                     # none | center | backup
     tags: list[str] = field(default_factory=list)
     notes: str = ""
     endpoints: list[dict] = field(default_factory=list)
-    # Who authorizes ssh here: "" not yet asked, "keys" we manage authorized_keys,
-    # "external" the network does and we must not. A property of the server, not
-    # of the address -- see sshauth.
-    ssh_auth: str = ""
     mesh: dict = field(default_factory=dict)   # optional, informational
     provider: str = ""
     cost: dict = field(default_factory=dict)
     disk_paths: list[str] = field(default_factory=list)   # empty = autodetect mounts
-    # this machine's fleet SSH public key, published so others can see it. Informational
-    # only: the center pins the binding it read over its own connection, because a field
-    # that rides the merge can be overwritten by a peer with a fast clock -- and the
-    # center would then install that peer's key where this machine's belonged.
-    pubkey: str = ""
-    # A tombstone. Deletion has to be a recorded fact rather than an absence: a record
-    # that merely vanishes is indistinguishable from one the other machine has not seen
-    # yet, and the next sync would resurrect it.
+    # A tombstone (inventory.remove): kept a while, so a copy of the file shared with your
+    # dotfiles can tell "removed" from "not added there yet".
     deleted_at: int = 0
     needs_review: bool = False
     added_at: int = field(default_factory=lambda: int(time.time()))
-    # when this record last changed. added_at cannot serve: it says when the device was
-    # first seen, not when its record was last edited, which is what a merge needs.
+    # when this record last changed. added_at says when the device was first seen.
     updated_at: int = field(default_factory=lambda: int(time.time()))
 
     @property
@@ -261,7 +251,7 @@ class Device:
 
     @property
     def probeable(self) -> bool:
-        """Eligible for the automatic sweep. on_demand hosts are probed only when named
+        """Probed by a bare `fleet ls`. on_demand hosts are probed only when named
         explicitly (`fleet ls koa04 -r`), never by a bare `fleet ls`."""
         return self.probe_policy == "auto" and self.kind is not Kind.MOBILE
 

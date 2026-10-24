@@ -1,16 +1,10 @@
-"""The first run: a machine in no fleet becomes the center, and its agents learn fleet.
+"""The first run: this machine is recorded, and its agents learn fleet.
 
-Nobody should have to know `fleet center --init` and `fleet setup` exist before fleet is
-useful. So the installer runs both, and for every other way in -- `uv tool install`,
+Nobody should have to know `fleet add --self` and `fleet setup` exist before fleet is
+useful. So the installer runs setup, and for every other way in -- `uv tool install`,
 pipx, a plugin, an MCP client launching `fleet mcp` -- the first real command does the
-same, once, and says so in a line.
-
-The one thing that must never happen is a machine that was meant to be a *member*
-making itself a center. That is how a second, competing fleet is born. So it is opted
-into by name rather than out of: only the commands a person or an agent uses to look at
-or grow a fleet trigger it, never the ones by which machines are made members (`sync`,
-`join`, `center --accept`/`--receive`, and everything `fleet install` runs on a machine
-it is installing, which also sets FLEET_NO_AUTO_CENTER).
+same, once, and says so in a line. There is no fleet to start or join: every machine
+running fleet is the same, and looks at the machines its own SSH can reach.
 """
 
 from __future__ import annotations
@@ -18,42 +12,28 @@ from __future__ import annotations
 import os
 from pathlib import Path
 
-from ..state import access as acl
 from ..state import inventory as inv
 from ..state import store
 
-OPT_OUT = "FLEET_NO_AUTO_CENTER"
+OPT_OUT = "FLEET_NO_FIRST_RUN"
 
 
-def init_center():
-    """Start a fleet with this machine as its center. Returns (access, device).
+def _marker() -> Path:
+    from ..config import STATE_DIR
 
-    Raises AccessError when this machine already holds a fleet's access list.
-    """
-    # Through the modules, not imported names, so there is one place to substitute them.
+    return STATE_DIR / "first-run-done"
+
+
+def add_this_machine():
+    """Record the machine fleet runs on, if it is not recorded yet. Returns it or None."""
     from .. import onboard
-    from ..ssh import keys
+    from . import identity
 
-    _, pub = keys.ensure_keypair()
+    me = identity.local_device_id()
     devices = inv.load()
-    dev, res = onboard.onboard_self()
-    # Re-running --init must not rename this machine. Passing every existing name as
-    # taken counted its *own* record among them, so a second --init came back as
-    # "<name>-2" and pinned that into the access list while the inventory kept the
-    # first -- the exact name split seeding both from one object exists to prevent.
-    if existing := inv.find_exact(devices, dev.id):
-        dev.name = existing.name
-    else:
-        taken, base, n = inv.handles(devices), dev.name, 2
-        while dev.name in taken:
-            dev.name, n = f"{base}-{n}", n + 1
-    acc = acl.bootstrap(dev.name, pub, dev.id)
-    # Reflect the role in the inventory too. `is_center()` remains the authority --
-    # this field rides the merge and cannot be trusted for a decision -- but it is
-    # what `ls` and `top` draw the diamond from.
-    dev.role = "center"
-    # Seed the inventory from the same object the access list was pinned from, so the
-    # two never derive a name each.
+    if me and inv.find_exact(devices, me):
+        return None
+    dev, res = onboard.onboard_self(taken_names=inv.handles(devices))
     inv.update(lambda current: inv.upsert(current, dev))
     if res.snapshot is not None:
         conn = store.connect()
@@ -61,7 +41,7 @@ def init_center():
             store.record(conn, dev.id, res)
         finally:
             conn.close()
-    return acc, dev
+    return dev
 
 
 def teach_agents() -> list[str]:
@@ -76,57 +56,28 @@ def teach_agents() -> list[str]:
 
 
 def maybe(command: str, say) -> bool:
-    """Run the first run if this machine is in no fleet yet. Returns whether it ran.
+    """Run the first run if it has not run here yet. Returns whether it ran.
 
-    Called by name from the commands that mean "I am using fleet here" -- `ls`, `show`,
-    `top`, `add`, `invite`, `access`, bare `center`, `setup` when it is setting up, and
-    `mcp` -- each of which knows its own flags. Never from the ones that make a machine
-    a member. `say` prints one line; the MCP server passes a stderr printer, because its
-    stdout is the protocol.
+    `say` prints one line; the MCP server passes a stderr printer, because its stdout is
+    the protocol.
     """
-    from ..config import STATE_DIR
-    from ..state.writes import turn
-    from .lifecycle import membership
+    from ..config import ensure_dirs
+    from ..state.writes import atomic_write, turn
 
-    if os.environ.get(OPT_OUT) or membership() != "":
+    if os.environ.get(OPT_OUT) or _marker().exists():
         return False
-    # Two agents' first commands at the same moment: the second waits for the first to
-    # finish starting the fleet, then finds it and does nothing -- rather than starting a
-    # second fleet beside it.
-    with turn(STATE_DIR / "first-run"):
-        if membership() != "":
+    ensure_dirs()
+    # Two agents' first commands at the same moment: the second waits for the first,
+    # then finds it done.
+    with turn(_marker()):
+        if _marker().exists():
             return False
-        try:
-            acc, dev = init_center()
-        except acl.AccessError:
-            return False
-    taught = [] if command == "setup" else teach_agents()
-    say(f"started fleet {acc.fleet_id} with {dev.name} as its center"
-        + (f"; taught {', '.join(taught)} to use it" if taught else "")
-        + f"  (to join another fleet instead: fleet join CODE)")
-    if svc := start_listening():
-        # The tick only for a service that will outlive this terminal: the center is
-        # what every other machine asks, and "✓ service: could not register it" told
-        # someone it would be there after logout when it would not.
-        say(f"service: {svc}", getattr(svc, "level", "ok"))
+        dev = add_this_machine()
+        taught = [] if command == "setup" else teach_agents()
+        atomic_write(_marker(), "1\n", mode=0o644)
+    bits = ([f"recorded {dev.name}"] if dev else []) + (
+        [f"taught {', '.join(taught)} to use it"] if taught else [])
+    if bits:
+        say("fleet is ready here: " + "; ".join(bits)
+            + "  (add machines with fleet add \"ssh user@host\", or see fleet ls --discover)")
     return True
-
-
-def start_listening() -> str:
-    """What `fleet center --init` does next: the background service, so the center
-    answers invites and refreshes without anyone holding a terminal open. Returns what
-    the service manager said, or "" when it was not attempted.
-
-    Not from a `uvx` environment: the service would run a path uv may delete.
-    """
-    from .. import service
-    from ..agents import fleet_executable
-    from ..agents.registry import _ephemeral
-    from ..config import DEFAULT_PORT
-
-    if _ephemeral():
-        return ""
-    try:
-        return service.install(fleet_executable(), DEFAULT_PORT)
-    except Exception as exc:        # a center without its service still works
-        return service.Said(f"not installed ({exc})", service.FAIL)

@@ -121,7 +121,6 @@ def test_adding_with_a_taken_alias_is_refused(tmp_path, monkeypatch):
     from fleet.models import ProbeResult, Status
 
     runner = _cli(tmp_path, monkeypatch)
-    monkeypatch.setattr(cli, "_fleet_membership", lambda: "center")
     monkeypatch.setattr(cli, "onboard", lambda *a, **k: (
         Device(id="net:1.2.3.4:22", name="newbox", kind=Kind.RENTAL),
         ProbeResult(status=Status.OK)))
@@ -194,11 +193,9 @@ def test_a_clone_sharing_a_machine_id_is_kept_apart(tmp_path, monkeypatch):
         return dev, ProbeResult(status=Status.OK, snapshot=Snapshot(ts=2, hostname="clone4"))
 
     monkeypatch.setattr(cli, "onboard", onboard)
-    monkeypatch.setattr(cli, "_fleet_membership", lambda: "member")
     # the known machine does not answer now: only its last reading can tell
     monkeypatch.setattr(cli, "run_probe", lambda *a, **k: ProbeResult(status=Status.TIMEOUT))
-    from fleet import reconcile
-    monkeypatch.setattr(reconcile, "_remote", lambda *a, **k: (True, "ok"))
+    monkeypatch.setattr(cli, "_run_script", lambda *a, **k: (True, "ok"))
     r = CliRunner().invoke(cli.app, ["add", "ssh root@clone4"])
     assert r.exit_code == 0, r.output
     names = {d.name for d in inv.live(inv.load())}
@@ -224,11 +221,9 @@ def test_one_box_reached_two_ways_is_still_one_record(tmp_path, monkeypatch):
         Device(id="linux:machine-id:box", name="box-2", kind=Kind.PERMANENT,
                endpoints=[{"target": "box.example.ts.net", "user": "root", "port": 22}]),
         ProbeResult(status=Status.OK, snapshot=Snapshot(ts=2, hostname="box"))))
-    monkeypatch.setattr(cli, "_fleet_membership", lambda: "member")
     # the known machine does not answer now: only its last reading can tell
     monkeypatch.setattr(cli, "run_probe", lambda *a, **k: ProbeResult(status=Status.TIMEOUT))
-    from fleet import reconcile
-    monkeypatch.setattr(reconcile, "_remote", lambda *a, **k: (True, "ok"))
+    monkeypatch.setattr(cli, "_run_script", lambda *a, **k: (True, "ok"))
     r = CliRunner().invoke(cli.app, ["add", "ssh root@box.example.ts.net"])
     assert r.exit_code == 0, r.output
     assert [d.name for d in inv.live(inv.load())] == ["box"]
@@ -257,11 +252,9 @@ def test_a_known_box_added_again_reports_the_name_it_keeps(tmp_path, monkeypatch
         Device(id="linux:machine-id:box", name=k.get("name") or "box-2", kind=Kind.PERMANENT,
                endpoints=[{"target": "localhost", "user": "me", "port": 22}]),
         ProbeResult(status=Status.OK, snapshot=Snapshot(ts=2, hostname="box"))))
-    monkeypatch.setattr(cli, "_fleet_membership", lambda: "member")
     # the known machine does not answer now: only its last reading can tell
     monkeypatch.setattr(cli, "run_probe", lambda *a, **k: ProbeResult(status=Status.TIMEOUT))
-    from fleet import reconcile
-    monkeypatch.setattr(reconcile, "_remote", lambda *a, **k: (True, "ok"))
+    monkeypatch.setattr(cli, "_run_script", lambda *a, **k: (True, "ok"))
     r = CliRunner().invoke(cli.app, ["add", "ssh me@localhost", "--name", "loop", "--json"])
     assert r.exit_code == 0, r.output
     out = json.loads(r.stdout)

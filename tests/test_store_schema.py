@@ -98,15 +98,6 @@ def test_first_hand_beats_relayed_even_when_the_relay_is_newer(tmp_path):
     conn.close()
 
 
-def test_a_relayed_row_is_used_when_we_have_none_of_our_own(tmp_path):
-    conn = store.connect(tmp_path / "cache.db")
-    store.record(conn, "far", _res(host="relayed"), source="broadcast", probed_by="center")
-    state, snap = store.latest(conn, "far")
-    assert state["source"] == "broadcast" and state["probed_by"] == "center"
-    assert snap["hostname"] == "relayed"
-    conn.close()
-
-
 def test_a_relay_does_not_evict_our_own_history(tmp_path):
     """They used to share one ring buffer, so a chatty broadcast would push out the
     device's own snapshots."""

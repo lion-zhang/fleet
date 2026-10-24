@@ -140,17 +140,12 @@ def _shape_matches(conn: sqlite3.Connection) -> bool:
 def record(conn: sqlite3.Connection, device_id: str, res: ProbeResult, *,
            source: str = "self", probed_by: str = "", at: int | None = None,
            only_if_newer: bool = False) -> bool:
-    """Store a probe result. `source` is 'self' for one we ran, 'broadcast' for one
-    relayed by the center for a device we cannot reach ourselves.
+    """Store a probe result. Returns whether anything was written.
 
-    `at` is when the probe was taken, for a relayed one: stamped with the time it was
-    *received*, a reading days old looked fresh, was never re-probed, and kept an agent
-    sending work to a machine that had died. Never later than now.
-
-    `only_if_newer`, for relayed readings: one no newer than what is stored is dropped,
-    so a member syncing late with a day-old reading does not replace a fresh one, and
-    the same reading relayed again does not fill the history with copies. Returns
-    whether anything was written.
+    `source` and `probed_by` are columns from when a reading could also be relayed by
+    another machine; every reading is now our own (`self`). `at` is when the probe was
+    taken, never later than now. `only_if_newer` drops a reading no newer than the one
+    stored.
     """
     now = int(time.time()) if at is None else min(int(at), int(time.time()))
     started = not conn.in_transaction
@@ -196,8 +191,6 @@ def record(conn: sqlite3.Connection, device_id: str, res: ProbeResult, *,
         conn.execute("INSERT INTO snapshot (device_id, ts, source, payload) VALUES (?,?,?,?)",
                      (device_id, res.snapshot.ts, source, json.dumps(payload, default=str)))
         keep = int(load_config().snapshot_retention)
-        # Retention is per source, or a chatty broadcast would evict the device's own
-        # first-hand history from the single ring buffer they used to share.
         conn.execute(
             """DELETE FROM snapshot WHERE device_id=? AND source=? AND id NOT IN
                  (SELECT id FROM snapshot WHERE device_id=? AND source=?
@@ -265,44 +258,16 @@ def rename_device(conn: sqlite3.Connection, old_id: str, new_id: str) -> None:
     conn.commit()
 
 
-# What a member's own probe says when it simply cannot get to a machine -- not when the
-# machine answered and something was wrong with it.
-_CANNOT_REACH = frozenset({Status.TIMEOUT.value, Status.UNREACHABLE.value,
-                           Status.AUTH_FAILED.value, Status.REFUSED.value})
-
-
-def latest(conn: sqlite3.Connection, device_id: str, *,
-           relayed_over_unreachable: bool = False) -> tuple[dict | None, dict | None]:
-    """Return (state_row, snapshot_dict) -- either may be None.
-
-    First-hand wins, even when the relayed row is newer. A probe we ran ourselves is
-    evidence; one the center relayed is hearsay about a machine we may not be able to
-    reach at all, and quietly preferring it because of a clock would make `fleet ls`
-    describe someone else's view of the fleet as though it were ours.
-
-    Except, with `relayed_over_unreachable`, when our own probe only says we could not
-    get there. fleet needs the center to reach every machine, not every machine to reach
-    every other: a member with no route or no key to a machine reported it down while
-    the center had just measured it fine. Then the center's healthy reading, newer than
-    our last success, is shown -- as relayed, with its age. For members only: on the
-    center its own failure is the fact that matters, since it is the one that manages.
-    """
-    rows = {r["source"]: dict(r) for r in conn.execute(
-        "SELECT * FROM device_state WHERE device_id=?", (device_id,)).fetchall()}
-    mine, relayed = rows.get("self"), rows.get("broadcast")
-    st = mine or relayed
-    use = "self" if mine else "broadcast"
-    if (relayed_over_unreachable and mine and relayed
-            and mine["status"] in _CANNOT_REACH and relayed["status"] == Status.OK.value
-            and (relayed["last_probe_at"] or 0) > (mine["last_ok_at"] or 0)):
-        st, use = relayed, "broadcast"
+def latest(conn: sqlite3.Connection, device_id: str) -> tuple[dict | None, dict | None]:
+    """Return (state_row, snapshot_dict) -- either may be None."""
+    st = conn.execute("SELECT * FROM device_state WHERE device_id=? AND source='self'",
+                      (device_id,)).fetchone()
     sn = conn.execute(
-        "SELECT payload FROM snapshot WHERE device_id=? "
+        "SELECT payload FROM snapshot WHERE device_id=? AND source='self' "
         # By arrival, not by `ts`: after the clock jumps back, the newest reading has the
         # smallest timestamp, and sorting by it showed a stale one forever.
-        "ORDER BY CASE source WHEN ? THEN 0 ELSE 1 END, id DESC LIMIT 1",
-        (device_id, use)).fetchone()
-    return (st, json.loads(sn["payload"]) if sn else None)
+        "ORDER BY id DESC LIMIT 1", (device_id,)).fetchone()
+    return (dict(st) if st else None, json.loads(sn["payload"]) if sn else None)
 
 
 def age_s(state: dict | None) -> int | None:

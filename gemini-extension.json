@@ -1,7 +1,7 @@
 {
   "name": "fleet",
   "version": "0.5.2",
-  "description": "Every machine you have, for your coding agent: live GPU, VRAM, RAM and disk, and SSH.",
+  "description": "Every machine you have, for your agent: free GPUs, jobs, served models, software, over SSH.",
   "mcpServers": {
     "fleet": {
       "command": "uvx",

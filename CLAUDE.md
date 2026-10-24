@@ -16,6 +16,12 @@ Consequences:
 - Writes go through one queue and apply to the state as it is now — never save a copy
   loaded earlier. Nobody blocks on anybody.
 - The installer never overwrites an existing core or touches fleet's state.
+- **fleet manages no access.** It connects exactly as the user's own ssh does and writes
+  no keys anywhere; there is no center, no roles, nothing synced between machines. A
+  refusal gets a fix from `fleet doctor`, for the user to make. Focus is resources: what
+  every machine has and is doing (hardware, GPU jobs, model servers, software, folders).
+- What a machine says about itself (cost, tags, notes, where models/datasets/media live)
+  lives on that machine in `machine.yaml`, read by the probe.
 
 ## Working here
 
@@ -28,4 +34,5 @@ Consequences:
   manifests and `docs/reference/cli.md` (`uv run python scripts/build_dist.py`), the README screenshots
   (`uv run python scripts/readme_screenshots.py`) and the demo
   (`uv run python scripts/readme_demo.py`).
-- The two install modes are **center** and **member**; use those words.
+- There is one install mode. Don't reintroduce "center" or "member": every machine
+  running fleet is the same.

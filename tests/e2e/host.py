@@ -1,12 +1,9 @@
 """End to end on one real machine: every fleet command, run the way a person runs it.
 
 Run by .github/workflows/e2e.yml on Linux, macOS and Windows runners, after the
-installer has made the runner a center. The runner is the center and, over ssh to
-localhost, a target too: the probe, the enrolment and every authorized_keys edit run
-through sshd and that OS's own shell, which is the code that differs per OS.
-
-A second fleet state on the same runner (FLEET_CONFIG_DIR / FLEET_STATE_DIR) joins with
-an invite, so invites, join, sync and grants have a member to work on.
+installer has put fleet on the runner. The runner is where fleet runs and, over ssh to
+localhost with the runner's own key, a target too: the probe, a machine's notes and
+`fleet ssh` run through sshd and that OS's own shell, which is the code that differs.
 
     FLEET_BIN=$(command -v fleet) uv run --no-project --with mcp --with . \
         python tests/e2e/host.py --ssh-user NAME [--report FILE]
@@ -27,7 +24,6 @@ import subprocess
 import sys
 import tempfile
 import time
-import urllib.request
 from pathlib import Path
 
 WINDOWS = os.name == "nt"
@@ -93,8 +89,19 @@ def machines(out: str) -> list[dict]:
 
 # -- the ssh target: this runner, as another login ------------------------------------
 
+def own_key() -> str:
+    """This runner's own ssh key -- the user's, which is all fleet ever uses -- made if
+    there is none, so a plain `ssh user@localhost` gets in the way it would for you."""
+    key = Path.home() / ".ssh" / "id_ed25519"
+    if not key.exists():
+        key.parent.mkdir(parents=True, exist_ok=True)
+        run(["ssh-keygen", "-q", "-t", "ed25519", "-N", "", "-f", str(key)])
+    return key.with_suffix(".pub").read_text(encoding="utf-8").strip()
+
+
 def place_key(user: str, pubkey: str) -> str:
-    """Put the center's key where sshd on this OS reads it for `user`."""
+    """Put a key where sshd on this OS reads it for `user` -- as `fleet doctor` tells a
+    person to, by hand."""
     if WINDOWS:
         admin = run(["powershell", "-NoProfile", "-Command",
                      f"(New-Object Security.Principal.WindowsPrincipal("
@@ -127,68 +134,6 @@ def authorized_keys_text(path: str) -> str:
     return run(["sudo", "cat", path])[1]
 
 
-def authorized_keys_edit(user: str, path: str, center_key: str) -> None:
-    from fleet import reconcile as rec
-    from fleet.ssh.authkeys import sync_command
-    from fleet.ssh.cmd import Endpoint
-
-    plat = "windows" if WINDOWS else "posix"
-    ep = Endpoint(target="localhost", user=user)
-    fid, src = "e2e000", "SHA256:e2e-grant"
-    grant = "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIE2eE2eE2eE2eE2eE2eE2eE2eE2eE2eE2eE2eE2eE2eE e2e"
-    before = authorized_keys_text(path)
-    ok, out = rec._remote(ep, sync_command(fid, src, user=user, pubkey=grant, platform=plat),
-                          platform=plat)
-    after = authorized_keys_text(path)
-    check("authorized_keys grant over ssh", ok, out)
-    check("  the grant's block is in the file", f"# fleet:{fid}:begin from={src}" in after
-          and grant.split()[1] in after, after)
-    check("  every key already there survived", center_key.split()[1] in after
-          and all(line in after for line in before.splitlines() if line.strip()), after)
-    ok, out = rec._remote(ep, sync_command(fid, src, user=user, pubkey=grant, platform=plat),
-                          platform=plat)
-    again = authorized_keys_text(path)
-    check("  granting again adds no duplicate", ok and again.count(grant.split()[1]) == 1, again)
-    ok, out = rec._remote(ep, sync_command(fid, src, user=user, pubkey=None, platform=plat),
-                          platform=plat)
-    final = authorized_keys_text(path)
-    check("authorized_keys revoke over ssh", ok and grant.split()[1] not in final, out + final)
-    check("  the file is as it was before the grant",
-          [l for l in final.splitlines() if l.strip()]
-          == [l for l in before.splitlines() if l.strip()], final)
-
-
-def prune_check(user: str, path: str, center_key: str) -> None:
-    """A key this fleet once placed and has since forgotten is found and taken off --
-    through this OS's sshd and shell -- and nothing else in the file is touched."""
-    from fleet.ssh.authkeys import sync_command
-
-    fid = (as_json(fleet("center", "--json")[1]) or {}).get("fleet_id", "")
-    plat = "windows" if WINDOWS else "posix"
-    dead = "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIDeaDDeaDDeaDDeaDDeaDDeaDDeaDDeaDDeaDDeaDDea dead"
-    script = sync_command(fid, "SHA256:e2e-forgotten", user=user, pubkey=dead, platform=plat)
-    shell = (["powershell", "-NoProfile", "-Command", "-"] if WINDOWS else ["sh", "-s"])
-    if not WINDOWS and user != os.environ.get("USER"):
-        shell = ["sudo", "-u", user, *shell]
-    subprocess.run(shell, input=script.encode(), capture_output=True)
-    before = authorized_keys_text(path)
-    check("prune: a forgotten key is in the file to begin with", dead.split()[1] in before,
-          before)
-    code, out = fleet("access", "--prune", "--json")
-    found = (as_json(out) or {}).get("findings", [])
-    check("access --prune --json lists it, and removes nothing without --yes",
-          code == 0 and any(f.get("src") == "SHA256:e2e-forgotten" for f in found)
-          and dead.split()[1] in authorized_keys_text(path), out)
-    code, out = fleet("access", "--prune", "--yes")
-    after = authorized_keys_text(path)
-    check("access --prune --yes removes it", code == 0 and dead.split()[1] not in after,
-          f"exit {code}: {out}\n{after}")
-    check("  and every other key survived", center_key.split()[1] in after
-          and all(ln in after for ln in before.splitlines()
-                  if ln.strip() and "e2e-forgotten" not in ln and dead.split()[1] not in ln),
-          after)
-
-
 # -- the checks ----------------------------------------------------------------------
 
 def main() -> int:
@@ -201,57 +146,27 @@ def main() -> int:
 
     # The core, as the installer left it.
     expect("fleet --version", ["--version"], r"^fleet \d")
-    expect("fleet --help lists every command", ["--help"], r"access")
-    expect("fleet paths", ["paths"], r"inventory")
-    ok, out = expect("installer made this a center", ["center", "--json"], r'"role": "center"')
-    expect("center (status)", ["center"], r"center")
-    ok, pub = expect("center --pubkey", ["center", "--pubkey"], r"^ssh-ed25519 ")
-    expect("center --export", ["center", "--export"], r".")
-    _, svc = expect("service status", ["service", "status"], r".", required=False)
-    # A container has no service manager at all; everywhere else the service must serve.
-    no_manager = "unavailable" in svc
-
-    # Is the center listening (the service the installer started)? If not, listen now.
-    listener = None
-    def answering() -> bool:
-        try:
-            urllib.request.urlopen("http://127.0.0.1:7373/", timeout=3)
-            return True
-        except Exception as exc:                  # an HTTP error still means it answered
-            return hasattr(exc, "code")
-    up = any(answering() or time.sleep(2) for _ in range(10))
-    why = "nothing on 127.0.0.1:7373"
-    if not up:
-        from fleet import service
-        log = service.LOG_PATH()
-        why += f"; {log}: " + (log.read_text(errors="replace")[-1500:] if log.exists()
-                              else "no log")
-        if platform.system() == "Darwin":
-            said = run(["launchctl", "print", f"gui/{os.getuid()}/io.fleet.center"])[1]
-            pid = re.search(r"\bpid = (\d+)", said)
-            if pid:
-                # Where it is stuck: faulthandler (PYTHONFAULTHANDLER in the plist)
-                # prints every thread's Python stack into the log on SIGABRT.
-                why += "\nlsof: " + run(["lsof", "-nP", "-a", "-p", pid[1], "-i"])[1][-800:]
-                run(["kill", "-ABRT", pid[1]])
-                time.sleep(2)
-                why += "\nstack: " + (log.read_text(errors="replace")[-3000:] if log.exists()
-                                       else "no log")
-    check("the service is listening on 7373", up, why, required=not no_manager)
-    if not up:
-        listener = subprocess.Popen([FLEET, "center", "--listen"], stdout=subprocess.DEVNULL,
-                                    stderr=subprocess.DEVNULL, stdin=subprocess.DEVNULL)
-        up = any(answering() or time.sleep(1) for _ in range(20))
-        check("center --listen serves", up, "still nothing on 7373")
+    expect("fleet --help lists every command", ["--help"], r"doctor")
+    expect("fleet paths", ["paths"], r"machines")
+    code, out = fleet("center", "--json")
+    check("there is no center any more", code != 0, out)
 
     expect("ls shows this machine", ["ls"], platform.node().split(".")[0][:8] or ".")
     ok, out = expect("ls --json", ["ls", "--json"], r'"name"')
-    me = machines(out)[0]["name"] if ok and machines(out) else ""
     expect("show (this machine)", ["show"], r".")
     expect("show --json", ["show", "--json"], r'"name"')
+    expect("ls --discover --json", ["ls", "--discover", "--json"], r'"candidates"')
 
-    # This machine over ssh: the remote probe and shell of this OS.
-    path = place_key(a.ssh_user, pub.strip().splitlines()[-1])
+    # This machine over ssh, as you would reach it: your own key, put there by hand.
+    # Before it is there, fleet says it was refused and names the fix, and records nothing.
+    pub = own_key()
+    if not WINDOWS:
+        code, out = fleet("add", "--json", f"ssh -o StrictHostKeyChecking=accept-new "
+                          f"nobody-{os.getpid()}@localhost")
+        verdict = as_json(out) or {}
+        check("add of a machine that refuses us records nothing and names the fix",
+              code != 0 and bool(verdict.get("fix")), out)
+    path = place_key(a.ssh_user, pub)
     expect("add --dry-run", ["add", "--dry-run", target], r".")
     ok, out = expect("add over ssh (this OS as a target)",
                      ["add", target, "--name", "loop", "--tag", "e2e", "--json"], r'"action"')
@@ -265,6 +180,8 @@ def main() -> int:
     expect("ls --tag e2e", ["ls", "--tag", "e2e", "--json"], re.escape(f'"{name}"'))
     expect("ls --online", ["ls", "--online"], r".")
     expect("ls -r", ["ls", "-r"], r".")
+    expect("doctor NAME (it lets us in)", ["doctor", name, "--json"], r'"status": "ok"')
+    expect("doctor (nothing failing)", ["doctor"], r".")
 
     # edit, each flag
     expect("edit --cost", ["edit", name, "--cost", "1.5"], r".")
@@ -286,37 +203,6 @@ def main() -> int:
     check("top without a terminal exits or explains", code != 124 or bool(out.strip()),
           f"exit {code}: {out}", required=False)
 
-    # invites, and a second fleet state on this runner joining with one
-    ok, out = expect("invite --json", ["invite", "member", "--json"], r'"code"')
-    inv = as_json(out) or {}
-    expect("invite --list", ["invite", "--list"], r"member")
-    ok, out = expect("invite --ttl", ["invite", "spare", "--ttl", "1h", "--json"], r'"id"')
-    expect("invite --revoke", ["invite", "--revoke", (as_json(out) or {}).get("id", "x")],
-           r"(?i)revok|withdr")
-
-    # A second fleet state on this runner is the same machine (same machine-id, same
-    # hostname, another key): the center must refuse it, not merge or duplicate it.
-    other = Path(tempfile.mkdtemp(prefix="fleet-member-"))
-    menv = {"FLEET_CONFIG_DIR": str(other / "config"), "FLEET_STATE_DIR": str(other / "state"),
-            "FLEET_NO_AUTO_CENTER": "1"}
-    code, out = fleet("join", inv.get("code", "fleet1:none"), "--name", "member",
-                      "--ssh", target, env=menv)
-    check("join from a second state on the same machine is refused, saying why",
-          code != 0 and "already has a different key pinned" in out, f"exit {code}: {out}")
-    expect("sync on the center", ["sync"], r".")
-    expect("access (whole fleet)", ["access"], r".")
-    expect("access --json", ["access", "--json"], r"\{")
-
-    # The one edit that can lock someone out, through this OS's sshd and shell: fleet's
-    # own remote authorized_keys edit (what every grant and revoke runs), as the center
-    # runs it. A single runner has no second machine to grant, so it is called directly.
-    authorized_keys_edit(a.ssh_user, path, pub.strip().splitlines()[-1])
-    expect("ssh still works after the edits", ["ssh", name, "--", "echo", "still-in"],
-           r"still-in")
-    prune_check(a.ssh_user, path, pub.strip().splitlines()[-1])
-    expect("ssh still works after pruning", ["ssh", name, "--", "echo", "still-in"],
-           r"still-in")
-
     interactive_checks(name, a.ssh_user)
 
     # agents
@@ -334,16 +220,12 @@ def main() -> int:
     mcp_checks(name)
     mcp_timeout_check(name)
 
-    # take the fleet down
-    expect("center --dissolve --force", ["center", "--dissolve", "--force"], r"dissolved")
-    if listener:
-        listener.terminate()
+    expect("rm NAME --yes", ["rm", name, "--yes"], r"removed")
+    expect("rm leaves the machine reachable by ssh", ["ls", "--json"], r".")
 
     # Last, because it replaces the installed fleet and stops anything running from it.
     local_update_check()
     migration_check()
-    # And then take it off again: the fleet was dissolved above, so this is the plain
-    # case -- agents unregistered, service removed, files deleted, the last step named.
     ok, out = expect("uninstall --purge", ["uninstall", "--yes", "--purge"],
                      r"uninstall agents-fleet|the way it was installed")
     check("uninstall: the agents no longer hear about fleet",
@@ -377,6 +259,17 @@ def resource_checks(name: str) -> None:
     check("  and its size, once worked out", bool(sized), out[-600:], required=not WINDOWS)
     expect("ps --json", ["ps", "--json"], r'"jobs"')
     expect("ps", ["ps"], r".")
+    expect("edit --note and --tag land in the machine's own file",
+           ["edit", name, "--note", "e2e box", "--tag", "e2e-own", "--json"], r'"e2e-own"')
+    expect("edit --endpoint declares a server", ["edit", name, "--endpoint", "mine=9", "--json"],
+           r'"mine"')
+    ok, out = expect("show --rescan --wait", ["show", name, "--rescan", "--wait", "20", "--json"],
+                     r'"observed_at"')
+    expect("ls --json --fields", ["ls", "--json", "--fields", "free_vram_mib"], r'"free_vram_mib"')
+    expect("ls --discover --hide", ["ls", "--discover", "--hide", "e2e-nothing", "--json"],
+           r'"e2e-nothing"')
+    expect("edit --endpoint NAME= removes it", ["edit", name, "--endpoint", "mine=", "--json"],
+           r'"ok": true')
     expect("models --json", ["models", "--json"], r'"servers"')
     expect("models", ["models"], r".")
     expect("edit --path KIND= clears it", ["edit", name, "--path", "models=", "--json"],
@@ -452,8 +345,7 @@ def interactive_checks(machine: str, user: str) -> None:
 
     # What plain ssh returns for the same session is the bar: fleet must pass on exactly
     # that. On POSIX it is the shell's 7.
-    from fleet.config import FLEET_KEY
-    plain = Term(reporting_exit(["ssh", "-tt", "-i", str(FLEET_KEY), "-o",
+    plain = Term(reporting_exit(["ssh", "-tt", "-i", str(Path.home() / ".ssh" / "id_ed25519"), "-o",
                                  "StrictHostKeyChecking=accept-new", f"{user}@localhost"]),
                  env=env)
     try:
@@ -496,8 +388,8 @@ def mcp_checks(machine: str) -> None:
                 await s.initialize()
                 tools = sorted(t.name for t in (await s.list_tools()).tools)
                 check("mcp: tools listed", "list_machines" in tools, str(tools))
-                for tool, args in [("center_status", {}), ("list_machines", {}),
-                                   ("show_access", {}),
+                for tool, args in [("list_machines", {}), ("list_gpu_jobs", {}),
+                                   ("list_models", {}), ("discover_machines", {}),
                                    ("run_on_machine", {"machine": machine, "command": "echo via-mcp"})]:
                     res = await s.call_tool(tool, args)
                     text = res.content[0].text if res.content else ""

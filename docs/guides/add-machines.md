@@ -1,17 +1,21 @@
 # Adding machines
 
 A machine you add needs **SSH and nothing else** — no agent, no daemon, no fleet. Linux,
-macOS and Windows all work. You give fleet the SSH command you already use, and it does
-the rest in one step.
+macOS and Windows all work. You give fleet the SSH command you already use, and it starts
+watching the machine.
+
+fleet connects exactly as `ssh` does from here: your `~/.ssh/config`, your ssh agent, your
+keys, Tailscale SSH, the key on your rental provider's account. So the one rule is
+**if `ssh` gets in from here, fleet does too.** When it does not, see
+[Reaching your machines](reaching-machines.md).
 
 | The machine | Say to your agent | Section |
 |---|---|---|
 | one you can already SSH into | "add `ssh ubuntu@10.0.0.7`" | [Over SSH](#over-ssh) |
-| one you reach with a particular key file | "add `ssh -i ~/.ssh/my_key ubuntu@1.2.3.4`" | [Over SSH](#over-ssh) |
-| one that only takes a password | "add it", then type the password yourself | [With a password](#with-a-password) |
+| one in your ssh config or on your tailnet | "what machines could I add?" | [Machines you can already reach](#machines-you-can-already-reach) |
 | a GPU rental (vast.ai, RunPod, AutoDL…) | "add `ssh -p 40001 root@1.2.3.4`, it costs $1.89/hr" | [Rentals](#rentals) |
-| one fleet cannot get into from here | "invite my laptop" | [Let the machine join by itself](#let-the-machine-join-by-itself) |
-| one that does not exist yet | "give me the key for a cloud-init template" | [Before the machine exists](#before-the-machine-exists) |
+| one that does not let you in yet | "why won't gpu-box let you in?" | [When it does not let you in](#when-it-does-not-let-you-in) |
+| the one you are on | (done for you on first use) | [This machine](#this-machine) |
 
 ## Over SSH
 
@@ -19,32 +23,29 @@ the rest in one step.
 fleet add "ssh ubuntu@10.0.0.7"
 fleet add "ssh -p 2222 -i ~/.ssh/my_key root@1.2.3.4"
 fleet add "ssh gpu"                      # a Host from your ~/.ssh/config
+fleet add gpu                            # the same
 ```
 
 Anything ssh would use works: your ssh-agent, a key file named with `-i` (any kind — a
 `.pem` from a cloud provider, an `id_ed25519`), and a `Host` entry in `~/.ssh/config` with
-its user, port, key and `ProxyJump`. In one step fleet then:
+its user, port, key and `ProxyJump`. fleet then:
 
-1. **connects** with that;
-2. **puts the fleet's own key** in the machine's `authorized_keys`, inside a marked block
-   it alone edits — your keys and the provider's are left as they are;
-3. **gives the machine a fleet key of its own** (in fleet's folder — `~/.config/fleet` on Linux — if it has none)
-   and records it: that key is the machine's identity when it is granted access to
-   another machine;
-4. **measures it**: CPU, memory, GPUs, disks, and what is free right now.
+1. **connects** with that, in batch mode — it never prompts for a password;
+2. **measures it**: CPU, memory, GPUs, disks, what is running and what is free now;
+3. **records it** in this machine's list, under a name.
 
-After that fleet reaches the machine with its own key, so other machines you
-[grant access](access.md) can reach it too, not only this one.
+Nothing is written on the machine: no key, no program, no service.
 
-That is all fleet leaves on the machine: its block in `authorized_keys` and the
-machine's key file. No program, no service.
+**The machine has to let fleet in.** One that refuses, or does not answer, is not
+recorded at all, and fleet says why and what to do. Once it is fixed, run the same
+`fleet add` again.
 
-**The machine has to answer.** One that does not is not recorded at all, and fleet says
-why: a machine the center cannot reach could not be managed anyway.
+`--dry-run` measures the machine and shows what would be recorded, without recording it.
 
 ### Names, aliases and tags
 
-fleet names the machine after its hostname. To choose:
+fleet names the machine after the address you gave, or else its hostname, and says so.
+To choose:
 
 ```bash
 fleet add "ssh root@1.2.3.4" --name a100 --alias a --tag training
@@ -61,26 +62,29 @@ All three can be changed later with `fleet edit`.
 Adding a machine fleet already knows — the same box at another address — adds the
 address to the existing machine, which keeps its name.
 
-## With a password
-
-If no key gets in, fleet asks for the password **in your terminal**. It is used for one
-connection, to put the fleet's key there, and is stored nowhere. An agent never types or
-sees it: when a machine needs a password, the agent tells you to run the command
-yourself:
+## Machines you can already reach
 
 ```bash
-fleet add "ssh admin@192.168.1.50"
+fleet ls --discover
 ```
 
-A Windows center cannot type passwords; see [Windows](windows.md).
+lists the machines you could add but have not: the `Host` entries of your
+`~/.ssh/config`, and the machines on your tailnet when Tailscale runs here. Each one comes
+with the command that adds it, `fleet add NAME`. Nothing is contacted until you add it.
+Ask your agent "what machines could I add?" and it offers them, rather than adding them
+all: a tailnet has phones and printers on it too.
+[More](reaching-machines.md#finding-what-you-can-already-reach).
 
 ## Rentals
 
-Add a rental like any machine, then tell fleet what it costs:
+Put your public key on your provider account once (vast.ai, RunPod and AutoDL all have a
+page for it; [where](reaching-machines.md#rentals)), so every instance you start lets you
+in. Then add a rental with the ssh command the provider shows, and tell fleet what it
+costs:
 
 ```bash
 fleet add "ssh -p 40001 root@1.2.3.4"
-fleet edit a100 --cost 1.89
+fleet edit a100 --cost 1.89      # written on the rental; --local keeps it on this machine
 ```
 
 fleet recognises vast.ai, RunPod and AutoDL machines as rentals by itself, from what it
@@ -100,65 +104,31 @@ losing its name, tags, cost or history:
 fleet edit a100 --ssh "ssh -p 40123 root@5.6.7.8"
 ```
 
-## Let the machine join by itself
-
-When fleet cannot get in from here — no key works, you do not want to type a password, or
-the center cannot reach the machine's address — turn it round and let the machine come
-to the center. On the center:
-
-> **You:** invite my laptop
-
-or `fleet invite laptop`. For a machine the fleet already knows — one you added with
-`fleet add` and now want to run fleet on too — leave the name out: `fleet invite`. A
-machine that joins is recognised and keeps the name it has, and an invite for a name
-already taken is refused. It prints one line to run on the new machine: `fleet join …`
-if fleet is installed there, or the installer with `--join …` if not. Paste it into a
-terminal there, or give it to the agent on that machine. The machine installs fleet as a
-**member**, dials the center, is admitted, and puts the center's key in its own
-`authorized_keys`. No password, and nothing to approve afterwards: the invite *was* the
-approval.
-
-- **Single use, 15 minutes** by default (`--ttl 2h` for longer, 7 days at most). `fleet invite --list`
-  shows what became of recent ones; `--revoke ID` withdraws one.
-- **Safe to paste into a provisioning script**: a used code is worth nothing, and the
-  secret in it never crosses the network.
-- **It trusts that center and no other**: the code names the center's key, so an impostor
-  answering at the address is refused.
-
-The center must be listening for joins; it is, if its background service is running
-(`fleet center` says). And it still manages the machine over SSH afterwards, so sshd
-must be running there and reachable from the center. If the address the center sees is
-not the one to use, say which is: `fleet join CODE --ssh "ssh me@10.0.0.5"`.
-
-The code tells the machine where to dial — the center's address in the fleet, or its
-hostname. If the new machine cannot reach that, give one it can:
-`fleet invite laptop --url http://100.64.0.3:7373/sync` (a Tailscale address, a LAN IP).
-
-## Before the machine exists
-
-For a machine you are about to create — from a cloud console, a template, a cloud-init
-file — put the fleet's key on it at creation:
+## When it does not let you in
 
 ```bash
-fleet center --pubkey        # on the center
+fleet doctor gpu-box
 ```
 
-prints the key. Run it on the center: on a member it prints that member's own key, which
-is not the one the center uses. It works with nothing reachable, which is the point. Paste it where the
-provider asks for an SSH key; once the machine is up, `fleet add "ssh root@ADDRESS"` needs
-no password at all.
+says why a machine refuses and gives the exact fix: the line that puts your key on it
+(for Linux and macOS, a Windows user, a Windows administrator), your rental provider's
+key page, the rule your Tailscale SSH policy needs, or how to start its sshd. It changes
+nothing. [Reaching your machines](reaching-machines.md) goes through each case.
 
-## Networks: what must reach what
+At a terminal on Linux or macOS, `fleet add` offers to put your key on a machine that
+refuses it, with `ssh-copy-id`: you type the machine's password into ssh once, and fleet
+never sees it. fleet itself never asks for a password, and an agent never types one.
 
-**fleet does not solve connectivity.** It uses whatever route already exists, and it
-needs only one: **the center must be able to reach every machine over SSH.** The machines
-do not need to reach one another.
+## This machine
 
-| From → to | What it is for | Needed? |
-|---|---|---|
-| center → every machine, SSH | adding, measuring, placing and removing keys, sharing the inventory | **always** |
-| member → center, TCP 7373 | joining with an invite; a member asking for fresh information | for [members](center.md) |
-| one machine → another | using a grant you made between them — running work from one on the other | only if you grant it |
+The machine you run fleet on is recorded by itself on first use, and measured directly,
+without ssh. `fleet add --self` records it if it is not (after a `fleet rm`, say).
+
+## Networks
+
+**fleet does not create routes.** It uses whatever route your ssh already has, and needs
+only one: **this machine must reach each machine it watches over SSH.** The machines do
+not need to reach one another.
 
 **Machines behind different NATs** — at home, in the office, rentals in a datacenter —
 cannot reach one another directly. Put them on a mesh network such as
@@ -167,17 +137,17 @@ Netbird and plain WireGuard work too), and add them by their mesh address or nam
 "add `ssh ubuntu@100.101.102.103`". fleet needs nothing but an address it can route to,
 and recognises mesh addresses (the `mesh` [fact](../reference/facts.md)).
 
-A machine the center cannot reach at all can still [join](#let-the-machine-join-by-itself)
-and report what it has, but the center cannot place or remove keys on it until it can.
+**Tailscale SSH** answers ssh itself and decides who may log in from your tailnet's
+policy, not from `authorized_keys`. fleet connects through it like any other ssh; if it
+refuses, the fix is a rule in the policy ([how](reaching-machines.md#linux-on-a-tailnet)).
 
-A member measures the machines it can reach itself. For one it cannot reach, it shows
-the center's latest reading instead, when the center has a newer one — so `fleet ls` on
-the member still says what the machine has. Running work from that member still needs a
-route, since `fleet ssh` connects directly.
+## Several machines running fleet
 
-**Tailscale SSH and similar** answer ssh themselves and decide who may log in from their
-own access rules, not from `authorized_keys`. fleet measures and connects to such a
-machine as usual, says so when it is added, and leaves access to it to those rules.
+Every machine that runs fleet keeps its own list, of the machines *its* ssh reaches;
+there is no center and nothing to sync. A machine you add on your laptop is not in your
+desktop's list. To use one list everywhere, share `machines.yaml` (`fleet paths` shows
+where it is) with your dotfiles. To put fleet on another machine so its agents can use it
+too, see [Installing and upgrading](install.md#putting-fleet-on-more-machines).
 
 ## Machines cloned from one image
 
@@ -185,24 +155,18 @@ VMs and containers made from one image share a machine-id, which is what fleet k
 machine by. When you add one, fleet checks the machine it already knows under that id,
 at its own address: if that one is a different host — another hostname, or booted at
 another time — the new one is recorded as a separate machine, with an id of its own
-written on it, and fleet says so. If it is the same host, the new address is added to
-it. Giving each clone its own machine-id (`systemd-machine-id-setup` after emptying
-`/etc/machine-id`) avoids the question altogether.
-
-## Adding from a member
-
-`fleet add` works on any machine in the fleet. On a member it records the machine and
-says so; the center enrols it the next time it syncs, because only the center places
-keys.
+written on it (a `device-id` file in fleet's folder there), and fleet says so. If it is
+the same host, the new address is added to it. Giving each clone its own machine-id
+(`systemd-machine-id-setup` after emptying `/etc/machine-id`) avoids the question
+altogether.
 
 ## Removing a machine
-
-On the center:
 
 ```bash
 fleet rm gpu-box
 ```
 
-Its keys come off every other machine and the fleet's keys come off it, now. It asks
-first, takes only an exact name, alias or id (never a prefix), and an agent leaves it to
-you.
+stops watching it: it comes out of this machine's list, and its readings out of the
+cache. **Nothing changes on the machine itself.** It asks first, takes only an exact name,
+alias or id (never a prefix), and an agent leaves it to you. `fleet add` brings it back,
+with everything recorded about it.

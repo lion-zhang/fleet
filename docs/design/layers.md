@@ -6,7 +6,7 @@ This is a settled design decision. Changes to fleet fit into it; they do not reo
 
 | Layer | What it is | What it is not |
 |---|---|---|
-| **Core** | The `fleet` CLI, plus its state and configuration (inventory, access list, keys, ledger, telemetry). Installed **once per machine**. A person can always run it by hand in a terminal. | Not per agent. Nothing else holds fleet state or logic. |
+| **Core** | The `fleet` CLI, plus its state and configuration (the machines you added, the telemetry cache). Installed **once per machine** you work on; the machines it looks at need nothing but SSH. A person can always run it by hand in a terminal. | Not per agent. Nothing else holds fleet state or logic. |
 | **Skill** | A prompt (`SKILL.md`, or a marked region in a file an agent reads) that tells an agent how to use the CLI properly: which command for which request, what to ask the user, what never to do. One per agent *format*; the same text everywhere. | No code, no state. A skill never does anything the CLI cannot. |
 | **MCP** | For agents that cannot run commands. It executes the same CLI for them and returns its output. | Not a second implementation. Every tool is a thin wrapper over one CLI command. |
 
@@ -22,22 +22,30 @@ writing the same state. Many agents on one machine share one core.
 2. **Reads run in parallel and never wait.** State files are only ever replaced
    atomically (a unique temporary file, then a rename), so any reader sees a complete
    file, never a half-written one.
-3. **Writes go through one queue.** A write is a small change ("grant A→B", "tag box",
-   "pin this key"). Each writer takes a ticket in a first-come, first-served queue
+3. **Writes go through one queue.** A write is a small change ("tag box", "add this
+   endpoint"). Each writer takes a ticket in a first-come, first-served queue
    beside the file; when its turn comes it loads the file *as it is now*, applies its
    own change and replaces the file — never by saving a copy loaded earlier. A turn
    holds only local file work, milliseconds, never a network call (network first, then
    the change), so a writer waits only for the few changes queued ahead of it and nobody
-   waits on a slow machine. A writer that died mid-turn is skipped. Work that changes
-   other machines over SSH reads the desired state again after each edit and redoes the
-   edit if it changed meanwhile, so a slower, older edit cannot undo a newer one.
+   waits on a slow machine. A writer that died mid-turn is skipped. A change to a file on
+   another machine (its `machine.yaml`) is written only if the file is still what was
+   read, and otherwise read and made again, so two people editing it never erase each
+   other.
 4. **The installer never overwrites an existing core.** It detects fleet first (uv tool,
    pipx, an editable or source install, anything on PATH). It keeps what is there,
    upgrades only a uv-installed older copy, and never modifies fleet's state. Installing
    fleet for another agent only adds that agent's skill (or MCP entry).
-5. **Irreversible commands stay with the user.** `fleet rm`, `fleet center --dissolve`
-   and handing the center over are not MCP tools, and the skill tells agents to leave
-   them to the user.
+5. **Irreversible commands stay with the user.** `fleet rm` is not an MCP tool, and the
+   skill tells agents to leave it, and anything that touches every machine, to the user.
+6. **fleet manages no access.** It reaches machines exactly as the user's own ssh does
+   (their config, keys, agent, Tailscale SSH, a rental provider's key), writes no keys
+   anywhere, and keeps no center or list of who may reach what. When a machine refuses,
+   `fleet doctor` names the fix for the user to make; fleet never makes it. Every machine
+   running fleet is equal: there is nothing to sync between them.
+7. **What a machine says about itself lives on that machine** (`machine.yaml`: cost, tags,
+   notes, where its models, datasets and media are). The probe reads it, so everyone who
+   looks at the machine sees the same answer.
 
 ## Where it lives
 

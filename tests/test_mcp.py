@@ -128,9 +128,12 @@ def test_the_tools_mirror_the_cli():
 
     tools = {t.name for t in asyncio.run(build_server().list_tools())}
     # what a person may ask for by conversation (docs/design/layers.md)
-    assert {"list_machines", "show_machine", "run_on_machine", "show_access",
-            "center_status", "add_machine", "invite_machine", "grant_access",
-            "revoke_access", "edit_machine", "sync_fleet"} <= tools
+    assert {"list_machines", "show_machine", "run_on_machine", "add_machine",
+            "edit_machine", "list_gpu_jobs", "list_models", "set_machine_paths",
+            "discover_machines", "doctor_machine"} <= tools
+    # access belongs to the user's ssh and network now: nothing here grants or invites
+    assert not {"grant_access", "revoke_access", "invite_machine", "show_access",
+                "center_status", "sync_fleet"} & tools
     # the irreversible ones stay with a human, as the agent instructions already say
     assert not {"remove_machine", "dissolve_fleet", "handover"} & tools
 

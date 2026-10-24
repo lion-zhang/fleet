@@ -197,25 +197,6 @@ def test_show_defaults_to_this_machine(tmp_path, monkeypatch):
     assert '"macbook"' in r.output and '"oracle"' not in r.output
 
 
-def test_a_machine_not_in_the_inventory_is_told_what_to_run(tmp_path, monkeypatch):
-    from typer.testing import CliRunner
-
-    from fleet import cli
-    from fleet.state import inventory as inv, store
-
-    monkeypatch.setattr(inv, "INVENTORY_PATH", tmp_path / "inventory.yaml")
-    monkeypatch.setattr(store, "DB_PATH", tmp_path / "cache.db")
-    monkeypatch.setattr(identity, "local_device_id", lambda: "id:me")
-    inv.save([], inv.INVENTORY_PATH)
-    # in a fleet, an unrecorded machine is told to record itself; a machine in no fleet
-    # at all is simply shown (test_view covers that first run)
-    monkeypatch.setattr(cli, "_fleet_membership", lambda: "member")
-
-    r = CliRunner().invoke(cli.app, ["show"])
-    assert r.exit_code == 2
-    assert "fleet add --self" in r.output
-
-
 def test_probe_with_no_name_needs_no_ssh(tmp_path, monkeypatch):
     """Requiring sshd, a key and a network path to inspect the box we are running on is
     a lot of moving parts for no extra information."""
@@ -242,25 +223,3 @@ def test_destructive_and_pointless_defaults_are_not_offered():
 
     assert CliRunner().invoke(cli.app, ["rm"]).exit_code != 0
     assert CliRunner().invoke(cli.app, ["ssh"]).exit_code != 0
-
-
-def test_a_machine_with_no_machine_id_is_known_by_its_fleet_key(tmp_path, monkeypatch):
-    """Found in review: many containers have no machine-id, so the center was
-    `net:localhost:22` -- the id every such machine shares -- and it never recognised
-    its own record. The fleet key is unique by construction, as joining already uses."""
-    import subprocess
-
-    from fleet import config, onboard
-    from fleet.models import ProbeResult, Snapshot
-    from fleet.ops import identity
-    from fleet.state import access as acl
-
-    key = tmp_path / "id_ed25519"
-    subprocess.run(["ssh-keygen", "-t", "ed25519", "-N", "", "-q", "-f", str(key)], check=True)
-    monkeypatch.setattr(config, "FLEET_KEY", key)
-    monkeypatch.setattr(identity, "_machine_id", lambda: "")
-    monkeypatch.setattr(onboard, "run_probe_local", lambda **k: ProbeResult(
-        status=Status.OK, snapshot=Snapshot(hostname="ctr")))
-    want = "key:" + acl.fingerprint(key.with_suffix(".pub").read_text(encoding="utf-8"))
-    assert identity.local_device_id() == want
-    assert onboard.onboard_self()[0].id == want

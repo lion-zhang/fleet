@@ -1,22 +1,16 @@
 #!/bin/sh
 # Install fleet: https://github.com/lion-zhang/fleet
 #
-# Two modes. The center is the one machine that decides who may reach what -- install
-# it on the machine you work from. Every other machine is a member.
-#
 #   curl -LsSf https://raw.githubusercontent.com/lion-zhang/fleet/main/install.sh | sh
-#       center (the default): installs fleet, starts a new fleet here, and teaches
-#       every supported agent installed here (Claude Code, Codex, Gemini CLI, ...) to use it.
 #
-#   curl -LsSf https://raw.githubusercontent.com/lion-zhang/fleet/main/install.sh | sh -s -- --join CODE
-#       member: installs fleet and joins the fleet whose center printed CODE
-#       (`fleet invite` prints this whole line), instead of starting one here.
+# Installs the `fleet` command and teaches every supported agent installed here (Claude
+# Code, Codex, Gemini CLI, ...) to use it. Install it where you work, and wherever else
+# you run agents; the machines fleet looks at need nothing but SSH.
 #
-# Options:  --join CODE   join that fleet as a member (or set FLEET_JOIN=CODE)
-#           --no-setup    install the command only; start or join nothing
+# Options:  --no-setup    install the command only; teach no agents
 #           --force-core  install with uv even though another copy of fleet is here
 # A fleet already on this machine (uv, pipx, a checkout) is kept, never replaced.
-# Safe to run again: it upgrades fleet and leaves the fleet this machine is in alone.
+# Safe to run again: it upgrades fleet.
 #
 # Everything is inside main, called on the last line, so a download cut short runs
 # nothing, and nothing below can read the rest of this script off a piped stdin.
@@ -28,39 +22,18 @@ die() { printf 'fleet install: %s\n' "$*" >&2; exit 1; }
 
 usage() {
     cat <<'USAGE'
-usage: install.sh [--join CODE] [--no-setup] [--force-core]
+usage: install.sh [--no-setup] [--force-core]
 
-Two modes: the center decides who may reach what; every other machine is a member.
-
-  (nothing)     center: install fleet, start a new fleet on this machine, and teach
-                every supported agent installed here to use it
-  --join CODE   member: install fleet and join the fleet whose center printed CODE
-                (`fleet invite`); FLEET_JOIN=CODE does the same
-  --no-setup    install the command only; start or join nothing
+  (nothing)     install fleet and teach every supported agent installed here to use it
+  --no-setup    install the command only
   --force-core  install fleet with uv even though another copy is already here
 
 fleet itself (the core) is installed once per machine and shared by every agent. If
 it is already here -- from uv, pipx, or your own checkout -- it is kept, and this only
 teaches your agents (an older uv-installed copy is upgraded in place).
 
-Safe to run again: it upgrades fleet and leaves the fleet this machine is in alone.
+fleet manages no access: it reaches your machines exactly as your own ssh does.
 USAGE
-}
-
-# What an installed fleet says this machine is: center, member, or nothing yet. Never
-# starts a fleet to answer. Reads `role`, and the keys fleets before it had.
-role_of() {
-    out=$(FLEET_NO_AUTO_CENTER=1 "$1" center --json </dev/null 2>/dev/null || true)
-    case "$out" in
-        *'"role": "center"'*|*'"is_center": true'*) echo center ;;
-        *'"role": "member"'*|*'"member": true'*) echo member ;;
-    esac
-}
-
-# One string field from `fleet center --json`.
-field_of() {
-    FLEET_NO_AUTO_CENTER=1 "$1" center --json </dev/null 2>/dev/null \
-        | sed -n "s/.*\"$2\": *\"\([^\"]*\)\".*/\1/p" | head -n 1
 }
 
 # Which core is here already, as "kind|path". kind is one of:
@@ -153,48 +126,23 @@ find_uv() {
 }
 
 main() {
-    join="${FLEET_JOIN:-}"
-    # Set but empty is not the same as unset: it is a member install whose code was lost
-    # on the way -- a quoting slip, a variable that never got filled in. Treated as
-    # unset, it started a new fleet on the machine that was meant to join one.
-    empty_join=""
-    if [ "${FLEET_JOIN+set}" = set ] && [ -z "$FLEET_JOIN" ]; then empty_join="FLEET_JOIN"; fi
     setup=1
     while [ $# -gt 0 ]; do
         case "$1" in
-            --join) [ $# -ge 2 ] || die "--join needs the code \`fleet invite\` printed"
-                    join="$2"; [ -n "$2" ] || empty_join="--join"; shift 2 ;;
-            --join=*) join="${1#--join=}"; [ -n "$join" ] || empty_join="--join"; shift ;;
+            # fleet 0.5 joined a fleet with a code. There is no fleet to join any more:
+            # every machine running fleet looks at what its own ssh reaches.
+            --join) [ $# -ge 2 ] && shift; shift
+                    say "note: --join is no longer needed -- fleet has no center to join; ignoring it" ;;
+            --join=*) shift
+                    say "note: --join is no longer needed -- fleet has no center to join; ignoring it" ;;
             --no-setup) setup=0; shift ;;
             --force-core) FLEET_FORCE_CORE=1; shift ;;
             -h|--help) usage; exit 0 ;;
             *) die "unknown option: $1 (try --help)" ;;
         esac
     done
-    case "$join" in
-        ""|fleet1:*) ;;
-        *) die "that is not a fleet invite code -- it starts with fleet1: (run \`fleet invite\` on the center)" ;;
-    esac
-
-    # Say which mode this run installs, before doing anything. A re-run reads it from the
-    # fleet already here, which may have been installed in the other mode.
-    was=""
-    for f in "$(command -v fleet 2>/dev/null || true)" "$HOME/.local/bin/fleet"; do
-        if [ -n "$f" ] && [ -x "$f" ]; then was=$(role_of "$f"); break; fi
-    done
-    if [ -n "$empty_join" ] && [ -z "$join" ] && [ "$setup" = 1 ] && [ -z "$was" ]; then
-        die "$empty_join is set but empty, so there is no code to join with -- paste the code \`fleet invite\` printed, or leave $empty_join out to start a new fleet here"
-    fi
-    if [ "$setup" = 0 ]; then
-        say "mode: none -- installing the command only"
-    elif [ -n "$join" ]; then
-        say "mode: member -- joining the fleet whose center printed this code"
-    elif [ "$was" = center ]; then
-        say "mode: center (already; upgrading)"
-    elif [ "$was" = member ]; then
-        say "mode: member (already; upgrading)"
-    else
-        say "mode: center -- starting a NEW fleet on this machine (no join code given; to join an existing fleet instead, rerun with --join CODE)"
+    if [ -n "${FLEET_JOIN:-}" ]; then
+        say "note: FLEET_JOIN is no longer needed -- fleet has no center to join; ignoring it"
     fi
 
     # 1. uv, which installs and runs fleet. Its own installer, unless it is here already.
@@ -223,13 +171,11 @@ main() {
         other)
             say "core: $("$found" --version </dev/null 2>/dev/null) at $found, keeping it" ;;
         *)
-            # A center's listener runs from the files being replaced: stopped first, and
-            # started again however this ends -- or it went on running the old version,
-            # loading the new one's modules into it as it went.
+            # fleet 0.5 ran a listening service on a fleet's center, from the files about
+            # to be replaced. 0.6 has neither, so the fleet that installed it takes it
+            # off -- the new one has no `fleet service` to do it with.
             if [ -n "$found" ] && [ -x "$found" ]; then
-                "$found" service stop </dev/null >/dev/null 2>&1 || true
-                restart_with=$found
-                trap '"$restart_with" service start </dev/null >/dev/null 2>&1 || true' EXIT
+                "$found" service remove </dev/null >/dev/null 2>&1 || true
             fi
             install_core "$uv" "$kind"
             # Machines from before a rename carry it as `fleet-broker` or `agent-fleet`;
@@ -264,43 +210,24 @@ main() {
     case ":$PATH:" in *":$bin:"*) on_path=1 ;; *) on_path=0; PATH="$bin:$PATH"; export PATH ;; esac
     say "✓ $("$fleet" --version </dev/null)"
 
-    # 3. Into a fleet, and every agent here taught to use it.
+    # 3. Every agent here taught to use it. Exits non-zero when no agent is installed
+    #    yet, which is no failure of the install.
     if [ "$setup" = 1 ]; then
-        if [ -n "$join" ]; then
-            FLEET_NO_AUTO_CENTER=1 "$fleet" join "$join" </dev/null
-        fi
-        # On a machine in no fleet this also starts one, with this machine as its center.
-        # Exits non-zero when no agent is installed yet, which is no failure of the install.
         "$fleet" setup </dev/null || true
     fi
 
     say ""
     [ "$on_path" = 1 ] || say "open a new terminal (or run: export PATH=\"$bin:\$PATH\") so \`fleet\` is found"
-    role=""
     if [ "$setup" = 1 ]; then
-        # Center or member: by what this machine is now, not by how this run began.
-        role=$(role_of "$fleet")
-        id=$(field_of "$fleet" fleet_id)
-        if [ "$role" = center ]; then
-            say "✓ this machine is the center of fleet $id"
-        elif [ "$role" = member ]; then
-            say "✓ this machine is a member of fleet $id; its center is $(field_of "$fleet" center)"
-        fi
-    fi
-    if [ "$setup" = 1 ] && [ "$role" = center ]; then
         say "next: add your machines, then ask for what you need. Tell your agent, e.g.:"
         say "        \"add my GPU server: ssh user@host\"     a machine you can SSH into"
-        say "        \"invite my laptop\"                     one line to paste on a machine"
+        say "        \"find my machines\"                     from your ssh config and tailnet"
         say "        \"what's free right now?\"               every machine, and what is free"
         say "        \"run train.py where a 24 GB card is free\""
-        say "      or yourself: fleet add \"ssh user@host\", fleet invite NAME, fleet ls"
-    elif [ "$setup" = 1 ]; then
-        say "next:  fleet ls            the machines in this fleet"
-    else
-        say "next:  fleet setup         start a fleet here and teach your agents (or: fleet join CODE)"
-    fi
-    if [ "$setup" = 1 ]; then
+        say "      or yourself: fleet add \"ssh user@host\", fleet ls --discover, fleet ls"
         say "agents load fleet's skill when a session starts: start a new one to use it"
+    else
+        say "next:  fleet setup         teach your agents to use fleet"
     fi
 }
 

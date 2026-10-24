@@ -15,7 +15,6 @@ import sys
 from pathlib import Path
 from dataclasses import dataclass, field
 
-from .. import config
 
 IS_WINDOWS = sys.platform == "win32"     # see local_platform(); kept for hot paths
 
@@ -380,35 +379,6 @@ def classify_route(target: str) -> str:
     return "public" if ip.is_global else ""
 
 
-def build_enroll_argv(ep: Endpoint, *, connect_timeout: int = 8) -> list[str]:
-    """The *first* dial at a host, before it knows our key. Deliberately permissive.
-
-    `build_argv` sets IdentitiesOnly=yes, which means ssh offers only the identities
-    named on the command line -- and therefore **never offers an agent key**. That is
-    right for the steady state (five default identities trip MaxAuthTries on strict
-    servers) and exactly wrong here: the most common way into a fresh cloud VM is a key
-    that lives only in your agent. Probing such a host with IdentitiesOnly would report
-    AUTH_FAILED and send us asking for a password that does not exist.
-
-    So this one omits it, and lets the agent and ~/.ssh/config answer. Once the fleet key
-    is installed, every later connection goes back through `build_argv`.
-    """
-    argv = ["ssh", "-o", "BatchMode=yes", "-o", f"ConnectTimeout={connect_timeout}",
-            "-o", "StrictHostKeyChecking=accept-new"]
-    if ep.identity:
-        argv += ["-i", ep.identity]
-    # Read through config at call time, here and below: the import-bound name ignores a
-    # redirected key path, which is how a sandboxed test came to offer the real key.
-    if config.FLEET_KEY.exists():
-        argv += ["-i", str(config.FLEET_KEY)]
-    if ep.port and ep.port != 22:
-        argv += ["-p", str(ep.port)]
-    if ep.jump:
-        argv += ["-J", ep.jump]
-    argv += ["--", f"{ep.user}@{ep.target}" if ep.user else ep.target]
-    return argv
-
-
 def build_argv(ep: Endpoint, *, connect_timeout: int = 8, multiplex: bool = True,
                remote: str = "sh -s", env: dict[str, str] | None = None) -> list[str]:
     argv = [
@@ -424,16 +394,13 @@ def build_argv(ep: Endpoint, *, connect_timeout: int = 8, multiplex: bool = True
         # needs (a recycled rental port then returns rc=255 with EMPTY stderr, which is
         # unclassifiable). Keep full stderr and scrub known-benign lines in Python.
         "-o", "LogLevel=INFO",
-        # ssh offers five default identities; on strict servers that trips MaxAuthTries.
-        "-o", "IdentitiesOnly=yes",
     ]
+    # Otherwise ssh answers exactly as it would for you: your ~/.ssh/config, your agent,
+    # your keys, Tailscale SSH. Only a machine recorded with a key of its own (a rental's
+    # `ssh -i ~/.ssh/vast`) is pinned to it -- IdentitiesOnly, so the five default
+    # identities do not trip MaxAuthTries before the right one is offered.
     if ep.identity:
-        argv += ["-i", ep.identity]
-    # Offer the fleet key too, when there is one. IdentitiesOnly=yes above means ssh
-    # sends only what we name here, so a host that knows the fleet key but not the
-    # endpoint's identity would otherwise be unreachable.
-    if config.FLEET_KEY.exists() and str(config.FLEET_KEY) != ep.identity:
-        argv += ["-i", str(config.FLEET_KEY)]
+        argv += ["-o", "IdentitiesOnly=yes", "-i", ep.identity]
     if ep.port and ep.port != 22:
         argv += ["-p", str(ep.port)]
     if ep.jump:

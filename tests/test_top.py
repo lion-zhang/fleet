@@ -390,33 +390,6 @@ def test_a_probe_that_blows_up_does_not_take_the_view_down(tmp_path, monkeypatch
 
 # ------------------------------------------------------- second-hand telemetry
 
-def test_a_relayed_row_says_where_it_came_from():
-    """Under the access list a machine reaches only what it is granted, so the center
-    relays the rest. Worth showing -- it beats a blank row -- but not as though we had
-    just measured it."""
-    from fleet.render.top import provenance
-
-    assert provenance(_row()) == "", "our own probe needs no attribution"
-    assert provenance(_row(source="broadcast", probed_by="macbook")) == "via macbook"
-    assert provenance(_row(source="broadcast")) == "via center", "a sensible default"
-
-
-def test_the_table_attributes_a_relayed_row():
-    out = _rendered([_row(name="far", source="broadcast", probed_by="macbook")])
-    assert "via macbook" in out
-
-
-def test_the_center_is_marked_in_the_table():
-    """It only appeared in --json, which stops being tenable once "is the center
-    reachable" decides whether a grant happens now or waits."""
-    from fleet.render.top import name_cell
-
-    assert "◆" in name_cell(_row(name="macbook", role="center"))
-    assert "◆" not in name_cell(_row(name="oracle"))
-    both = name_cell(_row(name="macbook", role="center", is_self=True))
-    assert "◆" in both and "←" in both
-
-
 def test_a_machine_that_did_not_answer_is_not_called_live():
     """Probed a second ago and failed: it is not live, whatever its age says."""
     from rich.console import Console

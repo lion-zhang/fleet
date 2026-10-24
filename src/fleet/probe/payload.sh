@@ -193,6 +193,22 @@ store_paths() {
 }
 paths=$(store_paths)
 
+# The model servers the notes declare (`endpoints:` -- name: PORT or PORT/base/path), as
+# port|path lines: ones the probe would not recognise by their port or program name.
+declared_endpoints() {
+  for f in "$notes_sys" "$notes_user"; do
+    [ -n "$f" ] || continue
+    awk '
+      /^[^ \t#]/ { ine = ($0 ~ /^endpoints:[ \t]*(#.*)?$/); next }
+      !ine || /^[ \t]*(#.*)?$/ { next }
+      /^[ \t]+[A-Za-z0-9_-]+:/ {
+        v = $0; sub(/^[^:]*:[ \t]*/, "", v); sub(/[ \t]+#.*/, "", v); gsub(/["\047 ]/, "", v)
+        if (v ~ /^[0-9]+(\/[A-Za-z0-9._~\/-]*)?$/) { n = index(v, "/"); if (n) print substr(v, 1, n - 1) "|" substr(v, n); else print v "|" }
+      }' "$f" 2>/dev/null
+  done | awk -F'|' '!seen[$1]++' | head -8
+}
+declared=$(declared_endpoints)
+
 # Can this mount actually fill up? A mounted disk image is read-only and 100% full by
 # definition, and alerting on it forever is noise. "/" is the exception and is always
 # treated as writable: on macOS it is the read-only signed system volume, yet the free
@@ -413,6 +429,7 @@ env_roots() {
 }
 software_scan() {
   echo "#SOFTWARE key|value"
+  printf 'scanned_at|%s\n' "$NOW"
   if [ "$gpu_present" = "1" ]; then
     printf 'cuda|%s\n' "$(nvidia-smi 2>/dev/null | sed -n 's/.*CUDA Version: *\([0-9.]*\).*/\1/p' | head -1)"
   fi
@@ -475,7 +492,8 @@ fi
 # ---------------------------------------------------------------- LLM servers
 # A port that looks like a model server is asked what it serves -- here, on the machine,
 # so a server that only listens on localhost answers too. Two seconds each, eight at most.
-if [ "${FLEET_LIGHT:-}" != "1" ] && [ -n "$listen" ] && { have curl || have wget || have_python; }; then
+if [ "${FLEET_LIGHT:-}" != "1" ] && { [ -n "$listen" ] || [ -n "$declared" ]; } \
+     && { have curl || have wget || have_python; }; then
   body=$(mktemp 2>/dev/null || echo "/tmp/.fleet-llm.$$")
   get() {  # url -> "code seconds"; body in $body
     if have curl; then
@@ -499,21 +517,27 @@ PY
     fi
   }
   echo "#LLMMODEL port|status|ms|model"
-  printf '%s\n' "$listen" | awk -F'|' '
-    BEGIN { split("8000 8001 8010 8080 11434 1234 5000 30000", h, " "); for (i in h) hint[h[i]] = 1 }
-    tolower($5) ~ /vllm|sglang|ollama|mlx|llama|lmstudio|lms|text-gen|omlx|kobold|tabby|aphrodite|litellm|local-ai|exllama/ || ($3 in hint) { print $2 "|" $3 }
-  ' | awk -F'|' '!seen[$2]++' | head -8 | while IFS='|' read -r addr port; do
+  # Declared ones first, so the eight-server limit never drops what someone asked for.
+  # The listing goes in through the environment: a newline in `awk -v` is an error in
+  # some awks.
+  { printf '%s\n' "$declared" | FLEET_LISTEN="$listen" awk -F'|' '
+      BEGIN { n = split(ENVIRON["FLEET_LISTEN"], rows, "\n"); for (i = 1; i <= n; i++) { split(rows[i], f, "|"); at[f[3]] = f[2] } }
+      $1 != "" { print (($1 in at) ? at[$1] : "127.0.0.1") "|" $1 "|" $2 }'
+    printf '%s\n' "$listen" | awk -F'|' '
+      BEGIN { split("8000 8001 8010 8080 11434 1234 5000 30000", h, " "); for (i in h) hint[h[i]] = 1 }
+      tolower($5) ~ /vllm|sglang|ollama|mlx|llama|lmstudio|lms|text-gen|omlx|kobold|tabby|aphrodite|litellm|local-ai|exllama/ || ($3 in hint) { print $2 "|" $3 "|" }'
+  } | awk -F'|' '$2 != "" && !seen[$2]++' | head -8 | while IFS='|' read -r addr port base; do
     case "$addr" in
       ""|"*"|0.0.0.0|"::"|"[::]"|127.*|"::1"|"[::1]") host=127.0.0.1 ;;
       *:*) host="[${addr#[}"; host="${host%]}]" ;;
       *) host=$addr ;;
     esac
-    set -- $(get "http://$host:$port/v1/models"); code=$1; secs=$2
+    set -- $(get "http://$host:$port${base:-/v1}/models"); code=$1; secs=$2
     ids=""
     if [ "$code" = "200" ]; then
       ids=$(grep -o '"id"[ ]*:[ ]*"[^"]*"' "$body" 2>/dev/null | sed 's/.*"\([^"]*\)"$/\1/' | grep -v '^modelperm-')
     fi
-    if [ -z "$ids" ] && [ "$code" != "401" ] && [ "$code" != "403" ]; then
+    if [ -z "$ids" ] && [ -z "$base" ] && [ "$code" != "401" ] && [ "$code" != "403" ]; then
       set -- $(get "http://$host:$port/api/tags")   # ollama's own list
       if [ "$1" = "200" ]; then
         code=200; secs=$2

@@ -58,12 +58,12 @@ jobs:
           Start-Service sshd
           Get-Service sshd
 
-      - name: install.sh (center)
+      - name: install.sh
         if: runner.os != 'Windows'
         run: |
           FLEET_SOURCE="$PWD" sh install.sh
           echo "$HOME/.local/bin" >> "$GITHUB_PATH"
-      - name: install.ps1 (center)
+      - name: install.ps1
         if: runner.os == 'Windows'
         shell: pwsh
         run: |

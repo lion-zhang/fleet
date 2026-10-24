@@ -69,21 +69,6 @@ def gpu_pct(row: dict[str, Any]) -> int | None:
     return max(int(g.get("util_pct") or 0) for g in gpus)
 
 
-def provenance(row: dict[str, Any]) -> str:
-    """"via <machine>" when this row is second-hand, "" when we measured it ourselves.
-
-    Under the access list a machine reaches only what it is granted, so the center
-    relays telemetry for the rest. A relayed number is still worth showing -- it beats a
-    blank row -- but it must not be displayed as though we had just taken it, for the
-    same reason `staleness` exists: rendering it as live would be a lie in exactly the
-    place someone would act on it.
-    """
-    if (row.get("source") or "self") == "self":
-        return ""
-    by = row.get("probed_by") or "center"
-    return f"via {by}"
-
-
 def staleness(row: dict[str, Any], live_within: int) -> str:
     """How out of date this row is, when that is worth saying.
 
@@ -269,10 +254,6 @@ def name_cell(row: dict[str, Any]) -> str:
         shown = " ".join(f"·{t}" for t in tags[:2])
         more = f"+{len(tags) - 2}" if len(tags) > 2 else ""
         name += f" [dim]{shown}{more}[/dim]"
-    # The center was invisible outside --json, which stops being tenable once "is the
-    # center reachable" decides whether a grant happens now or waits.
-    if row.get("role") == "center":
-        name += " [dim]\u25c6[/dim]"
     if row.get("is_self"):
         name += " [dim]\u2190[/dim]"
     return name + "\n[dim]\u2502[/dim]" * (device_lines(row) - 1)
@@ -344,7 +325,7 @@ def render_fleet(rows: list[dict[str, Any]], summary: dict[str, Any],
             # contradiction in the one view meant to be watched.
             (f"[dim]{stale}[/dim]" if stale else "[green]live[/green]")
             if row["status"] == "ok" else "[dim]-[/dim]",
-            " · ".join(x for x in (provenance(row), note) if x),
+            note,
         )
     return t
 
@@ -496,7 +477,7 @@ def render_models(view: dict[str, Any]) -> list:
                                   if sv.get("tunnel") else "[dim]local only[/dim]")
             if sv["url"]:
                 reach = escape(reach)
-            label = f":{sv['port']} {sv['framework']}".strip()
+            label = f":{sv['port']} {sv['framework'] or sv.get('name') or ''}".strip()
             if not sv["models"]:
                 t.add_row("[yellow]wants an API key[/yellow]" if sv["status"] == "auth"
                           else "[dim]none listed[/dim]", sv["machine"], label, reach)

@@ -7,7 +7,8 @@
 fleet shows them all of yours — every GPU and what is running on it, the models being
 served, the software installed, and where your models and data live.**
 
-No account, no cloud service, nothing installed on the machines you add: just the SSH you already use.
+No account, no cloud service, nothing installed on the machines you add, no keys handed
+out: fleet logs in exactly as you do, with the SSH you already use.
 
 [![tests](https://github.com/lion-zhang/fleet/actions/workflows/test.yml/badge.svg)](https://github.com/lion-zhang/fleet/actions/workflows/test.yml)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
@@ -25,7 +26,9 @@ across the room and a rented A100 bills you by the hour. It cannot use what it c
 
 - **Your agent is stuck on one machine.** It has no idea your other boxes exist.
 - **Finding a free GPU is manual.** SSH into five hosts, run `nvidia-smi`, compare in your head.
-- **Handing it a server means pasting credentials** into the chat, and hoping.
+- **It cannot see what is running, or what is already there** — whose job is on that card,
+  which box already serves Llama 3, where the datasets live — so it downloads and
+  installs things twice.
 
 ## Get started: ask your agent
 
@@ -38,17 +41,14 @@ Install fleet from https://github.com/lion-zhang/fleet
 
 <sub>Agents: the steps are in [INSTALL.md](INSTALL.md).</sub>
 
-That machine becomes your fleet's **center**: it keeps the list of your machines and
-decides which may reach which. A desktop or home server that is usually on suits it
-best, but a laptop works too, and you can move the role later.
-
 That is the whole setup. fleet is installed once on this machine, and every
 [supported agent](docs/guides/agents.md) you have here learns it — not only the one you asked.
 From here on you say what you want in plain words, with no commands to remember.
 
 ### Then add your machines
 
-Tell the agent how you reach a machine — the SSH command you already use is enough:
+Tell the agent how you reach a machine — the SSH command you already use is enough — or
+let it look in your `~/.ssh/config` and on your tailnet for machines you can already reach:
 
 > **You:** add my GPU server, `ssh ubuntu@10.0.0.7`
 >
@@ -58,12 +58,12 @@ Each one takes a sentence, whatever the machine is:
 
 | The machine | What you tell the agent |
 |---|---|
-| a server you can already SSH into | "add `ssh ubuntu@10.0.0.7`" — fleet uses the key you already have |
+| a server you can already SSH into | "add `ssh ubuntu@10.0.0.7`" — fleet logs in as you do, with your key |
 | one you reach with a particular key file | "add `ssh -i ~/.ssh/my_key ubuntu@1.2.3.4`" — or a `Host` from your `~/.ssh/config` |
-| a new rental (vast.ai, RunPod, AutoDL) | "add `ssh -p 40001 root@1.2.3.4`, it costs $1.89/hr" |
-| one that only takes a password | "add it" — then you type the password once yourself; it is stored nowhere |
-| one fleet cannot get into from here | "invite my laptop" — you get one line to paste there, and it joins by itself |
-| one that does not exist yet | "give me the key for a cloud-init template" — it joins with no password at all |
+| a machine on your tailnet | "find my machines" — it lists your ssh config hosts and tailnet machines, and adds the ones you pick |
+| a new rental (vast.ai, RunPod, AutoDL) | "add `ssh -p 40001 root@1.2.3.4`, it costs $1.89/hr" — with the key on your provider account |
+| one that only takes a password | "add it" — fleet offers `ssh-copy-id`, you type the password once into ssh, and your key goes on it |
+| one that will not let you in | "why can't you reach the NAS?" — `fleet doctor` names the one thing to fix |
 
 Nothing is installed on the machines you add: they only need SSH, on Linux, macOS or
 Windows. fleet probes each one for its GPUs, memory and disks, and keeps that current.
@@ -88,22 +88,15 @@ You describe the work; the agent finds where it fits. It checks what each machin
 | "is Llama 3 already served somewhere?" | every model server's models, and the URL or ssh tunnel to reach it |
 | "which box has torch 2.5 and CUDA 12?" | each machine's CUDA, Python environments and package versions |
 | "download the dataset where datasets go" | the folder that machine says holds datasets, and the room left there |
-| "let the laptop reach the NAS" | access granted, applied at once |
 
 Keys and passwords never go into the conversation, and anything irreversible waits for
 your yes.
 
-**Only install fleet where you use it.** The machines you add above need nothing but SSH:
-fleet measures them and connects to them from the center. Install fleet on another
-machine only if you also run agents there, or want to check the fleet from it. That
-machine becomes a **member**: ask the center's agent to "invite" it, and paste the line it
-gives you into a terminal there, or give it to the agent there.
-
-| | Runs fleet | How it gets there |
-|---|---|---|
-| **center** | yes — one per fleet | the first install |
-| **member** | yes | an invite line from the center |
-| every other machine | no, only SSH | "add `ssh user@host`" on the center |
+**Only install fleet where you use it.** The machines you add need nothing but SSH. Install
+fleet on another machine only if you also run agents there; it works the same everywhere,
+with nothing to join or sync. There, `fleet ls --discover` lists the machines in your ssh
+config and on your tailnet; the ones you added by hand are in one file you can share with
+your dotfiles.
 
 ### An app that cannot run commands?
 
@@ -122,17 +115,17 @@ Windsurf, Cline, Zed, Qwen Code, Goose, Kiro, Hermes — 35+ agents in all:
 ## Built to be safe
 
 - **Nothing to install on your machines.** fleet probes with one script over one SSH
-  connection — Linux, macOS or Windows. A NAS or a fresh rental works as it is. What
-  it does leave there, a marked block in `authorized_keys` and a key of the machine's
-  own, is listed in full in
-  [What fleet changes](docs/guides/what-fleet-changes.md), with how to remove it,
-  with fleet or by hand.
-- **Keys, not passwords.** A password, if needed at all, is typed once by you. Nothing
-  that could be stolen is stored, and the agent never sees a credential.
-- **Access you control.** The center decides which machine may reach which, and a revoke
-  is pushed at once. `fleet access gpu-box --allow laptop`, `--deny` to take it back.
-- **The agent asks, not guesses.** It is told to ask which machine you mean, and to leave
-  irreversible commands to you.
+  connection — Linux, macOS or Windows. A NAS or a fresh rental works as it is. The few
+  files it does leave there are listed in
+  [What fleet changes](docs/guides/what-fleet-changes.md).
+- **No keys handed out, no access managed.** fleet connects exactly as you do — your ssh
+  config, your keys and agent, Tailscale SSH, your rental provider's key — and writes no
+  keys anywhere. Who may reach what stays where you already decide it. When a machine
+  refuses, `fleet doctor` tells you the fix; fleet never makes it.
+- **No passwords.** fleet never asks for one or stores one, and the agent never sees a
+  credential. Secrets in a GPU job's command line are blanked before anyone sees them.
+- **The agent asks, not guesses.** It is told to ask which machine you mean, to leave
+  irreversible commands to you, and not to start work on a GPU someone else is using.
 - **Nothing phones home.** Apart from installing and updating itself, fleet talks to your
   machines and nothing else: no account, no telemetry, no update check. Found a flaw? [SECURITY.md](SECURITY.md) says how to
   report it privately.
@@ -159,8 +152,9 @@ fleet ps                            # every job on every GPU, and which GPUs are
 fleet models                        # every model being served, and how to reach it
 fleet edit gpu-box --path models=/data/models   # where that machine keeps its models
 fleet ssh gpu-box -- nvidia-smi     # run something there
-fleet add "ssh ubuntu@10.0.0.7"     # add a machine; fleet invite NAME for a join line
-fleet access nas --allow laptop     # let one machine reach another
+fleet add "ssh ubuntu@10.0.0.7"     # add a machine
+fleet ls --discover                 # machines in your ssh config and on your tailnet
+fleet doctor nas                    # why a machine will not let you in, and the fix
 ```
 
 <img src="docs/assets/fleet-ls.svg" alt="fleet ls: free GPU, VRAM, CPU, RAM and disk across seven machines — an A100 rental with one busy and one idle card, an idle H100 rental flagged as costing money, a busy RTX 3090 box with a nearly full disk, a laptop, a NAS and a machine that is switched off" width="100%">
@@ -188,16 +182,16 @@ fleet is about the machines you already have. It complements tools that launch n
 | All your machines in one view | ✗ | ✗ one machine | ✓ the ones it manages | ✓ |
 | Built for coding agents (skill / MCP) | ✗ | ✗ | partly | ✓ |
 | Nothing installed on target machines | ✓ | ✗ | ✗ | ✓ |
-| Manages SSH access between machines | ✗ | ✗ | for its own clusters | ✓ |
+| Jobs, served models, software, data folders | ✗ | jobs, one machine | ✗ | ✓ |
 | Launches new cloud VMs | ✗ | ✗ | ✓ | ✗ |
 
 **Why not just Tailscale, Ansible, or an `~/.ssh/config`?** Use them with fleet, not
 instead of it. Tailscale connects your machines, and fleet runs over it happily, but it
 does not tell your agent which machine has a free GPU. Ansible changes machines to match
 a playbook you write, and has no idea what is busy right now. An `~/.ssh/config` names
-your hosts, but has to be copied to every machine and edited by hand. fleet is the part
-in between: what you have, what is free on it, and who may reach it, in a form your
-agent can use without you.
+your hosts, and fleet reads it. fleet is the part in between: what you have, what is
+free on it, what is running and installed there, in a form your agent can use without
+you.
 
 ## FAQ
 
@@ -206,44 +200,34 @@ agent can use without you.
 <details>
 <summary><b>Do I need to install fleet on every machine?</b></summary>
 
-No. Install it where you **use** it: the machine you work from (the center), and any
-other machine where you also run agents or want to check the fleet from (a member). The
-machines you only *use* — GPU servers, rentals, a NAS — need SSH and nothing else; fleet
-measures them and connects to them from the center.
+No. Install it where you **use** it: the machine you work from, and any other machine
+where you also run agents. The machines you only *use* — GPU servers, rentals, a NAS —
+need SSH and nothing else.
 </details>
 
 <details>
-<summary><b>What are the center and members?</b></summary>
+<summary><b>Do I need Tailscale?</b></summary>
 
-The **center** is the machine you installed fleet on first. It keeps the list of machines,
-holds the key that reaches them, and is the only machine that grants or removes access.
-There is one per fleet. A **member** is any other machine that runs fleet, joined with an
-invite line from the center; its agents see the whole fleet too. Every other machine is
-just *in* the fleet: reachable over SSH, nothing installed. See
-[The center](docs/guides/center.md).
+No. fleet uses whatever SSH reaches your machines: a LAN, a VPN, a jump host, a rental's
+public port. If you have Tailscale, `fleet ls --discover` finds your tailnet machines
+for you, and Tailscale SSH decides who may log in where — fleet just connects. See
+[Reaching your machines](docs/guides/reaching-machines.md).
 </details>
 
 <details>
-<summary><b>Which machine should be the center?</b></summary>
+<summary><b>I run fleet on two machines. Do they share anything?</b></summary>
 
-One that can reach all your devices and is online most of the time — a desktop or a home
-server. A laptop works too. You can hand the role to another machine later with
-`fleet center NAME`.
-</details>
-
-<details>
-<summary><b>What if the center is off?</b></summary>
-
-Normal — it can be a laptop that is closed half the day. Everything already granted keeps
-working, and members keep listing and connecting from what they know; only *changes* —
-granting, removing, inviting — wait for it.
+They do not need to: each one looks at the machines its own SSH reaches, and what a
+machine says about itself — its cost, tags, where its models live — is kept on that
+machine, so both read the same. The machines you added by hand are in one file,
+`machines.yaml` (`fleet paths` shows where); copy it, or keep it in your dotfiles.
 </details>
 
 <details>
 <summary><b>I use Claude Code <i>and</i> Codex (and more) on one machine. Does that work?</b></summary>
 
 Yes — that is the normal case. fleet is installed once per machine: one command, one
-inventory, one set of keys. Each agent only gets a small skill or MCP entry pointing at
+list of machines. Each agent only gets a small skill or MCP entry pointing at
 it, so Claude Code, Codex, Gemini CLI and a desktop app all see the same machines, and can
 use them at the same time. Install a new agent later? Ask an agent that has fleet to run
 `fleet setup`.
@@ -264,37 +248,29 @@ installing, start a new session so the agent loads it.
 <details>
 <summary><b>Does fleet store my passwords? Does my agent see my keys?</b></summary>
 
-No and no. A password is typed by you, once, for a machine that accepts nothing else; it
-is used for one connection and stored nowhere. After that fleet uses its own key. The
-agent runs `fleet ssh NAME` and never sees a key or a password; it may see a machine's
-address, as `fleet show` prints it.
+No and no. fleet has no key of its own and never handles a password: it runs `ssh` as
+you would. For a machine that only takes a password, it offers `ssh-copy-id` in your
+terminal, where you type the password into ssh itself, once. The agent runs `fleet ssh
+NAME` and never sees a key or a password; it may see a machine's address, as `fleet
+show` prints it.
 </details>
 
 <details>
 <summary><b>What does fleet leave on the machines I add?</b></summary>
 
-A block in `~/.ssh/authorized_keys`, marked with your fleet's id, and the machine's own
-fleet key in fleet's folder (`~/.config/fleet` on Linux). No program, no service. Your
-own keys and the provider's are never touched, and `fleet rm` takes fleet's blocks off
-again. [What fleet changes](docs/guides/what-fleet-changes.md) has the full list, how to
-check it, and how to remove it by hand.
+Almost nothing: the notes file `fleet edit` writes there (`machine.yaml`: tags, cost,
+a note, folders, declared servers), a
+small cache of software versions and folder sizes in `~/.cache/fleet`, and nothing at
+all in `authorized_keys`. No program, no service.
+[What fleet changes](docs/guides/what-fleet-changes.md) has the full list.
 </details>
 
 <details>
 <summary><b>Can the agent do something I cannot undo?</b></summary>
 
-It is told not to. Removing a machine, taking the fleet down and moving the center are
-left to you, and are not available to apps over MCP at all. When a request is ambiguous —
-which machine, which user — the agent asks instead of guessing.
-</details>
-
-<details>
-<summary><b>What if a machine is compromised?</b></summary>
-
-Remove it on the center (`fleet rm NAME`): its key comes off every other machine. But a
-key is a key — revoking it does not undo what someone with root on that machine already
-did — and the center is the one machine whose compromise reaches everything. The
-[threat model](docs/design/access.md#threat-model-plainly) spells it out.
+It is told not to. Removing a machine is left to you, and is not available to apps over
+MCP at all. When a request is ambiguous — which machine, which user — the agent asks
+instead of guessing.
 </details>
 
 **Machines**
@@ -318,53 +294,57 @@ Re-point it, keeping its name, tags, cost and history: "gpu-box is now at
 <details>
 <summary><b>My machines are behind different NATs, or at different sites.</b></summary>
 
-fleet does not solve connectivity; it uses the routes you have. It needs only one: **the
-center must reach every machine over SSH** (and members must reach the center). The
-machines do not need to reach each other, unless you grant one access to another. For
-machines behind different NATs, put them on a mesh network such as Tailscale or ZeroTier
-and add them by their mesh address. See
-[Networks](docs/guides/add-machines.md#networks-what-must-reach-what).
+fleet does not solve connectivity; it uses the routes you have. The machine you run
+fleet on must reach each machine over SSH; the machines never need to reach each other.
+For machines behind different NATs, put them on a mesh network such as Tailscale or
+ZeroTier and add them by their mesh address. See
+[Reaching your machines](docs/guides/reaching-machines.md).
 </details>
 
 <details>
 <summary><b>Windows?</b></summary>
 
-Yes, both ways. A Windows machine works in a fleet with OpenSSH Server and nothing else,
-and fleet runs on Windows too, center included. See [Windows](docs/guides/windows.md).
+Yes, both ways. A Windows machine works as a target with OpenSSH Server and nothing
+else, and fleet runs on Windows too. See [Windows](docs/guides/windows.md).
 </details>
 
 <details>
 <summary><b>Does anything keep running in the background?</b></summary>
 
-On the center only: a small service, run as you, that listens on port 7373 so members can
-refresh and new machines can join. Nothing runs on the other machines; members run fleet
-only when you or an agent use it.
+No. fleet runs only when you or an agent use it. On a machine it looks at, a `du` of the
+folders you named may run in the background now and then, so their sizes are known
+without making a probe wait.
+</details>
+
+<details>
+<summary><b>I used fleet 0.5. What changed?</b></summary>
+
+fleet stopped managing access: no center, no invites, no keys of its own. Upgrade, and
+add your machines again. [Upgrading from 0.5](docs/guides/upgrading-from-0.5.md) lists
+what 0.5 left on your machines and how to remove it.
 </details>
 
 <details>
 <summary><b>How do I remove fleet?</b></summary>
 
-`fleet uninstall` (`--purge` to delete its files too): it leaves the fleet, removes fleet
-from your agents and the background service, and prints the last step,
-`uv tool uninstall agents-fleet`. On the center of a fleet with other machines,
-`fleet center --dissolve` comes first -- it takes every key off every machine. See
+`fleet uninstall` (`--purge` to delete its files too): it removes fleet from your agents
+and prints the last step, `uv tool uninstall agents-fleet`. See
 [Removing fleet](docs/guides/install.md#removing-fleet).
 </details>
 
 ## Learn more
 
 - [Getting started](docs/getting-started.md) — your first fleet, in ten minutes
-- [Guides](docs/README.md#guides) — adding machines, finding the right one, access, the center, Windows
+- [Guides](docs/README.md#guides) — adding machines, reaching them, what is on each one, Windows
 - [Every agent](docs/guides/agents.md) — install commands and config for 35+ agents
 - [Command reference](docs/reference/cli.md) — every command and option
 - [How fleet works](docs/design/how-it-works.md) — what happens, step by step, under the hood
-- [Design](docs/design/layers.md) — one core per machine, a skill per agent, MCP for the rest; [access](docs/design/access.md) and [sync](docs/design/sync.md)
+- [Design](docs/design/layers.md) — one core per machine, a skill per agent, MCP for the rest
 - [All documentation](docs/README.md)
 
-**Status:** v0.5. The test suite runs on Linux, macOS and Windows, and every command is
+**Status:** v0.6. The test suite runs on Linux, macOS and Windows, and every command is
 run end to end on a real machine of each OS in CI — from a script, as an agent runs it,
-and at a real terminal, as you do. Multi-machine fleets (key, password, invite, handover)
-are tested on Linux machines built from scratch.
+and at a real terminal, as you do.
 
 Issues and pull requests are welcome — see [CONTRIBUTING.md](CONTRIBUTING.md). If fleet saved
 you a GPU-hour, a ⭐ helps other people find it.

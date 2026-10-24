@@ -22,7 +22,8 @@ What follows from it:
 - Writes go through one queue and apply to the state as it is now — never save a copy
   loaded earlier.
 - The installer never overwrites an existing core or touches fleet's state.
-- The two install modes are **center** and **member**; use those words.
+- fleet manages no access: it connects as the user's own ssh does and writes no keys.
+  There is one install mode; don't reintroduce "center" or "member".
 
 ## Setting up
 
@@ -39,13 +40,13 @@ To use your checkout as your everyday `fleet`: `uv tool install --editable .`.
 | Path | What is there |
 |---|---|
 | `src/fleet/cli.py` | every command |
-| `src/fleet/state/` | the inventory, the access list, the write queue, the telemetry store |
-| `src/fleet/ops/` | multi-step operations: enrolment, joining, sync, the sweep, handover |
-| `src/fleet/ssh/` | building ssh commands, keys, editing `authorized_keys` (POSIX and PowerShell) |
+| `src/fleet/state/` | the list of machines, the write queue, the telemetry store |
+| `src/fleet/ops/` | multi-step operations: discovery, doctor, a machine's notes, first run, uninstall |
+| `src/fleet/ssh/` | building ssh commands, and the words for putting your key on a machine |
 | `src/fleet/probe/` | the script piped to a machine to measure it (`payload.sh`, `payload.ps1`) and its parser |
 | `src/fleet/agents/` | the skill text (`usage.py`) and where each agent reads it (`registry.py`) |
 | `src/fleet/mcpserver.py` | the MCP server |
-| `src/fleet/serve.py`, `service.py` | the center's listener and the background service |
+| `src/fleet/notes.py` | a machine's own `machine.yaml`: read, checked, edited |
 | `install.sh`, `install.ps1` | the installers |
 | `tests/` | unit tests; `tests/e2e/` drives a real install |
 
@@ -58,10 +59,9 @@ uv run pytest -q
 CI runs the suite on Linux, macOS and Windows, with Python 3.12 and 3.13
 (`.github/workflows/test.yml`).
 
-**End to end.** `tests/e2e/host.py` installs fleet with the real installer, makes the
-machine a center, and runs every command against it — over ssh to the machine itself
-too, so probing, enrolment and `authorized_keys` edits go through that OS's sshd and
-shell. It also drives `fleet top` and `fleet ssh` at a real terminal (`tests/e2e/term.py`:
+**End to end.** `tests/e2e/host.py` installs fleet with the real installer and runs
+every command against it — over ssh to the machine itself too, with the runner's own key,
+so probing, a machine's notes and `fleet ssh` go through that OS's sshd and shell. It also drives `fleet top` and `fleet ssh` at a real terminal (`tests/e2e/term.py`:
 a pty, or ConPTY on Windows), because agents run fleet without a terminal and people run
 it with one, and both must work. CI runs it on each OS for changes to `src/`, the
 installers or the e2e files (`.github/workflows/e2e.yml`); you can also start it from the

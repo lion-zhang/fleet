@@ -1,8 +1,7 @@
 """install.sh itself, run for real in an empty home with nothing on PATH.
 
-The checks it makes before installing anything are the ones that decide what the machine
-becomes, and a wrong one there is not undone by a re-run: a machine meant to join a fleet
-that starts one of its own instead is the center of a second fleet.
+What it checks before installing anything, and the order it replaces an old fleet in: a
+wrong order there left a machine with no fleet at all.
 """
 
 from __future__ import annotations
@@ -44,45 +43,31 @@ def left_behind(tmp_path: Path) -> list[str]:
     return sorted(str(p.relative_to(home)) for p in home.rglob("*"))
 
 
-@pytest.mark.parametrize("how", ["env", "--join ''", "--join="])
-def test_an_empty_join_code_is_refused_before_anything_is_installed(tmp_path, how):
+@pytest.mark.parametrize("how", ["env", "--join CODE", "--join="])
+def test_an_old_join_line_still_installs_and_says_it_is_not_needed(tmp_path, how):
+    """fleet 0.5's invite line carried a join code. Pasted today, it must still install
+    fleet -- with a word that the code is not needed -- not fail on an unknown option."""
     if how == "env":
-        p = run(tmp_path, join="")
-        name = "FLEET_JOIN"
+        p = run(tmp_path, join="fleet1:abc")
     elif how == "--join=":
-        p = run(tmp_path, "--join=")
-        name = "--join"
+        p = run(tmp_path, "--join=fleet1:abc")
     else:
-        p = run(tmp_path, "--join", "")
-        name = "--join"
-    assert p.returncode != 0
-    assert f"{name} is set but empty" in p.stderr
-    assert "fleet invite" in p.stderr
-    assert "mode: center" not in p.stdout          # it never got as far as choosing
-    assert left_behind(tmp_path) == []             # no uv, no fleet, no fleet state
+        p = run(tmp_path, "--join", "fleet1:abc")
+    assert "no longer needed" in p.stdout
+    assert "unknown option" not in p.stderr
+    assert "installing fleet" in p.stdout              # it got as far as the install
 
 
-def test_no_join_code_at_all_still_starts_a_fleet_and_says_so_plainly(tmp_path):
+def test_a_plain_install_mentions_no_modes(tmp_path):
     p = run(tmp_path)
-    assert "mode: center -- starting a NEW fleet" in p.stdout
-    assert "--join CODE" in p.stdout
+    assert "mode:" not in p.stdout and "center" not in p.stdout
+    assert "installing fleet" in p.stdout
 
 
-def test_a_join_code_is_still_a_member_install(tmp_path):
-    p = run(tmp_path, join="fleet1:abc")
-    assert "mode: member" in p.stdout
-    assert "set but empty" not in p.stderr
-
-
-def test_something_that_is_not_a_code_is_still_refused(tmp_path):
-    p = run(tmp_path, join="not-a-code")
-    assert p.returncode != 0 and "not a fleet invite code" in p.stderr
-
-
-def test_installing_the_command_only_needs_no_code(tmp_path):
-    p = run(tmp_path, "--no-setup", join="")
-    assert "set but empty" not in p.stderr
-    assert "mode: none" in p.stdout
+def test_an_unknown_option_is_refused(tmp_path):
+    p = run(tmp_path, "--bogus")
+    assert p.returncode != 0 and "unknown option" in p.stderr
+    assert left_behind(tmp_path) == []
 
 
 def _old_tool_world(tmp_path: Path, *, install_fails: bool) -> tuple[dict, Path, Path]:

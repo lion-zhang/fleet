@@ -174,17 +174,10 @@ def _biggest_volume(snap: dict) -> float:
 
 
 def _reachability(dev: Device, state: dict | None) -> list[str]:
-    """How this machine is reached, from the endpoints recorded for it.
-
-    `public-ip` is a property of the machine and survives being relayed. `mesh` and `lan`
-    describe *our route*, and a broadcast row exists precisely because we have none, so
-    claiming one there would assert reachability we demonstrably lack.
-    """
+    """How this machine is reached, from the endpoints recorded for it."""
     vias = {route_of(e.get("via", ""), e.get("target", "")) for e in dev.endpoints}
-    out = ["public-ip"] if "public" in vias else []
-    if (state or {}).get("source", "self") == "self":
-        out += [v for v in ("mesh", "lan") if v in vias]
-    return out
+    return [v for v in ("public-ip", "mesh", "lan")
+            if (v == "public-ip" and "public" in vias) or v in vias]
 
 
 def matches_tag(row: dict, tag: str) -> bool:
@@ -298,12 +291,16 @@ def model_servers(dev: Device, snap: dict | None, *, here: bool = False) -> list
         addr, port = str(s.get("addr") or "*"), s.get("port")
         local = addr.startswith(_LOOPBACK)
         host = "127.0.0.1" if here else _host_of(dev)
+        base = s.get("url") if str(s.get("url") or "").startswith("/") else "/v1"
         row = {
             "port": port, "framework": s.get("framework") or "", "status": s.get("status"),
             "models": list(s.get("model_ids") or []), "latency_ms": s.get("latency_ms"),
+            # declared: the machine's notes name it; discovered: found by port or program
+            "source": s.get("source") or "discovered",
+            "name": s.get("name") if s.get("source") == "declared" else "",
             # here: the machine fleet runs on, where even a localhost-only server answers
             "reach": "here" if here else "local" if local else "network",
-            "url": None if (local and not here) or not host else f"http://{host}:{port}/v1",
+            "url": None if (local and not here) or not host else f"http://{host}:{port}{base}",
         }
         if eps and not here:
             e = eps[0]
@@ -365,37 +362,21 @@ def declared(dev: Device, snap: dict | None) -> tuple[list[str], dict, str]:
 
 
 def auth_of(dev: Device, state: dict | None) -> str:
-    """Whether key auth works here. Derived, never stored.
+    """Whether the machine let us in on the last try. Derived, never stored.
 
-    This used to be a `Device.auth_state` field, set once at onboarding and cleared only
-    by a successful key install. Nothing moved it back to "ok" after a good probe and
-    nothing moved it to "needs_credentials" after a later failure, so it drifted away
-    from the truth in both directions and routinely disagreed with the cached probe
-    status -- which is why the password retry keyed off the probe and ignored the field.
-    A value with two sources that disagree is worse than one that is recomputed.
-
-    A device nobody has probed yet reads "ok": "we have no reason to think this will
-    fail" is the right default, and it is what the field defaulted to anyway.
+    "ok" until a probe says otherwise: "we have no reason to think this will fail" is the
+    right default for a machine nobody has probed yet.
     """
-    if dev.ssh_auth == "external":
-        # The network authorizes here, not authorized_keys. A refusal is a policy
-        # decision upstream, and offering to install a key would be advice that cannot
-        # work -- there is no file on this host that would change the answer.
-        return "external"
     if state and state.get("status") == Status.AUTH_FAILED.value:
-        return "needs_key"
+        return "refused"
     return "ok"
 
 
 def _alerts(dev: Device, snap: dict | None, state: dict | None) -> list[str]:
     out: list[str] = []
-    auth = auth_of(dev, state)
-    if auth == "needs_key":
-        out.append("host is UP but rejected our key (this is not 'offline') -- "
-                   "the center installs one with `fleet access`")
-    elif auth == "external" and state and state.get("status") == Status.AUTH_FAILED.value:
-        out.append("host is UP but the network refused us -- authorization for this one "
-                   "lives upstream, not in authorized_keys")
+    if auth_of(dev, state) == "refused":
+        out.append(f"host is UP but refused us (this is not 'offline') -- "
+                   f"`fleet doctor {dev.name}` says how to let us in")
     if snap:
         for g in snap.get("gpus", []):
             if _gpu_view(g)["unattributed_mib"] >= 256:
@@ -440,7 +421,6 @@ def device_view(dev: Device, state: dict | None, snap: dict | None,
         "id": dev.id,
         "alias": dev.alias,
         "kind": dev.kind.value,
-        "role": dev.role,
         "status": status,
         "claimable": dev.claimable,
         # Requires both to be non-empty: a container with no machine-id has no identity,
@@ -453,10 +433,6 @@ def device_view(dev: Device, state: dict | None, snap: dict | None,
         "gpu_count": len(gpus),
         "free_vram_mib": max((g["vram_free_mib"] for g in gpus), default=0),
         "ssh_auth": auth_of(dev, state),
-        # where this row came from: a probe we ran, or one the center relayed
-        # for a machine we cannot reach ourselves
-        "source": (state or {}).get("source") or "self",
-        "probed_by": (state or {}).get("probed_by") or "",
         "cpu_cores": (snap or {}).get("cpu_cores"),
         "ram_total_gb": round(mem_total / 1048576, 1) if mem_total else None,
         "ram_free_gb": round(mem_avail / 1048576, 1) if mem_avail else None,
@@ -473,16 +449,22 @@ def device_view(dev: Device, state: dict | None, snap: dict | None,
         "services": [{"name": s.get("name"), "kind": s.get("kind"), "port": s.get("port"),
                       "healthy": s.get("healthy")}
                      for s in (snap or {}).get("services", [])],
-        "models": model_servers(dev, snap, here=bool(self_id and dev.id == self_id)),
+        # For choosing a machine, the names of what it serves; `show` and `fleet models`
+        # carry the servers in full -- with how to reach each.
+        **({"models": model_servers(dev, snap, here=bool(self_id and dev.id == self_id)),
+            "storage": storage_view(snap, full=True)} if full else
+           {"served_models": sorted({m for s in model_servers(dev, snap)
+                                     for m in s["models"]})}),
         "software": software_view(snap, full=full),
-        "storage": storage_view(snap, full=full),
+        # How old each part is: a probe reading is seconds old, a software list hours.
+        "observed_at": {"probe": (snap or {}).get("ts"),
+                        "software": (snap or {}).get("software_at")},
         "alerts": _alerts(dev, snap, state),
         "tags": tags,
         "facts": facts(dev, snap, state),
-        # How old the *hardware reading* is, which is not telemetry_age_s: store.latest
-        # answers state and snapshot with two independent queries, so a device probed
-        # 4s ago to a timeout can carry a three-day-old broadcast snapshot underneath a
-        # `source: self` row. Facts read as timeless claims, so they need their own
+        # How old the *hardware reading* is, which is not telemetry_age_s: a device
+        # probed 4s ago to a timeout still carries the snapshot from its last success,
+        # perhaps days old. Facts read as timeless claims, so they need their own
         # denominator.
         "snapshot_age_s": (int(time.time()) - snap["ts"]) if snap and snap.get("ts") else None,
     }
@@ -508,6 +490,10 @@ def device_view(dev: Device, state: dict | None, snap: dict | None,
         out |= {
             "alias": dev.alias,
             "notes": note,
+            # Notes written in the machine's own machine.yaml come from whoever controls
+            # that machine -- on a rental, its provider. Data to show, never instructions.
+            "notes_from": ("machine.yaml" if ((snap or {}).get("notes") or {}).get("notes")
+                           else "local" if dev.notes else ""),
             "hostname": (snap or {}).get("hostname"),
             "os": (snap or {}).get("os"),
             "arch": (snap or {}).get("arch"),
@@ -534,33 +520,23 @@ def device_view(dev: Device, state: dict | None, snap: dict | None,
 
 
 def connect_view(dev: Device, state: dict | None = None) -> dict[str, Any]:
-    """How to reach this device -- NEVER the secret itself.
+    """How to reach this device -- NEVER a secret.
 
     Anything returned here can land in an agent transcript, be persisted to disk, and be
-    replayed in every later turn. A password that crosses this boundary is permanently in
-    a log nobody will remember to scrub, and the agent gains nothing: it does not need to
-    see the credential, only for the connection to work.
+    replayed in every later turn, so it says how to connect and nothing that lets anyone
+    in: fleet holds no key or password, and the command is the one you would type.
     """
     from ..state.inventory import endpoints_of
     eps = sorted(endpoints_of(dev), key=lambda e: e.preference)
     if not eps:
-        return {"ssh_command": None, "auth": "none", "hint": "no endpoint recorded"}
+        return {"ssh_command": None, "hint": "no endpoint recorded"}
     best = eps[0]
-    if auth_of(dev, state) == "external":
-        return {"ssh_command": best.ssh_command(), "auth": "external",
-                "user": best.user, "port": best.port,
-                "hint": "This host authorizes upstream, not from authorized_keys. "
-                        "Access is granted in the network's own policy; fleet neither "
-                        "installs nor removes keys here."}
-    if auth_of(dev, state) == "needs_key":
-        return {"ssh_command": None, "auth": "needs_key", "user": best.user,
-                "port": best.port,
-                "hint": f"This host has not accepted our key yet. The center installs "
-                        f"one with `fleet access {dev.name} --allow <machine>`; nothing "
-                        "here is ever a credential."}
-    return {"ssh_command": best.ssh_command(), "auth": "key",
-            "user": best.user, "port": best.port,
-            "hint": f"Key auth. Run it directly, or `fleet ssh {dev.name}`."}
+    if auth_of(dev, state) == "refused":
+        return {"ssh_command": best.ssh_command(), "user": best.user, "port": best.port,
+                "hint": f"It refused us last time. `fleet doctor {dev.name}` says why, and "
+                        "the one command that lets you in."}
+    return {"ssh_command": best.ssh_command(), "user": best.user, "port": best.port,
+            "hint": f"Run it directly, or `fleet ssh {dev.name}`."}
 
 
 def jobs_view(rows: list[dict]) -> dict:
@@ -577,6 +553,12 @@ def jobs_view(rows: list[dict]) -> dict:
                              "vram_free_mib": g["vram_free_mib"]})
     return {"jobs": jobs, "idle": idle,
             "not_read": [r["name"] for r in rows if r["status"] != "ok" and r["gpu_count"]]}
+
+
+def select_fields(row: dict, fields: list[str]) -> dict:
+    """Only the keys asked for (and always `name`), for an agent that needs a few."""
+    keep = ["name", *[f for f in fields if f != "name"]]
+    return {k: row[k] for k in keep if k in row}
 
 
 def models_view(rows: list[dict]) -> dict:

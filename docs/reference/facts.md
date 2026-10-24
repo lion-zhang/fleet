@@ -73,18 +73,20 @@ NOTE column. In order:
 
 | Alert | When |
 |---|---|
-| *host is UP but rejected our key (this is not 'offline') …* | the machine answered and refused the fleet's key |
+| *host is UP but refused us (this is not 'offline') -- `fleet doctor NAME` says how to let us in* | the machine answered and did not let fleet in on the last reading |
 | *gpuN: … MiB held by processes not visible to us -- do not treat as free* | a GPU's used memory exceeds what its visible processes account for by 256 MiB or more |
 | *disk MOUNT: N% full, NG left -- a long job will die on this* | a writable volume is at least 90% full |
 | *nvidia-smi present but failing: …* | `nvidia-smi` is installed but failing |
+| *… -- its notes and paths were not read* | the machine's [`machine.yaml`](../guides/resources.md#machineyaml) could not be read |
+| *KIND folder PATH does not exist there* | a folder named in `machine.yaml` is not on the machine |
 | *shared multi-user host -- not claimable* | always, for a `shared` machine |
 | *RENTAL is idle -- this is costing money* | a `rental` with at least one GPU, none of them busy |
 
 A GPU counts as **busy** at 10% utilisation or more, or with 1 GiB or more of compute
 memory in use.
 
-`fleet ls` (not `--json`) can also print a line when the center has not been heard from
-for a week, and when an agent on this machine reads an older description of fleet.
+`fleet ls` (not `--json`) can also print a line when an agent on this machine reads an
+older description of fleet.
 
 ## What a reading collects
 

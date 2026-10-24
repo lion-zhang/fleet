@@ -67,15 +67,23 @@ if ($smi) {
 $notesFiles = @((Join-Path $env:ProgramData 'fleet\machine.yaml'), (Join-Path $env:LOCALAPPDATA 'fleet\machine.yaml'))
 $keys = @('notes.system', 'notes.user')
 $storePaths = New-Object System.Collections.Generic.List[object]
+$declared = New-Object System.Collections.Generic.List[object]
 for ($i = 0; $i -lt 2; $i++) {
     $f = $notesFiles[$i]
     if (-not (Test-Path -LiteralPath $f)) { continue }
     $bytes = [System.IO.File]::ReadAllBytes($f)
     if ($bytes.Length -gt 8192) { $bytes = $bytes[0..8191] }
     Emit $keys[$i] ([Convert]::ToBase64String($bytes))
-    $inPaths = $false; $kind = ''
+    $inPaths = $false; $inEp = $false; $kind = ''
     foreach ($ln in ([System.Text.Encoding]::UTF8.GetString($bytes) -split "`r?`n")) {
-        if ($ln -match '^[^\s#]') { $inPaths = $ln -match '^paths:\s*(#.*)?$'; $kind = ''; continue }
+        if ($ln -match '^[^\s#]') {
+            $inPaths = $ln -match '^paths:\s*(#.*)?$'; $inEp = $ln -match '^endpoints:\s*(#.*)?$'; $kind = ''; continue
+        }
+        # Model servers the notes declare: name: PORT or PORT/base/path (see payload.sh).
+        if ($inEp -and $ln -match '^\s+[A-Za-z0-9_-]+:\s*["'']?(\d+)(/[A-Za-z0-9._~/-]*)?["'']?\s*(#.*)?$') {
+            if (-not ($declared | Where-Object { $_[0] -eq [int]$Matches[1] })) { $declared.Add(@([int]$Matches[1], "$($Matches[2])")) }
+            continue
+        }
         if (-not $inPaths -or $ln -match '^\s*(#.*)?$') { continue }
         $vals = @()
         if ($ln -match '^\s*-\s+(.*)$') { $vals = @($Matches[1]) }
@@ -168,6 +176,7 @@ foreach ($sp in $storePaths) {
 # importing anything.
 if (-not $light) {
     Write-Output "#SOFTWARE key|value"
+    Write-Output ("scanned_at|" + [DateTimeOffset]::UtcNow.ToUnixTimeSeconds())
     if ($smi) {
         $cuda = (& nvidia-smi 2>$null | Select-String 'CUDA Version:\s*([0-9.]+)' | Select-Object -First 1)
         if ($cuda) { Write-Output ("cuda|" + $cuda.Matches[0].Groups[1].Value) }
@@ -228,13 +237,24 @@ if (-not $light) {
     $hint = @(8000, 8001, 8010, 8080, 11434, 1234, 5000, 30000)
     $asked = 0
     $llm = @()
+    # Declared ones first, so the eight-server limit never drops what someone asked for.
+    $todo = New-Object System.Collections.Generic.List[object]
+    foreach ($d in $declared) {
+        $at = ($listen | Where-Object { [int]$_[1] -eq $d[0] } | Select-Object -First 1)
+        $todo.Add(@($(if ($at) { $at[0] } else { '127.0.0.1' }), $d[0], 0, '', $d[1]))
+    }
     foreach ($l in $listen) {
-        if ($asked -ge 8) { break }
+        if (($todo | Where-Object { $_[1] -eq [int]$l[1] })) { continue }
         if (-not (($hint -contains [int]$l[1]) -or ($l[3] -match 'vllm|sglang|ollama|mlx|llama|lmstudio|lms|text-gen|omlx|kobold|tabby|aphrodite|litellm|local-ai|exllama'))) { continue }
+        $todo.Add(@($l[0], $l[1], $l[2], $l[3], ''))
+    }
+    foreach ($l in $todo) {
+        if ($asked -ge 8) { break }
         $asked++
         $hostname = if ($l[0] -in @('0.0.0.0', '::', '127.0.0.1', '::1')) { '127.0.0.1' } elseif ($l[0] -match ':') { "[$($l[0])]" } else { $l[0] }
         $status = 'down'; $ms = 0; $ids = @()
-        foreach ($path in @('/v1/models', '/api/tags')) {
+        $paths = if ($l[4]) { @("$($l[4])/models") } else { @('/v1/models', '/api/tags') }
+        foreach ($path in $paths) {
             $t = Get-Date
             try {
                 $r = Invoke-WebRequest -UseBasicParsing -TimeoutSec 2 -Uri "http://${hostname}:$($l[1])$path"

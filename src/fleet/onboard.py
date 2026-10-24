@@ -8,7 +8,6 @@ import unicodedata
 
 from .models import Device, Kind, ProbeResult, Snapshot, Status
 from .probe.runner import run_probe, run_probe_local
-from .ssh.auth import classify, probe_server
 from .ssh.cmd import Endpoint, classify_route, parse_ssh_command, resolve
 
 _RENTAL_HOST_RE = re.compile(r"(vast\.ai|runpod|autodl|seetacloud|lambdalabs|paperspace)", re.I)
@@ -129,15 +128,9 @@ def onboard_self(*, name: str | None = None, kind: str | None = None,
                  timeout: float = 20.0) -> tuple[Device, ProbeResult]:
     """Record the machine fleet is running on, without going through SSH.
 
-    The center is never an SSH target, so it cannot add itself the way it adds everything
-    else -- `fleet add "ssh localhost"` needs inbound sshd on a laptop, which is exactly
-    what `run_probe_local` exists to avoid. But the center must be in its own inventory:
-    it is what `is_self` marks, what the handover names, and what the access list treats
-    as holding an edge to everything.
-
-    The record deliberately has no endpoint. An address for a machine you are already on
-    is not useful, and inventing one would publish a route into the fleet that the design
-    says must not exist.
+    `fleet add "ssh localhost"` would need inbound sshd on a laptop, which is exactly what
+    `run_probe_local` exists to avoid. The record deliberately has no endpoint: an address
+    for the machine you are already on is not useful.
     """
     import socket
 
@@ -149,8 +142,8 @@ def onboard_self(*, name: str | None = None, kind: str | None = None,
     # Without a reading -- a first probe slower than its timeout, as on a fresh Windows
     # runner -- derive_id falls back to `net:localhost:22`, the id that means "never
     # probed". For the machine we are on that is never necessary: its id is read from
-    # the machine itself, and its name from its hostname. A center recorded as
-    # `localhost` was pinned that way for good and never recognised as this machine.
+    # the machine itself, and its name from its hostname. Recorded as `localhost`, it was
+    # never recognised as this machine again.
     dev_id = derive_id(snap, ep)
     if dev_id.startswith("net:") or (snap and not snap.machine_id):
         dev_id = identity.local_device_id() or dev_id
@@ -203,9 +196,6 @@ def onboard(ssh_command: str, *, name: str | None = None, kind: str | None = Non
     ep.via = classify_route(ep.target) or _resolved_route(ep.target)
 
     res = run_probe(ep, timeout=timeout) if probe else ProbeResult(status=Status.SKIPPED_POLICY)
-    # Only ask who authorizes here when the key was actually refused: that is the one
-    # answer that changes what we do next, and it costs an extra handshake.
-    ssh_auth = classify(probe_server(ep)) if res.status is Status.AUTH_FAILED else ""
     snap = res.snapshot
     taken = taken_names or set()
 
@@ -215,7 +205,6 @@ def onboard(ssh_command: str, *, name: str | None = None, kind: str | None = Non
         kind=classify_kind(snap, ep, override=kind),
         alias=alias,
         endpoints=[endpoint_dict(ep, via=ep.via)],
-        ssh_auth=ssh_auth,
         needs_review=not res.ok,
     )
     if dev.kind is Kind.SHARED:

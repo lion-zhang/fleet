@@ -1,37 +1,17 @@
 # Install fleet on Windows: https://github.com/lion-zhang/fleet
 #
-# Two modes. The center is the one machine that decides who may reach what -- install
-# it on the machine you work from. Every other machine is a member.
-#
 #   powershell -ExecutionPolicy ByPass -c "irm https://raw.githubusercontent.com/lion-zhang/fleet/main/install.ps1 | iex"
-#       center (the default): installs fleet, starts a new fleet here, and teaches every supported
-#       agent installed here (Claude Code, Codex, Gemini CLI, ...) to use it.
 #
-#   $env:FLEET_JOIN='CODE'; irm https://raw.githubusercontent.com/lion-zhang/fleet/main/install.ps1 | iex
-#       member (in PowerShell): installs fleet and joins the fleet whose center printed
-#       CODE (`fleet invite` prints this whole line) instead of starting one here.
+# Installs the `fleet` command and teaches every supported agent installed here (Claude
+# Code, Codex, Gemini CLI, ...) to use it. Install it where you work, and wherever else
+# you run agents; the machines fleet looks at need nothing but SSH.
 #
-# FLEET_NO_SETUP=1 installs the command only. Safe to run again: it upgrades fleet and
-# leaves the fleet this machine is in alone. A fleet already on this machine (uv, pipx,
-# a checkout) is kept, never replaced; FLEET_FORCE_CORE=1 installs with uv anyway.
+# FLEET_NO_SETUP=1 installs the command only. Safe to run again: it upgrades fleet. A
+# fleet already on this machine (uv, pipx, a checkout) is kept, never replaced;
+# FLEET_FORCE_CORE=1 installs with uv anyway.
 #
 # `irm | iex` passes no arguments, which is why the options are environment variables.
 # Everything runs inside a function, so a download cut short runs nothing.
-
-# What an installed fleet says this machine is: role (center, member, or empty),
-# fleet_id and center. Never starts a fleet to answer. Fleets before `role` existed
-# answered with is_center / member, which are read too.
-function Get-FleetRole($fleet) {
-    # The caller's own setting is put back after: `irm | iex` runs in their session,
-    # and removing it outright undid an opt-out they had set themselves.
-    $was = $env:FLEET_NO_AUTO_CENTER
-    $env:FLEET_NO_AUTO_CENTER = '1'
-    try { $j = (& $fleet center --json 2>$null) -join "`n" | ConvertFrom-Json } catch { $j = $null }
-    $env:FLEET_NO_AUTO_CENTER = $was
-    if (-not $j) { return @{ role = ''; fleet_id = ''; center = '' } }
-    $role = if ($j.role) { $j.role } elseif ($j.is_center) { 'center' } elseif ($j.member) { 'member' } else { '' }
-    return @{ role = $role; fleet_id = "$($j.fleet_id)"; center = "$($j.center)" }
-}
 
 # Which core is here already: @{ kind; path }. kind is none, old (a uv tool under an
 # earlier name: fleet-broker, or agent-fleet from git), uv (agents-fleet as a uv tool:
@@ -102,32 +82,11 @@ function Install-Fleet {
     $ErrorActionPreference = 'Continue'
     # Windows is the point; the suffix only lets the same script be tested elsewhere.
     $exe = if ($env:OS -eq 'Windows_NT') { '.exe' } else { '' }
-    $join = "$env:FLEET_JOIN"
     $setup = -not $env:FLEET_NO_SETUP
-    if ($join -and -not $join.StartsWith('fleet1:')) {
-        throw "that is not a fleet invite code -- it starts with fleet1: (run ``fleet invite`` on the center)"
-    }
-
-    # Say which mode this run installs, before doing anything. A re-run reads it from the
-    # fleet already here, which may have been installed in the other mode.
-    $was = ''
-    $found = (Get-Command fleet -ErrorAction SilentlyContinue).Source
-    if (-not $found) {
-        $f = Join-Path $HOME ".local/bin/fleet$exe"
-        if (Test-Path $f) { $found = $f }
-    }
-    if ($found) { $was = (Get-FleetRole $found).role }
-    if (-not $setup) { Write-Host 'mode: none -- installing the command only' }
-    elseif ($join) { Write-Host 'mode: member -- joining the fleet whose center printed this code' }
-    elseif ($was -eq 'center') { Write-Host 'mode: center (already; upgrading)' }
-    elseif ($was -eq 'member') { Write-Host 'mode: member (already; upgrading)' }
-    else {
-        # Loud, because PowerShell cannot tell "no code given" from "a code that got lost":
-        # assigning '' to $env:FLEET_JOIN deletes the variable. Skimmed past, this line
-        # was how a machine meant to join a fleet became the center of a second one.
-        Write-Host 'mode: center -- this machine will become the center of a NEW fleet' -ForegroundColor Yellow
-        Write-Host '  no join code was given. Meant to join an existing fleet? Afterwards, run' -ForegroundColor Yellow
-        Write-Host '  fleet join CODE here: it retires the new, empty fleet and joins that one.' -ForegroundColor Yellow
+    if ($env:FLEET_JOIN) {
+        # fleet 0.5 joined a fleet with a code. There is no fleet to join any more: every
+        # machine running fleet looks at what its own ssh reaches.
+        Write-Host 'note: FLEET_JOIN is no longer needed -- fleet has no center to join; ignoring it'
     }
 
     # 1. uv, which installs and runs fleet.
@@ -160,35 +119,31 @@ function Install-Fleet {
     } elseif ($kind -eq 'other') {
         Write-Host "core: $(& $fleet --version) at $fleet, keeping it"
     } else {
-        # A center's listener is pythonw.exe running from the tool's own folder, not a
-        # `fleet` process: stopping only fleet.exe left it holding the files uv replaces,
-        # and the upgrade failed half way with "Access is denied". The task is ended, the
-        # listener matched by what it runs, and waited for; started again however this
-        # ends.
-        $restart = $null
+        # fleet 0.5 ran a listener on a fleet's center: pythonw.exe running from the
+        # tool's own folder, holding the files uv replaces ("Access is denied" half way).
+        # 0.6 has no center, so its task is ended and deleted, and the listener waited for.
         if ($exe -and $fleet -and (Test-Path $fleet)) {
-            $restart = $fleet
             try { schtasks /end /tn fleet-center 2>&1 | Out-Null } catch { }
+            try { schtasks /delete /tn fleet-center /f 2>&1 | Out-Null } catch { }
+            # And the firewall rules 0.5 opened for its listener.
+            try { netsh advfirewall firewall delete rule name="fleet center" 2>&1 | Out-Null } catch { }
+            try { netsh advfirewall firewall delete rule name="fleet center app" 2>&1 | Out-Null } catch { }
             $listeners = { Get-CimInstance Win32_Process | Where-Object {
                 $_.Name -match '^(fleet|pythonw?)\.exe$' -and $_.CommandLine -like '*center*--listen*' } }
             & $listeners | ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }
             $until = (Get-Date).AddSeconds(15)
             while ((Get-Date) -lt $until -and @(& $listeners).Count -gt 0) { Start-Sleep -Milliseconds 400 }
         }
-        try {
-            Install-FleetCore $uv $kind
-            # Machines from before a rename carry it as `fleet-broker` or `agent-fleet`;
-            # two tools must not both claim the `fleet` command. Removed only once the
-            # new one is in -- uninstalled first, a failed install left no fleet at all --
-            # and the `fleet` command it takes with it put back.
-            if ($kind -eq 'old') {
-                & $uv tool uninstall fleet-broker 2>&1 | Out-Null
-                & $uv tool uninstall agent-fleet 2>&1 | Out-Null
-                $b = ((& $uv tool dir --bin) | Out-String).Trim()
-                if (-not (Test-Path (Join-Path $b "fleet$exe"))) { Install-FleetCore $uv 'old' }
-            }
-        } finally {
-            if ($restart) { try { & $restart service start 2>&1 | Out-Null } catch { } }
+        Install-FleetCore $uv $kind
+        # Machines from before a rename carry it as `fleet-broker` or `agent-fleet`;
+        # two tools must not both claim the `fleet` command. Removed only once the
+        # new one is in -- uninstalled first, a failed install left no fleet at all --
+        # and the `fleet` command it takes with it put back.
+        if ($kind -eq 'old') {
+            & $uv tool uninstall fleet-broker 2>&1 | Out-Null
+            & $uv tool uninstall agent-fleet 2>&1 | Out-Null
+            $b = ((& $uv tool dir --bin) | Out-String).Trim()
+            if (-not (Test-Path (Join-Path $b "fleet$exe"))) { Install-FleetCore $uv 'old' }
         }
         & $uv tool update-shell 2>&1 | Out-Null
         $bin = (& $uv tool dir --bin).Trim()
@@ -200,46 +155,23 @@ function Install-Fleet {
     if (-not (($env:PATH -split $sep) -contains $bin)) { $env:PATH = "$bin$sep$env:PATH" }
     Write-Host "OK $(& $fleet --version)"
 
-    # 3. Into a fleet, and every agent here taught to use it.
-    if ($setup) {
-        if ($join) {
-            $was = $env:FLEET_NO_AUTO_CENTER
-            $env:FLEET_NO_AUTO_CENTER = '1'
-            & $fleet join $join
-            $code = $LASTEXITCODE
-            $env:FLEET_NO_AUTO_CENTER = $was
-            if ($code -ne 0) { throw 'could not join the fleet (see above)' }
-        }
-        # On a machine in no fleet this also starts one, with this machine as its center.
-        # Exits non-zero when no agent is installed yet, which is no failure of the install.
-        & $fleet setup
-    }
+    # 3. Every agent here taught to use it. Exits non-zero when no agent is installed
+    #    yet, which is no failure of the install.
+    if ($setup) { & $fleet setup }
 
     Write-Host ''
     Write-Host 'open a new terminal so `fleet` is found everywhere'
-    # Center or member: by what this machine is now, not by how this run began.
-    $isCenter = $false
     if ($setup) {
-        $now = Get-FleetRole $fleet
-        $isCenter = $now.role -eq 'center'
-        if ($isCenter) { Write-Host "OK this machine is the center of fleet $($now.fleet_id)" }
-        elseif ($now.role -eq 'member') {
-            Write-Host "OK this machine is a member of fleet $($now.fleet_id); its center is $($now.center)"
-        }
-    }
-    if ($isCenter) {
         Write-Host 'next: add your machines, then ask for what you need. Tell your agent, e.g.:'
         Write-Host '        "add my GPU server: ssh user@host"     a machine you can SSH into'
-        Write-Host '        "invite my laptop"                     one line to paste on a machine'
+        Write-Host '        "find my machines"                     from your ssh config and tailnet'
         Write-Host '        "what''s free right now?"               every machine, and what is free'
         Write-Host '        "run train.py where a 24 GB card is free"'
-        Write-Host '      or yourself: fleet add "ssh user@host", fleet invite NAME, fleet ls'
-    } elseif ($setup) {
-        Write-Host 'next:  fleet ls            the machines in this fleet'
+        Write-Host '      or yourself: fleet add "ssh user@host", fleet ls --discover, fleet ls'
+        Write-Host "agents load fleet's skill when a session starts: start a new one to use it"
     } else {
-        Write-Host 'next:  fleet setup         start a fleet here and teach your agents (or: fleet join CODE)'
+        Write-Host 'next:  fleet setup         teach your agents to use fleet'
     }
-    if ($setup) { Write-Host "agents load fleet's skill when a session starts: start a new one to use it" }
 }
 
 Install-Fleet

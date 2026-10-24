@@ -30,10 +30,15 @@ MAX_KINDS, MAX_PATHS, MAX_PATH = 12, 10, 300
 # machine can say where its `checkpoints` go, but these are the ones agents look for.
 KINDS = ("models", "datasets", "media", "scratch", "envs")
 _KIND = re.compile(r"^[a-z][a-z0-9_-]{0,31}$")
+# A model server the probe would not find by itself: on an unusual port, or one it does
+# not recognise. `name: PORT` or `name: PORT/base/path`; never a key -- a server that
+# wants one is shown as wanting one.
+MAX_ENDPOINTS = 8
+_ENDPOINT = re.compile(r"^(\d{1,5})(/[A-Za-z0-9._~/-]{0,100})?$")
 
 TEMPLATE = """\
 # What this machine says about itself. Read by every fleet that probes it.
-# Edit by hand, or with `fleet edit NAME --path models=/data/models`.
+# Edit by hand, or with `fleet edit NAME --path models=/data/models --note "..."`.
 """
 
 
@@ -95,7 +100,26 @@ def check(data) -> dict:
                 break
         if kept:
             out["paths"] = kept
+    endpoints = data.get("endpoints")
+    if isinstance(endpoints, dict):
+        eps: dict[str, dict] = {}
+        for name, value in list(endpoints.items())[:MAX_ENDPOINTS * 2]:
+            parsed = endpoint_spec(str(value))
+            if _KIND.match(str(name).strip().lower()) and parsed:
+                eps[str(name).strip().lower()] = parsed
+            if len(eps) >= MAX_ENDPOINTS:
+                break
+        if eps:
+            out["endpoints"] = eps
     return out
+
+
+def endpoint_spec(value: str) -> dict | None:
+    """`8001` or `8001/v1` -> {"port": 8001, "path": "/v1"}; None if it is not one."""
+    m = _ENDPOINT.match(value.strip())
+    if not m or not 1 <= int(m.group(1)) <= 65535:
+        return None
+    return {"port": int(m.group(1)), "path": m.group(2) or ""}
 
 
 def parse(text: str) -> dict:
@@ -107,9 +131,10 @@ def parse(text: str) -> dict:
 
 def merge(system: dict, user: dict) -> dict:
     """The user's file over the machine's: field by field, and for paths kind by kind."""
-    out = {**system, **{k: v for k, v in user.items() if k != "paths"}}
-    if "paths" in system or "paths" in user:
-        out["paths"] = {**system.get("paths", {}), **user.get("paths", {})}
+    out = {**system, **{k: v for k, v in user.items() if k not in ("paths", "endpoints")}}
+    for key in ("paths", "endpoints"):
+        if key in system or key in user:
+            out[key] = {**system.get(key, {}), **user.get(key, {})}
     return out
 
 
@@ -131,7 +156,8 @@ def from_probe(kv: dict[str, str]) -> tuple[dict, str]:
 def edit(text: str, *, paths: dict[str, list[str] | None] | None = None,
          cost: float | None = None, clear_cost: bool = False,
          tags_add: list[str] = (), tags_remove: list[str] = (),
-         note: str | None = None) -> str:
+         note: str | None = None,
+         endpoints: dict[str, str | None] | None = None) -> str:
     """The file with these changes made, everything else in it kept as it was read.
 
     Applied to the text read just before writing, so a change somebody else made in the
@@ -157,6 +183,17 @@ def edit(text: str, *, paths: dict[str, list[str] | None] | None = None,
             data["paths"] = current
         else:
             data.pop("paths", None)
+    if endpoints:
+        current = data.get("endpoints") if isinstance(data.get("endpoints"), dict) else {}
+        for name, value in endpoints.items():
+            if value is None:
+                current.pop(name, None)
+            else:
+                current[name] = value
+        if current:
+            data["endpoints"] = current
+        else:
+            data.pop("endpoints", None)
     if clear_cost:
         data.pop("cost", None)
     elif cost is not None:

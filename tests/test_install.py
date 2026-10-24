@@ -185,34 +185,6 @@ def test_install_says_what_to_configure_when_no_repo_is_known(tmp_path, monkeypa
     assert "--repo" in result.output or "repo" in result.output.lower()
 
 
-def test_a_successful_install_records_the_new_role(tmp_path, monkeypatch):
-    from fleet import cli
-    from fleet.state import inventory as inv
-    from fleet.cli import app
-
-    runner, path = _cli(tmp_path, monkeypatch)
-    monkeypatch.setattr(cli, "configured_repo", lambda: "git@github.com:me/fleet.git")
-    monkeypatch.setattr(cli, "run_installer", lambda *a, **k: (0, "fleet 0.2.0"))
-    result = runner.invoke(app, ["install", "oracle"])
-    assert result.exit_code == 0, result.output
-    assert inv.load(path)[0].role == "none", "installing does not confer a role"
-
-
-def test_a_failed_install_does_not_claim_the_device_is_a_backup(tmp_path, monkeypatch):
-    """Recording the role on failure would make `fleet ls` lie about where your state
-    is replicated -- the exact thing you would rely on when the center dies."""
-    from fleet import cli
-    from fleet.state import inventory as inv
-    from fleet.cli import app
-
-    runner, path = _cli(tmp_path, monkeypatch)
-    monkeypatch.setattr(cli, "configured_repo", lambda: "git@github.com:me/fleet.git")
-    monkeypatch.setattr(cli, "run_installer", lambda *a, **k: (90, "curl: not found"))
-    result = runner.invoke(app, ["install", "oracle"])
-    assert result.exit_code != 0
-    assert inv.load(path)[0].role == "none"
-
-
 # --------------------------------------------------------------- the broker's own timer
 
 def _fake_crontab(tmp_path):
@@ -287,69 +259,6 @@ def test_the_installer_fails_loudly_if_it_verifies_with_an_unsupported_flag(tmp_
     assert result.returncode == 0, result.stderr
 
 
-def test_updating_an_existing_center_does_not_demote_it(tmp_path, monkeypatch):
-    """`fleet install` doubles as `fleet update` -- that is its documented purpose --
-    so an unasked-for --role default silently destroys the center designation, and the
-    next `fleet sync` has nowhere to go."""
-    from fleet import cli
-    from fleet.state import inventory as inv
-    from fleet.cli import app
-
-    runner, path = _cli(tmp_path, monkeypatch)
-    devices = inv.load(path)
-    devices[0].role = "center"
-    inv.save(devices, path)
-
-    monkeypatch.setattr(cli, "configured_repo", lambda: "git@github.com:me/fleet.git")
-    monkeypatch.setattr(cli, "run_installer", lambda *a, **k: (0, "fleet 0.1.0"))
-    assert runner.invoke(app, ["install", "oracle"]).exit_code == 0
-    assert inv.load(path)[0].role == "center"
-
-
-def test_installing_does_not_make_a_device_a_second_root(tmp_path, monkeypatch):
-    """It used to default to `backup`, which meant a second machine holding a key on
-    every device forever. There is one fleet-root now, and it is not conferred by
-    installing software."""
-    from fleet import cli
-    from fleet.state import inventory as inv
-    from fleet.cli import app
-
-    runner, path = _cli(tmp_path, monkeypatch)
-    monkeypatch.setattr(cli, "configured_repo", lambda: "git@github.com:me/fleet.git")
-    monkeypatch.setattr(cli, "run_installer", lambda *a, **k: (0, "fleet 0.1.0"))
-    runner.invoke(app, ["install", "oracle"])
-    assert inv.load(path)[0].role == "none"
-
-
-def test_an_explicit_role_is_still_obeyed(tmp_path, monkeypatch):
-    """Not clobbering by default must not make the flag stop working."""
-    from fleet import cli
-    from fleet.state import inventory as inv
-    from fleet.cli import app
-
-    runner, path = _cli(tmp_path, monkeypatch)
-    devices = inv.load(path)
-    devices[0].role = "center"
-    inv.save(devices, path)
-
-    monkeypatch.setattr(cli, "configured_repo", lambda: "git@github.com:me/fleet.git")
-    monkeypatch.setattr(cli, "run_installer", lambda *a, **k: (0, "fleet 0.1.0"))
-    runner.invoke(app, ["install", "oracle", "--role", "none"])
-    assert inv.load(path)[0].role == "none"
-
-
-def test_a_role_that_does_nothing_is_refused(tmp_path, monkeypatch):
-    """`backup` was recorded and then read by nothing. Refused before any network."""
-    from fleet import cli
-    from fleet.cli import app
-
-    runner, path = _cli(tmp_path, monkeypatch)
-    monkeypatch.setattr(cli, "run_installer",
-                        lambda *a, **k: pytest.fail("refused before the network"))
-    r = runner.invoke(app, ["install", "oracle", "--role", "backup"])
-    assert r.exit_code == 2 and "no 'backup' role" in r.output
-
-
 def test_install_names_the_machine(tmp_path, monkeypatch):
     """This machine has no address on record, so `fleet install` with no name could only
     fail with "no endpoint recorded"; it says what to do instead."""
@@ -358,21 +267,6 @@ def test_install_names_the_machine(tmp_path, monkeypatch):
     runner, _ = _cli(tmp_path, monkeypatch)
     r = runner.invoke(app, ["install"])
     assert r.exit_code == 2 and "fleet update" in r.output
-
-
-def test_installing_cannot_promote_a_center(tmp_path, monkeypatch):
-    """It called promote_center directly: no key installed on the successor, no
-    handover signed, nothing verified. A center nobody installed keys for is one no
-    machine will accept."""
-    from fleet import cli
-    from fleet.cli import app
-
-    runner, path = _cli(tmp_path, monkeypatch)
-    monkeypatch.setattr(cli, "configured_repo", lambda: "git@github.com:me/fleet.git")
-    monkeypatch.setattr(cli, "run_installer", lambda *a, **k: (0, "fleet 0.1.0"))
-    result = runner.invoke(app, ["install", "oracle", "--role", "center"])
-    assert result.exit_code == 2
-    assert "fleet center" in result.output
 
 
 # --------------------------------------------------------------- any operating system
@@ -474,13 +368,13 @@ def test_a_native_command_that_complains_does_not_abort_the_windows_installer():
     Windows PowerShell 5. Every one of these is *expected* to complain on a normal
     machine -- "ERROR: The process fleet.exe not found" is what a box whose service is
     not running says -- so without a catch the installer died before reaching uv, on
-    exactly the machines with nothing to stop. It is why the center could not be updated
-    at all."""
+    exactly the machines with nothing to stop. It is why a 0.5 center could not be
+    updated at all."""
     from fleet.ssh.cmd import WINDOWS
 
     script = install_script("https://x/y.git", platform=WINDOWS)
-    for native in ("schtasks /end", "taskkill /f", "uv tool update-shell",
-                   "$fleet service start"):
+    for native in ("schtasks /end", "schtasks /delete", "taskkill /f",
+                   "uv tool update-shell"):
         line = next((l for l in script.splitlines() if native in l), "")
         assert line, f"{native} is no longer in the script -- has it moved?"
         assert line.strip().startswith("try {") and "catch" in line, \
@@ -490,36 +384,26 @@ def test_a_native_command_that_complains_does_not_abort_the_windows_installer():
 def test_every_powershell_sent_over_command_dash_completes_per_line():
     """`powershell -Command -` reads stdin and evaluates it statement by statement, so a
     line ending in `{` is a syntax error on its own and the block after it is skipped --
-    silently. `reconcile._remote` still uses that form for authorized_keys edits, and it
-    is safe today only because every statement there happens to fit on one line.
-
-    Nothing enforced that. This does, because the failure is invisible: the edit would
-    report success having done nothing, or worse, half of it. The installer needed a
-    different answer -- it has real blocks, so it goes over base64 -- but this script is
-    fine as it is and does not need rewriting, only keeping.
+    silently. The scripts that still go that way -- a machine's notes, read and written by
+    `fleet edit --path`, and the id written on a clone -- are safe only because every
+    statement in them fits on one line. The failure is invisible (a write that reports
+    success having done nothing), so this keeps it so.
     """
-    from fleet.ssh.authkeys import posix_sync_command, powershell_sync_command
+    from fleet.ops import machinefile
+    from fleet.ssh.keys import remote_device_id_command
 
-    script = powershell_sync_command("abc123", "SHA256:xx", user="u",
-                                     pubkey="ssh-ed25519 AAAA x")
-    for n, line in enumerate(script.splitlines(), 1):
-        text = line.strip()
-        if not text or text.startswith("#"):
-            continue
-        assert text.count("{") == text.count("}"), \
-            f"line {n} leaves a block open, which -Command - will not carry: {text!r}"
-        assert text.count("(") == text.count(")"), \
-            f"line {n} leaves a paren open: {text!r}"
-
-    # The removal form too -- it is a different script.
-    removal = powershell_sync_command("abc123", "SHA256:xx", user="u", pubkey=None)
-    for line in removal.splitlines():
-        text = line.strip()
-        if text and not text.startswith("#"):
-            assert text.count("{") == text.count("}"), text
-
-    assert posix_sync_command("abc123", "SHA256:xx", user="u", pubkey=None), \
-        "the POSIX form still exists; sh reads a whole script and has no such limit"
+    scripts = [machinefile._read_script("windows"),
+               machinefile._write_script("windows", b"cost: 1\n", "cost: 2\n"),
+               remote_device_id_command("linux:machine-id:x:2", platform="windows")]
+    for script in scripts:
+        for n, line in enumerate(script.splitlines(), 1):
+            text = line.strip()
+            if not text or text.startswith("#"):
+                continue
+            assert text.count("{") == text.count("}"), \
+                f"line {n} leaves a block open, which -Command - will not carry: {text!r}"
+            assert text.count("(") == text.count(")"), \
+                f"line {n} leaves a paren open: {text!r}"
 
 
 def test_updating_an_existing_install_honours_the_repo_it_was_given():
@@ -570,38 +454,3 @@ def test_installed_from_pypi_the_repo_is_the_one_it_was_published_from(tmp_path,
     monkeypatch.setattr(cli.Path, "home", staticmethod(lambda: tmp_path))
     monkeypatch.setattr(cli, "__file__", str(tmp_path / "site-packages" / "fleet" / "cli.py"))
     assert cli.configured_repo() == "https://github.com/lion-zhang/fleet.git"
-
-
-def test_the_installer_offers_the_fleet_key(tmp_path, monkeypatch):
-    """The same key the probe and `fleet ssh` offer. Without it the installer used
-    whatever personal key the machine happened to have, so it worked from the laptop
-    whose key was everywhere and failed with "Permission denied (publickey)" from any
-    machine fleet had enrolled -- every machine that would run `fleet update` itself."""
-    import fleet.config
-    from fleet import install as install_mod
-    from fleet.ssh.cmd import Endpoint
-
-    key = tmp_path / "id_ed25519"
-    key.write_text("x")
-    monkeypatch.setattr(fleet.config, "FLEET_KEY", key)
-    argv = install_mod.build_install_argv(Endpoint(target="b", user="u"))
-    assert argv[argv.index("-i") + 1] == str(key)
-
-
-def test_installing_on_a_machine_makes_it_a_member_at_once(tmp_path, monkeypatch):
-    """Found on a real fleet: `fleet install gpu` succeeded and gpu then said "not in a
-    fleet" -- membership arrives in a signed copy, and nothing handed it one."""
-    from fleet import cli
-    from fleet.models import Device, Kind
-    from fleet.ops import sync
-    from fleet.state import access as acl
-    from fleet.state import inventory as inv
-
-    inv.save([Device(id="id:gpu", name="gpu", kind=Kind.PERMANENT,
-                     endpoints=[{"target": "gpu", "user": "root", "port": 22}])])
-    monkeypatch.setattr(acl, "load", lambda *a, **k: acl.Access(fleet_id="f", center="c"))
-    monkeypatch.setattr(acl, "is_center", lambda *a, **k: True)
-    sent = []
-    monkeypatch.setattr(sync, "run_sync", lambda ep, payload: sent.append(ep.target) or (0, ""))
-    cli._hand_the_fleet_to(inv.find_exact(inv.load(), "gpu"))
-    assert sent == ["gpu"]

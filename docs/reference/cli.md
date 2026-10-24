@@ -11,24 +11,19 @@ command accepts `--help`. For what to use when, start with the
 |---|---|
 | [`fleet ls`](#fleet-ls) | List every device with live resource availability. |
 | [`fleet show`](#fleet-show) | Full detail for one device. |
-| [`fleet add`](#fleet-add) | Add a machine to the fleet, enrolling it. |
-| [`fleet invite`](#fleet-invite) | Let one machine join by itself: print a code to run there with `fleet join`. |
-| [`fleet join`](#fleet-join) | Join a fleet with an invite from its center. No password, nothing to approve. |
+| [`fleet add`](#fleet-add) | Add a machine: how you reach it over ssh, or a name from `fleet ls --discover`. |
 | [`fleet edit`](#fleet-edit) | Change a device's address or settings after it was added. |
-| [`fleet install`](#fleet-install) | Install fleet on a device, so you and its agents can use the fleet from there. |
+| [`fleet install`](#fleet-install) | Install fleet on a device, so you and its agents can use fleet from there too. |
 | [`fleet update`](#fleet-update) | Update fleet on the machines that have it, the way it was installed there. |
-| [`fleet sync`](#fleet-sync) | Merge this machine's inventory with the center's. |
 | [`fleet ps`](#fleet-ps) | What is running on every GPU, across the fleet, and which GPUs are idle. |
 | [`fleet models`](#fleet-models) | Every model being served across the fleet: which server, where, and how to reach it. |
 | [`fleet top`](#fleet-top) | Live view of the fleet, or of one device. Like htop, for your machines. |
-| [`fleet rm`](#fleet-rm) | Remove a device from the inventory. |
+| [`fleet rm`](#fleet-rm) | Stop watching a machine: take it out of this machine's list. |
 | [`fleet ssh`](#fleet-ssh) | Open a shell on a device, or run a command: `fleet ssh machine_A -- nvidia-smi`. |
-| [`fleet access`](#fleet-access) | Who may reach what, and change it. |
-| [`fleet center`](#fleet-center) | Who decides, and handing that over. |
 | [`fleet setup`](#fleet-setup) | Teach your coding agents to use fleet. |
-| [`fleet service`](#fleet-service) | The background service that keeps the center listening on port 7373. |
-| [`fleet uninstall`](#fleet-uninstall) | Take fleet off this machine: out of its fleet, out of your agents, service removed. |
+| [`fleet uninstall`](#fleet-uninstall) | Take fleet off this machine: out of your agents, and with --purge its files. |
 | [`fleet paths`](#fleet-paths) | Show where fleet keeps its state. |
+| [`fleet doctor`](#fleet-doctor) | Why a machine will not let fleet in, and the one thing to do about it. |
 
 ## fleet ls
 
@@ -53,7 +48,13 @@ fleet ls --json
 | `--json` | print JSON instead of a table, for scripts and agents |
 | `--refresh`, `-r` | force a live probe |
 | `--rescan` | also re-read software versions and folder sizes, which machines otherwise cache for 6 hours |
+| `--wait` `SECONDS` | with --rescan: wait up to this long for the folder sizes it started measuring |
 | `--online` | only reachable devices |
+| `--discover` | list machines in your ~/.ssh/config and on your tailnet that are not added yet |
+| `--hide` `NAME` | with --discover: never offer this one again; repeatable |
+| `--unhide` `NAME` | with --discover: offer it again |
+| `--all` | with --discover: include hidden ones |
+| `--fields` `A,B,...` | with --json: only these keys of each machine, e.g. free_vram_mib,gpus,usd_per_hour |
 | `--tag` `NAME` | only machines carrying this tag or fact; repeatable, and all must match |
 
 ## fleet show
@@ -79,10 +80,13 @@ fleet show machine_A
 | `--json` | print JSON instead of a table, for scripts and agents |
 | `--refresh`, `--no-refresh` | probe it now; --no-refresh shows the last reading |
 | `--rescan` | also re-read software versions and folder sizes, which machines otherwise cache for 6 hours |
+| `--wait` `SECONDS` | with --rescan: wait up to this long for the folder sizes it started measuring |
 
 ## fleet add
 
-Add a machine to the fleet, enrolling it.
+Add a machine: how you reach it over ssh, or a name from `fleet ls --discover`.
+
+fleet connects exactly as you do -- your ssh config, your keys and agent, Tailscale SSH, the key on your rental provider's account -- and installs nothing there.
 
 ```
 fleet add [OPTIONS] [SSH_COMMAND]
@@ -108,63 +112,11 @@ fleet add "ssh -p 58418 root@1.2.3.4"
 | `--json` | print JSON instead of a table, for scripts and agents |
 | `--dry-run` | probe and show what would be recorded; record nothing |
 
-## fleet invite
-
-Let one machine join by itself: print a code to run there with `fleet join`.
-
-The other way in. `fleet add` has the center dial the machine; an invite has the machine dial the center, so no password is typed and a machine the center cannot reach can still join. Single use, and valid for minutes.
-
-```
-fleet invite [OPTIONS] [NAME]
-```
-
-Example:
-
-```bash
-fleet invite gpu-box --ttl 30m
-```
-
-| Argument | |
-|---|---|
-| `NAME` | what the machine will be called; omit to let it say |
-
-| Option | |
-|---|---|
-| `--ttl` `TIME` | how long it may be used for: 15m, 2h, 1d (default: `15m`) |
-| `--list` | show recent invites |
-| `--revoke` `ID` | withdraw an invite before it is used |
-| `--url` `URL` | the address the machine should dial; defaults to where the center listens |
-| `--json` | print JSON instead of a table, for scripts and agents |
-
-## fleet join
-
-Join a fleet with an invite from its center. No password, nothing to approve.
-
-```
-fleet join [OPTIONS] CODE
-```
-
-Example:
-
-```bash
-fleet join fleet1:eyJ1Ijoi...
-```
-
-| Argument | |
-|---|---|
-| `CODE` (required) | the code `fleet invite` printed |
-
-| Option | |
-|---|---|
-| `--name` | what to call this machine, if the invite did not say |
-| `--ssh` `CMD` | how the center reaches this machine, e.g. "ssh -p 2222 me@10.0.0.5"; defaults to the address it sees |
-| `--json` | print JSON instead of a table, for scripts and agents |
-
 ## fleet edit
 
 Change a device's address or settings after it was added.
 
-Rentals recycle IPs and ports, so `--ssh` re-points a device without losing its name, tags, cost or history.
+Rentals recycle IPs and ports, so `--ssh` re-points a device without losing its name, tags, cost or history. Tags, cost, a note, folders (`--path`) and declared servers (`--endpoint`) are written to that machine's own machine.yaml, so everyone who looks at it reads the same; `--local` keeps tags and cost here instead.
 
 ```
 fleet edit [OPTIONS] [NAME]
@@ -189,16 +141,18 @@ fleet edit machine_A --ssh "ssh -p 40001 root@5.6.7.8"
 | `--alias` `SHORT` | a short handle to type instead of the name; --alias "" removes it |
 | `--tag` `NAME` | add a label; repeatable |
 | `--untag` `NAME` | remove a label; repeatable |
-| `--role` | a label for what the machine is for; the center moves only with `fleet center NAME` |
 | `--cost` `USD` | what it costs per hour, for the $/HR column and the fleet's burn rate; 0 clears it |
-| `--path` `KIND=PATH` | where this machine keeps models, datasets, media...: models=/data/models; repeat a kind for several, models= clears it. Written to the machine's own machine.yaml |
+| `--note` `TEXT` | a line about the machine; --note "" clears it |
+| `--path` `KIND=PATH` | where this machine keeps models, datasets, media...: models=/data/models; repeat a kind for several, models= clears it |
+| `--endpoint` `NAME=PORT[/PATH]` | a model server fleet would not find by itself: myllm=9000 or myllm=9000/v1; myllm= removes it. Never a key |
+| `--local` | keep --tag/--untag/--cost in this machine's own list instead of on that machine |
 | `--json` | print JSON instead of a table, for scripts and agents |
 
 ## fleet install
 
-Install fleet on a device, so you and its agents can use the fleet from there.
+Install fleet on a device, so you and its agents can use fleet from there too.
 
-A machine only reached *by* fleet needs nothing installed; this is for one you also work on. It installs from git; re-running updates an existing install.
+A machine fleet only looks at needs nothing installed; this is for one you also work on. It installs from git; re-running updates an existing install.
 
 ```
 fleet install [OPTIONS] [NAME]
@@ -248,28 +202,6 @@ fleet update --all
 | `--repo` `URL` | git URL to deploy from; defaults to config or this checkout |
 | `--ref` | branch or tag (default: `main`) |
 
-## fleet sync
-
-Merge this machine's inventory with the center's.
-
-Safe to run anywhere and repeatedly: the merge is a union, the newer record wins, and a device known to only one side is never dropped.
-
-```
-fleet sync [OPTIONS]
-```
-
-Example:
-
-```bash
-fleet sync
-```
-
-| Option | |
-|---|---|
-| `--serve` | run on the center: merge stdin, print the result |
-| `--from` `URL` | dial a center at this address and remember it, when it cannot reach you |
-| `--json` | print JSON instead of a table, for scripts and agents |
-
 ## fleet ps
 
 What is running on every GPU, across the fleet, and which GPUs are idle.
@@ -315,6 +247,7 @@ fleet models --json
 |---|---|
 | `--json` | print JSON instead of a table, for scripts and agents |
 | `--refresh`, `-r` | force a live probe |
+| `--rescan` | also re-measure the model folders, which machines otherwise cache for 6 hours |
 
 ## fleet top
 
@@ -342,7 +275,9 @@ fleet top machine_A -i 1
 
 ## fleet rm
 
-Remove a device from the inventory.
+Stop watching a machine: take it out of this machine's list.
+
+Nothing is changed on the machine itself -- fleet put nothing there but the notes `fleet edit --path` wrote, which stay with it.
 
 ```
 fleet rm [OPTIONS] NAME
@@ -366,7 +301,7 @@ fleet rm machine_A
 
 Open a shell on a device, or run a command: `fleet ssh machine_A -- nvidia-smi`.
 
-This exists so credentials never have to reach an agent: the wrapper resolves the endpoint and connects, rather than handing out a connection string plus a password.
+The wrapper resolves the endpoint and connects exactly as you would, so an agent never needs an address, a key or a password -- only the machine's name.
 
 ```
 fleet ssh [OPTIONS] NAME [-- COMMAND...]
@@ -381,73 +316,6 @@ fleet ssh machine_A -- nvidia-smi
 | Argument | |
 |---|---|
 | `NAME` (required) | a machine's name or alias |
-
-## fleet access
-
-Who may reach what, and change it.
-
-Granting installs a key; revoking removes one. Both are things the center does to a machine over ssh, so both can be pending -- and a revoke that has not reached its target is reported as not in effect, never as done.
-
-```
-fleet access [OPTIONS] [TARGET]
-```
-
-Example:
-
-```bash
-fleet access machine_A --allow machine_B
-```
-
-| Argument | |
-|---|---|
-| `TARGET` | one machine, instead of all |
-
-| Option | |
-|---|---|
-| `--allow` `MACHINE` | let MACHINE reach the target |
-| `--deny` `MACHINE` | stop MACHINE reaching the target |
-| `--user` | whose authorized_keys; a grant defaults to the account the target is reached as, a revoke to every account |
-| `--migrate` | spend passwords an older fleet stored |
-| `--prune` | find fleet keys on machines that the list no longer wants, and remove them |
-| `--fleet` `ID` | with --prune: also remove blocks another fleet, ID, left behind |
-| `--yes`, `-y` | with --prune: remove without asking |
-| `--json` | print JSON instead of a table, for scripts and agents |
-
-## fleet center
-
-Who decides, and handing that over.
-
-Only the current center can name the next one. No machine may promote itself, so an unplanned loss of the center means re-configuring by hand -- which is the price of there being exactly one machine that can open every door.
-
-```
-fleet center [OPTIONS] [NAME]
-```
-
-Example:
-
-```bash
-fleet center machine_B
-```
-
-| Argument | |
-|---|---|
-| `NAME` | hand the role to this machine |
-
-| Option | |
-|---|---|
-| `--init` | start a fleet with this machine as center |
-| `--pubkey` | print the key to pre-place on a host |
-| `--export` | print the access list and pins |
-| `--listen` | serve the fleet so machines can sync themselves, instead of being swept |
-| `--no-service` | with --init: do not install the background service |
-| `--port` `N` | port for --listen (default 7373) |
-| `--advertise` `URL` | the address machines should dial; defaults to this host and port |
-| `--accept` | take the role a handover offered |
-| `--dissolve` | take the whole fleet down: remove every key from every machine |
-| `--leave` | remove this fleet's keys from this machine |
-| `--cancel` | keep the role after handing it over, if the successor never accepted |
-| `--json` | print JSON instead of a table, for scripts and agents |
-| `--force` | with --dissolve: do not ask, and finish even if some machines cannot be reached |
 
 ## fleet setup
 
@@ -473,33 +341,11 @@ fleet setup --dry-run
 | `--uninstall` | remove what setup installed |
 | `--refresh` | rewrite only what fleet already installed, so it matches this fleet; adds nothing new |
 
-## fleet service
-
-The background service that keeps the center listening on port 7373.
-
-Starting a fleet installs it and updates restart it, so you rarely need this: it is for looking when something is wrong, putting it back after a handover (the new center's `fleet service install`), or removing it.
-
-```
-fleet service [OPTIONS] [ACTION]
-```
-
-Example:
-
-```bash
-fleet service status
-```
-
-| Argument | |
-|---|---|
-| `ACTION` | status \| install \| remove \| start \| stop |
-
 ## fleet uninstall
 
-Take fleet off this machine: out of its fleet, out of your agents, service removed.
+Take fleet off this machine: out of your agents, and with --purge its files.
 
-In order: a member leaves its fleet (the fleet's keys come off this machine), the skills and MCP entries fleet gave your agents are removed, and so is the background service. With --purge, fleet's own files go too. The program itself is removed last, by you: the command to run is printed at the end.
-
-The center of a fleet with other machines in it cannot uninstall: hand the role on (`fleet center NAME`) or end the fleet (`fleet center --dissolve`) first.
+Nothing on the machines fleet looked at changes. The program itself is removed last, by you: the command to run is printed at the end.
 
 ```
 fleet uninstall [OPTIONS]
@@ -513,7 +359,7 @@ fleet uninstall --purge
 
 | Option | |
 |---|---|
-| `--purge` | also delete fleet's files here: its key, inventory, cache and logs |
+| `--purge` | also delete fleet's files here: its list of machines, cache and logs |
 | `--yes`, `-y` | do not ask; needed without a terminal |
 | `--json` | print JSON instead of a table, for scripts and agents |
 
@@ -530,3 +376,27 @@ Example:
 ```bash
 fleet paths
 ```
+
+## fleet doctor
+
+Why a machine will not let fleet in, and the one thing to do about it.
+
+fleet connects exactly as you do and manages no access, so the fix is yours to make: usually putting your key on the machine, adding it to a rental provider's account, or a rule in your Tailscale SSH policy. This names the one for each machine. It changes nothing.
+
+```
+fleet doctor [OPTIONS] [NAME]
+```
+
+Example:
+
+```bash
+fleet doctor gpu-box
+```
+
+| Argument | |
+|---|---|
+| `NAME` | one machine; all that are failing if omitted |
+
+| Option | |
+|---|---|
+| `--json` | print JSON instead of a table, for scripts and agents |

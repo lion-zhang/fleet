@@ -101,6 +101,10 @@ fleet edit nas --untag quiet
 fleet ls --tag backup
 ```
 
+Tags you set this way are written to the machine's own `machine.yaml`, so whoever looks
+at it sees them; `--local` keeps them in this machine's list instead, for a machine you
+cannot or would rather not write to.
+
 `--tag` searches tags and facts alike. A tag may have a fact's name: if a machine has an
 accelerator fleet cannot see, tagging it `gpu` yourself is the right move, and nothing
 will overwrite it.
@@ -110,7 +114,7 @@ will overwrite it.
 Tell fleet what a paid machine costs per hour, and the agent can weigh it:
 
 ```bash
-fleet edit a100 --cost 1.89
+fleet edit a100 --cost 1.89          # on the machine; --local to keep it here
 ```
 
 The price shows in the `$/HR` column, and `fleet ls --json` adds up the hourly burn of
@@ -122,7 +126,8 @@ costing money*, whatever its price.
 `fleet ls` puts the first alert for each machine in its NOTE column; the agent reads all
 of them, and treats them as blocking:
 
-- the machine is up but **refused the fleet's key** — this is not "offline";
+- the machine is up but **refused us** — this is not "offline"; `fleet doctor NAME` says
+  why ([more](reaching-machines.md#when-a-machine-refuses));
 - **VRAM held by processes fleet cannot see** — do not treat it as free;
 - a **disk at 90%** or more;
 - **`nvidia-smi` failing**;

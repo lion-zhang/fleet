@@ -21,9 +21,6 @@ from fleet.models import Device, Kind
 from fleet.ops import identity
 from fleet.probe.parse import parse_payload
 from fleet.render.view import _CORES, _RAM_GIB, _SLACK, _STORAGE_TIB, _VRAM_GIB, facts, matches_tag
-from fleet.ops import enrol
-from fleet.ops import sweep
-from fleet.ops import sync
 
 FIXTURES = pathlib.Path(__file__).parent / "fixtures" / "probe"
 
@@ -205,16 +202,6 @@ def test_a_route_is_backfilled_from_a_literal_address():
     assert facts(_dev(endpoints=[{"target": "nas.example.com"}]), {}, None) == []
 
 
-def test_a_relayed_row_does_not_claim_a_route():
-    """`mesh` and `lan` describe *our* route, and a broadcast row exists precisely
-    because we have none. `public-ip` is a property of the machine, so it survives."""
-    dev = _dev(endpoints=[{"target": "192.168.1.9"}])
-    assert facts(dev, {}, {"source": "broadcast"}) == []
-
-    pub = _dev(endpoints=[{"target": "1.2.3.4"}])
-    assert "public-ip" in facts(pub, {}, {"source": "broadcast"})
-
-
 # ------------------------------------------------------------------ tenancy
 
 def test_tenancy_is_projected_from_kind_not_stored_again():
@@ -268,10 +255,10 @@ def test_edit_adds_and_removes_tags(tmp_path, monkeypatch):
     from fleet.state import inventory as inv
 
     runner, cli = _cli(tmp_path, monkeypatch, [_dev(name="box")])
-    assert runner.invoke(cli.app, ["edit", "box", "--tag", "prod", "--tag", "nas"]).exit_code == 0
+    assert runner.invoke(cli.app, ["edit", "box", "--tag", "prod", "--tag", "nas", "--local"]).exit_code == 0
     assert inv.load(inv.INVENTORY_PATH)[0].tags == ["prod", "nas"]
 
-    assert runner.invoke(cli.app, ["edit", "box", "--untag", "prod"]).exit_code == 0
+    assert runner.invoke(cli.app, ["edit", "box", "--untag", "prod", "--local"]).exit_code == 0
     assert inv.load(inv.INVENTORY_PATH)[0].tags == ["nas"]
 
 
@@ -281,7 +268,7 @@ def test_tags_are_lowercased_on_write(tmp_path, monkeypatch):
     from fleet.state import inventory as inv
 
     runner, cli = _cli(tmp_path, monkeypatch, [_dev(name="box")])
-    runner.invoke(cli.app, ["edit", "box", "--tag", "NAS"])
+    runner.invoke(cli.app, ["edit", "box", "--tag", "NAS", "--local"])
     assert inv.load(inv.INVENTORY_PATH)[0].tags == ["nas"]
 
 
@@ -331,45 +318,6 @@ def test_ls_says_what_it_could_not_judge(tmp_path, monkeypatch):
 
 
 # ------------------------------------------------------------------ portability
-
-def test_fleet_imports_without_a_pty():
-    """A center may run on Windows, where `pty` imports `tty` imports `termios` and
-    there is no termios. A top-level import took the whole CLI down at startup, so
-    fleet could not even print --version there."""
-    import importlib
-    import sys
-
-    blocked = {"pty": None, "tty": None, "termios": None}
-    saved = {k: sys.modules.get(k) for k in blocked}
-    try:
-        sys.modules.update(blocked)          # import of these now raises ImportError
-        for mod in ("fleet.ssh.keys", "fleet.cli"):
-            importlib.reload(importlib.import_module(mod))
-    finally:
-        for k, v in saved.items():
-            if v is None:
-                sys.modules.pop(k, None)
-            else:
-                sys.modules[k] = v
-        for mod in ("fleet.ssh.keys", "fleet.cli"):
-            importlib.reload(importlib.import_module(mod))
-
-
-def test_a_machine_without_a_pty_says_so_instead_of_crashing(tmp_path, monkeypatch):
-    """The one genuinely unportable path. It must read as a limit of this machine, and
-    name the way round it, rather than surfacing as an ImportError mid-enrolment."""
-    from fleet import cli
-
-    monkeypatch.setattr(enrol, "pty_available", lambda: False)
-    monkeypatch.setattr(enrol, "ensure_keypair", lambda *a, **k: (tmp_path / "k", "ssh-ed25519 AAAA x"))
-    monkeypatch.setattr(enrol, "install_key_over_existing_access",
-                        lambda *a, **k: (False, "Permission denied (publickey)."))
-    monkeypatch.setattr(enrol.getpass, "getpass",
-                        lambda *a, **k: pytest.fail("must not prompt without a pty"))
-
-    dev = _dev(name="box", endpoints=[{"target": "1.2.3.4", "user": "root", "port": 22}])
-    assert enrol.install_our_key(dev) is False
-
 
 def test_the_console_forces_utf8_output():
     """A Windows console encodes cp1252 and rich raises rather than degrading, so
@@ -442,28 +390,6 @@ def test_one_function_answers_which_os_this_is():
     assert remote_platform(None) == POSIX
 
 
-def test_enrolment_records_whose_authorized_keys_to_write():
-    """`edges()` fell back to root for every machine, so a center kept trying to write
-    root's file on hosts only ever reached as an ordinary user, and every grant sat
-    pending behind a permission denial naming the wrong account."""
-    from fleet.state import access as acl
-
-    # Built in memory, never via bootstrap(): that resolves the real ACCESS_PATH and
-    # would pin a center into this machine's actual config directory.
-    acc = acl.Access(fleet_id="7f3a9c", center="SHA256:center",
-                     keys={"SHA256:center": {"name": "center", "pubkey": "x"}})
-    # Distinct base64 blobs, not distinct comments: a fingerprint hashes the key itself,
-    # so `ssh-ed25519 AAAA n` and `ssh-ed25519 AAAA v` are the same key wearing two names.
-    fp = acl.enroll(acc, "nas", "ssh-ed25519 AAAB", "id:n", user="lin")
-    assert acc.keys[fp]["user"] == "lin"
-    assert (acc.center, fp, "lin") in acc.edges()
-
-    # unspecified still means root, which is the old behaviour and the common case
-    fp2 = acl.enroll(acc, "vm", "ssh-ed25519 AAAC", "id:v")
-    assert fp2 != fp
-    assert (acc.center, fp2, "root") in acc.edges()
-
-
 def test_an_identity_path_from_another_machine_is_ignored(tmp_path):
     """`identity` is a filename on whichever machine recorded the endpoint, and the
     inventory syncs. Handing ssh a path this machine does not have fails the whole
@@ -480,39 +406,6 @@ def test_an_identity_path_from_another_machine_is_ignored(tmp_path):
     got = {e.target: e.identity for e in inv.endpoints_of(dev)}
     assert got["h1"] == "", "a foreign path must not reach ssh"
     assert got["h2"] == str(real), "a real one still does"
-
-
-def test_reinitialising_does_not_rename_the_center(tmp_path, monkeypatch):
-    """--init counted the machine's own inventory record among the taken names, so a
-    second run came back as "<name>-2" and pinned that into the access list while the
-    inventory kept the first."""
-    from typer.testing import CliRunner
-
-    from fleet.state import access as acl, inventory as inv, store
-    from fleet import cli
-    from fleet.models import Device, Kind, ProbeResult, Status
-
-    for n in ("ACCESS_PATH", "LEDGER_PATH", "CACHE_PATH", "OUTBOX_PATH"):
-        monkeypatch.setattr(acl, n, tmp_path / getattr(acl, n).name)
-    monkeypatch.setattr(inv, "INVENTORY_PATH", tmp_path / "inventory.yaml")
-    monkeypatch.setattr(store, "DB_PATH", tmp_path / "cache.db")
-    key = tmp_path / "k"
-    import subprocess
-    subprocess.run(["ssh-keygen", "-t", "ed25519", "-N", "", "-q", "-f", str(key)], check=True)
-    pub = key.with_suffix(".pub").read_text(encoding="utf-8").strip()
-    monkeypatch.setattr(enrol, "ensure_keypair", lambda *a, **k: (key, pub))
-    monkeypatch.setattr(__import__("fleet.ssh.keys").ssh.keys, "ensure_keypair", lambda *a, **k: (key, pub))
-    monkeypatch.setattr(__import__("fleet.onboard").onboard, "onboard_self", lambda **k: (
-        Device(id="id:me", name="beelink", kind=Kind.PERMANENT), ProbeResult(status=Status.OK)))
-
-    runner = CliRunner()
-    assert runner.invoke(cli.app, ["center", "--init"]).exit_code == 0
-    acl.ACCESS_PATH.unlink()                       # as --dissolve leaves it
-    assert runner.invoke(cli.app, ["center", "--init"]).exit_code == 0
-
-    acc = acl.load(acl.ACCESS_PATH)
-    assert acc.name_of(acc.center) == "beelink", "still itself, not beelink-2"
-    assert [d.name for d in inv.live(inv.load(inv.INVENTORY_PATH))] == ["beelink"]
 
 
 def test_a_probe_payload_keeps_its_newlines():
@@ -573,32 +466,6 @@ def test_a_windows_machine_knows_its_own_id(monkeypatch):
         identity._machine_id.cache_clear()
 
 
-def test_init_marks_the_center_in_the_inventory_too(tmp_path, monkeypatch):
-    """`is_center()` stays the authority, but the diamond in `ls` and `top` is drawn from
-    Device.role -- so without this the center was invisible in the one view that exists
-    to answer "which machine decides"."""
-    from typer.testing import CliRunner
-
-    from fleet.state import access as acl, inventory as inv, store
-    from fleet import cli
-    from fleet.models import Device, Kind, ProbeResult, Status
-
-    for n in ("ACCESS_PATH", "LEDGER_PATH", "CACHE_PATH", "OUTBOX_PATH"):
-        monkeypatch.setattr(acl, n, tmp_path / getattr(acl, n).name)
-    monkeypatch.setattr(inv, "INVENTORY_PATH", tmp_path / "inventory.yaml")
-    monkeypatch.setattr(store, "DB_PATH", tmp_path / "cache.db")
-    import subprocess
-    key = tmp_path / "k"
-    subprocess.run(["ssh-keygen", "-t", "ed25519", "-N", "", "-q", "-f", str(key)], check=True)
-    monkeypatch.setattr(enrol, "ensure_keypair",
-                        lambda *a, **k: (key, key.with_suffix(".pub").read_text(encoding="utf-8").strip()))
-    monkeypatch.setattr(__import__("fleet.onboard").onboard, "onboard_self", lambda **k: (
-        Device(id="id:me", name="hub", kind=Kind.PERMANENT), ProbeResult(status=Status.OK)))
-
-    assert CliRunner().invoke(cli.app, ["center", "--init"]).exit_code == 0
-    assert inv.find_exact(inv.load(inv.INVENTORY_PATH), "hub").role == "center"
-
-
 def test_no_remote_script_goes_through_text_mode():
     """Popen and run() wrap stdin with newline=None in text mode, rewriting \\n to \\r\\n
     on Windows. That broke three things at once from the new Windows center: the probe
@@ -652,104 +519,6 @@ def test_no_remote_script_goes_through_text_mode():
     assert not offenders, "remote payloads must be bytes:\n" + "\n".join(offenders)
 
 
-def test_the_sweep_hands_the_inventory_to_every_machine(tmp_path, monkeypatch):
-    """The center dials out and nothing dials in, so a spoke only ever learns who the
-    center is if the center tells it. Without this it held our key with no idea where it
-    came from: `fleet ls` there could not mark the center, and `fleet sync` there had
-    nobody to ask."""
-    from typer.testing import CliRunner
-
-    from fleet.state import access as acl, inventory as inv, store
-    from fleet import cli, reconcile as rec
-    from fleet.models import Device, Kind
-
-    for n in ("ACCESS_PATH", "LEDGER_PATH", "CACHE_PATH", "OUTBOX_PATH"):
-        monkeypatch.setattr(acl, n, tmp_path / getattr(acl, n).name)
-    monkeypatch.setattr(inv, "INVENTORY_PATH", tmp_path / "inventory.yaml")
-    monkeypatch.setattr(store, "DB_PATH", tmp_path / "cache.db")
-    monkeypatch.setattr(identity, "local_device_id", lambda: "id:center")
-
-    devices = [
-        Device(id="id:center", name="hub", kind=Kind.PERMANENT, role="center"),
-        Device(id="id:a", name="a", kind=Kind.PERMANENT,
-               endpoints=[{"target": "1.2.3.4", "user": "root", "port": 22}]),
-    ]
-    inv.save(devices, inv.INVENTORY_PATH)
-    acc = acl.Access(fleet_id="7f3a9c", center="SHA256:c", keys={
-        "SHA256:c": {"name": "hub", "pubkey": "x", "device_id": "id:center"},
-        "SHA256:a": {"name": "a", "pubkey": "y", "device_id": "id:a", "user": "root"},
-    })
-    acl.save(acc, acl.ACCESS_PATH)
-
-    monkeypatch.setattr(rec, "apply_edge", lambda *a, **k: (True, ""))
-    monkeypatch.setattr(enrol, "run_probe", lambda *a, **k: (_ for _ in ()).throw(OSError()))
-    handed = []
-    monkeypatch.setattr(sync, "run_sync", lambda ep, payload: handed.append(ep.target) or (0, payload))
-    # broadcast seals once then sends per machine, so the stub goes
-    # on the half that dials; sealing would shell out to ssh-keygen.
-    monkeypatch.setattr(sync, "sealed_envelope", lambda payload: payload)
-    monkeypatch.setattr(sync, "send_sealed", lambda ep, payload: handed.append(ep.target) or (0, payload))
-
-    assert CliRunner().invoke(cli.app, ["sync"]).exit_code == 0
-    assert handed == ["1.2.3.4"], "every machine with an endpoint, and only those"
-
-
-def test_a_machine_without_fleet_is_not_an_error(tmp_path, monkeypatch):
-    """Most managed targets have nothing installed. The handover failing there is the
-    ordinary case, not a fault worth a line of output."""
-    from fleet import cli
-    from fleet.state import inventory as inv
-    from fleet.models import Device, Kind
-
-    monkeypatch.setattr(inv, "INVENTORY_PATH", tmp_path / "inventory.yaml")
-    devices = [Device(id="id:a", name="a", kind=Kind.PERMANENT,
-                      endpoints=[{"target": "1.2.3.4", "user": "root", "port": 22}])]
-    inv.save(devices, inv.INVENTORY_PATH)
-    monkeypatch.setattr(sync, "run_sync", lambda *a, **k: (127, "fleet: command not found"))
-    # broadcast seals once then sends per machine, so the stub goes
-    # on the half that dials; sealing would shell out to ssh-keygen.
-    monkeypatch.setattr(sync, "sealed_envelope", lambda payload: payload)
-    monkeypatch.setattr(sync, "send_sealed", lambda *a, **k: (127, "fleet: command not found"))
-    sweep.broadcast(devices)                # must not raise
-
-
-def test_a_settled_fleet_still_hands_the_inventory_round(tmp_path, monkeypatch):
-    """Keys converging is the common case, and the early return for it skipped the
-    handover entirely -- so a fleet that had finished setting itself up was precisely
-    the one that never told its machines anything."""
-    from typer.testing import CliRunner
-
-    from fleet.state import access as acl, inventory as inv, store
-    from fleet import cli
-    from fleet.models import Device, Kind
-
-    for n in ("ACCESS_PATH", "LEDGER_PATH", "CACHE_PATH", "OUTBOX_PATH"):
-        monkeypatch.setattr(acl, n, tmp_path / getattr(acl, n).name)
-    monkeypatch.setattr(inv, "INVENTORY_PATH", tmp_path / "inventory.yaml")
-    monkeypatch.setattr(store, "DB_PATH", tmp_path / "cache.db")
-    monkeypatch.setattr(identity, "local_device_id", lambda: "id:center")
-
-    devices = [Device(id="id:center", name="hub", kind=Kind.PERMANENT, role="center"),
-               Device(id="id:a", name="a", kind=Kind.PERMANENT,
-                      endpoints=[{"target": "1.2.3.4", "user": "root", "port": 22}])]
-    inv.save(devices, inv.INVENTORY_PATH)
-    # no edges at all, so nothing is ever pending
-    acl.save(acl.Access(fleet_id="7f3a9c", center="SHA256:c", keys={
-        "SHA256:c": {"name": "hub", "pubkey": "x", "device_id": "id:center"}}),
-        acl.ACCESS_PATH)
-
-    handed = []
-    monkeypatch.setattr(sync, "run_sync", lambda ep, payload: handed.append(ep.target) or (0, payload))
-    # broadcast seals once then sends per machine, so the stub goes
-    # on the half that dials; sealing would shell out to ssh-keygen.
-    monkeypatch.setattr(sync, "sealed_envelope", lambda payload: payload)
-    monkeypatch.setattr(sync, "send_sealed", lambda ep, payload: handed.append(ep.target) or (0, payload))
-    monkeypatch.setattr(sweep, "enrol_unpinned", lambda *a, **k: False)
-
-    assert CliRunner().invoke(cli.app, ["sync"]).exit_code == 0
-    assert handed == ["1.2.3.4"]
-
-
 def test_no_ssh_is_spawned_with_a_pipe_for_stdout():
     """Windows OpenSSH's ssh.exe hangs when its stdin or its stdout is an anonymous
     pipe -- for good, with no output and no CPU. Measured on the Windows center after it
@@ -767,7 +536,7 @@ def test_no_ssh_is_spawned_with_a_pipe_for_stdout():
 
     src = pathlib.Path(__file__).resolve().parent.parent / "src" / "fleet"
     allowed = {"cmd.py", "runner.py"}          # the two that know about the files
-    builders = ("build_argv", "build_enroll_argv", "build_install_argv")
+    builders = ("build_argv", "build_install_argv")
     offenders = []
     for path in src.rglob("*.py"):
         if path.name in allowed:
