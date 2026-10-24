@@ -178,6 +178,7 @@ def parse_payload(stdout: str) -> Snapshot:
         mem_total_kb=_int(kv.get("mem.total_kb")),
         mem_avail_kb=_int(kv.get("mem.avail_kb")),
         gpu_present=kv.get("gpu.present", "0"),
+        gpu_vendor=kv.get("gpu.vendor", ""),
         gpu_driver=kv.get("gpu.driver", ""),
         gpu_error=kv.get("gpu.error", ""),
     )

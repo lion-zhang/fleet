@@ -141,15 +141,153 @@ emit mem.total_kb "$mem_total"
 emit mem.avail_kb "$mem_avail"
 
 # ---------------------------------------------------------------- gpu
-gpu_present=0; gpu_driver=""; gpu_err=""
+gpu_present=0; gpu_driver=""; gpu_err=""; gpu_vendor=""; amd_out=""
 if have nvidia-smi; then
+  gpu_vendor=nvidia
   gpu_driver=$(nvidia-smi --query-gpu=driver_version --format=csv,noheader 2>/dev/null | head -1 | clean)
   if [ -n "$gpu_driver" ]; then gpu_present=1; else
     gpu_present=err
     gpu_err=$(nvidia-smi 2>&1 >/dev/null | head -1 | clean)
   fi
 fi
+
+# AMD: amd-smi (ROCm 6.1 and later) or rocm-smi before it. Both are Python programs, so
+# python3 is there whenever they are, and reading their --json beats scraping a table
+# whose columns move between releases. Prints the same rows as the nvidia-smi queries
+# below: GPU rows, then `--`, then gpu_uuid|pid|vram_mib for each process on a card.
+amd_smi() {
+  python3 - "$1" "$FLEET_MODE" <<'PY' 2>/dev/null
+import json, re, subprocess, sys
+tool, mode = sys.argv[1], sys.argv[2]
+def run(*args):
+    try:
+        out = subprocess.run([tool, *args], capture_output=True, text=True, timeout=8).stdout
+        return json.loads(out[out.find(next(c for c in out if c in "[{")):]) if out.strip() else None
+    except Exception:
+        return None
+def num(v):
+    # 64 | "64" | "64.0 W" | {"value": 64, "unit": "MB"} | "N/A"
+    unit = ""
+    if isinstance(v, dict):
+        v, unit = v.get("value"), str(v.get("unit", ""))
+    m = re.search(r"-?\d+(\.\d+)?", str(v)) if v is not None else None
+    if not m:
+        return None, ""
+    return float(m.group()), unit or str(v)[m.end():].strip()
+def mib(v, default_unit="B"):
+    n, unit = num(v)
+    if n is None:
+        return None
+    unit = (unit or default_unit).upper()
+    scale = {"B": 1 / 2**20, "KB": 1 / 1024, "KIB": 1 / 1024, "MB": 1, "MIB": 1,
+             "GB": 1024, "GIB": 1024}.get(unit, 1 / 2**20)
+    return int(n * scale)
+def find(d, *names):
+    # the first value whose key contains one of names (case-insensitive), searched deep
+    if isinstance(d, dict):
+        for name in names:
+            for k, v in d.items():
+                leaf = not isinstance(v, (dict, list)) or (isinstance(v, dict) and "value" in v)
+                if leaf and name in str(k).lower():
+                    return v
+        for v in d.values():
+            r = find(v, *names)
+            if r is not None:
+                return r
+    elif isinstance(d, list):
+        for v in d:
+            r = find(v, *names)
+            if r is not None:
+                return r
+    return None
+gpus, apps = [], []
+def cell(x):
+    return "" if x is None else (str(int(x)) if isinstance(x, float) and x.is_integer() else str(x))
+if tool.endswith("amd-smi"):
+    static, metric = run("static", "--json") or [], run("metric", "--json") or []
+    static = static.get("gpu_data", static) if isinstance(static, dict) else static
+    metric = metric.get("gpu_data", metric) if isinstance(metric, dict) else metric
+    by = {}
+    for s in static if isinstance(static, list) else []:
+        by.setdefault(s.get("gpu"), {})["s"] = s
+    for m in metric if isinstance(metric, list) else []:
+        by.setdefault(m.get("gpu"), {})["m"] = m
+    for idx, d in sorted(by.items(), key=lambda kv: (kv[0] is None, kv[0])):
+        s, m = d.get("s", {}), d.get("m", {})
+        uuid = str(find(s, "asic_serial", "serial", "uuid") or f"amd-{idx}")
+        name = str(find(s, "market_name", "product_name", "name") or "AMD GPU")
+        total = mib(find(m.get("mem_usage", m), "total_vram"), "MB")
+        used = mib(find(m.get("mem_usage", m), "used_vram"), "MB")
+        free = mib(find(m.get("mem_usage", m), "free_vram"), "MB")
+        if free is None and total is not None and used is not None:
+            free = total - used
+        util = num(find(m.get("usage", m), "gfx_activity", "gfx_usage"))[0]
+        temp = num(find(m.get("temperature", m), "edge", "hotspot", "junction"))[0]
+        power = num(find(m.get("power", m), "socket_power", "average_socket_power"))[0]
+        gpus.append([idx, uuid, name, total, used, free, util, temp, power])
+    if mode != "shared":
+        uuid_of = {g[0]: g[1] for g in gpus}
+        procs = run("process", "--json") or []
+        procs = procs.get("gpu_data", procs) if isinstance(procs, dict) else procs
+        for entry in procs if isinstance(procs, list) else []:
+            for p in entry.get("process_list", []) or []:
+                info = p.get("process_info", p) if isinstance(p, dict) else {}
+                pid = num(info.get("pid"))[0] if isinstance(info, dict) else None
+                if pid:
+                    apps.append([uuid_of.get(entry.get("gpu"), ""), int(pid),
+                                 mib(find(info, "vram_mem", "vram"), "B") or 0])
+else:
+    data = run("--showuniqueid", "--showproductname", "--showmeminfo", "vram", "--showuse",
+               "--showtemp", "--showpower", "--json") or {}
+    cards = sorted((k for k in data if re.fullmatch(r"card\d+", k)), key=lambda k: int(k[4:]))
+    for k in cards:
+        c, idx = data[k], int(k[4:])
+        uuid = str(find(c, "unique id") or f"amd-{idx}")
+        name = str(find(c, "card series", "card model", "card sku") or "AMD GPU")
+        total, used = mib(find(c, "vram total memory")), mib(find(c, "vram total used memory"))
+        free = total - used if total is not None and used is not None else None
+        util = num(find(c, "gpu use"))[0]
+        temp = num(find(c, "temperature (sensor edge)", "temperature (sensor junction)",
+                        "temperature"))[0]
+        power = num(find(c, "average graphics package power", "current socket graphics",
+                         "power"))[0]
+        gpus.append([idx, uuid, name, total, used, free, util, temp, power])
+    if mode != "shared":
+        pids = (run("--showpids", "--json") or {}).get("system", {})
+        where = (run("--showpidgpus", "--json") or {}).get("system", {})
+        for key, val in pids.items():
+            if not key.upper().startswith("PID"):
+                continue
+            # "name, number of GPUs, VRAM bytes, SDMA bytes, CU occupancy"
+            parts = [p.strip() for p in str(val).split(",")]
+            vram = mib(parts[2]) if len(parts) > 2 else 0
+            on = [int(x) for x in re.findall(r"\d+", str(where.get(key, "")))]
+            uuid = (gpus[0][1] if len(gpus) == 1 else
+                    next((g[1] for g in gpus if on and g[0] == on[0]), ""))
+            apps.append([uuid, int(key[3:]), vram or 0])
+for g in gpus:
+    print("|".join(cell(x) for x in g))
+print("--")
+for a in apps:
+    print("|".join(cell(x) for x in a))
+PY
+}
+if [ "$gpu_present" = "0" ] && have python3; then
+  for tool in amd-smi rocm-smi; do
+    have "$tool" || continue
+    gpu_vendor=amd
+    amd_out=$(amd_smi "$(command -v "$tool")")
+    if [ -n "$(printf '%s\n' "$amd_out" | sed '/^--$/,$d')" ]; then
+      gpu_present=1
+      gpu_driver=$(head -1 /opt/rocm/.info/version 2>/dev/null | clean)
+      break
+    fi
+    gpu_present=err
+    gpu_err="$tool is installed but read no GPU -- is the amdgpu driver loaded?"
+  done
+fi
 emit gpu.present "$gpu_present"
+emit gpu.vendor "$gpu_vendor"
 emit gpu.driver "$gpu_driver"
 emit gpu.error "$gpu_err"
 
@@ -250,10 +388,23 @@ fi
 
 if [ "$gpu_present" = "1" ]; then
   echo "#GPU idx|uuid|name|total_mib|used_mib|free_mib|util_pct|temp_c|power_w"
-  nvidia-smi --query-gpu=index,uuid,name,memory.total,memory.used,memory.free,utilization.gpu,temperature.gpu,power.draw \
-    --format=csv,noheader,nounits 2>/dev/null \
-    | sed 's/, */|/g' | sed 's/ *|/|/g; s/| */|/g'
+  if [ "$gpu_vendor" = "amd" ]; then
+    printf '%s\n' "$amd_out" | sed '/^--$/,$d'
+  else
+    nvidia-smi --query-gpu=index,uuid,name,memory.total,memory.used,memory.free,utilization.gpu,temperature.gpu,power.draw \
+      --format=csv,noheader,nounits 2>/dev/null \
+      | sed 's/, */|/g' | sed 's/ *|/|/g; s/| */|/g'
+  fi
 fi
+# gpu_uuid|pid|vram_mib for each process on a GPU, from whichever vendor's tool it is.
+gpu_apps() {
+  if [ "$gpu_vendor" = "amd" ]; then
+    printf '%s\n' "$amd_out" | sed '1,/^--$/d'
+  else
+    nvidia-smi --query-compute-apps=gpu_uuid,pid,used_memory --format=csv,noheader,nounits 2>/dev/null \
+      | sed 's/, */|/g'
+  fi
+}
 
 # ---------------------------------------------------------------- processes
 # Skipped entirely in shared mode: enumerating other users' work on a machine you do
@@ -261,8 +412,7 @@ fi
 if [ "$FLEET_MODE" != "shared" ]; then
   if [ "$gpu_present" = "1" ]; then
     echo "#GPUPROC gpu_uuid|pid|vram_mib|user|etimes|comm|args"
-    nvidia-smi --query-compute-apps=gpu_uuid,pid,used_memory --format=csv,noheader,nounits 2>/dev/null \
-      | sed 's/, */|/g' | while IFS='|' read -r guuid gpid gmem; do
+    gpu_apps | while IFS='|' read -r guuid gpid gmem; do
           [ -n "$gpid" ] || continue
           # never trust nvidia-smi's process_name: for GUI apps it is ~1KB of flags.
           info=$(ps -o user=,etimes=,comm= -p "$gpid" 2>/dev/null | head -1 \

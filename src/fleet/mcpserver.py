@@ -204,7 +204,7 @@ def build_server():
     @server.tool(
         description="Every machine, with what is free right now. Filter with `tag` to "
                     "pick by capability -- repeated tags must all match. Facts include "
-                    "gpu, cuda, metal, multi-gpu, vram-NNg, linux/macos/windows, "
+                    "gpu, cuda, rocm, metal, multi-gpu, vram-NNg, linux/macos/windows, "
                     "x86_64/arm64, cores-NN, ram-NNg, storage-NNt, public-ip/mesh/lan, "
                     "rental/shared/appliance, plus any tag a human set.")
     def list_machines(names: list[str] | None = None, tag: list[str] | None = None,

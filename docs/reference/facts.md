@@ -11,9 +11,10 @@ never stored, so they cannot go stale. `fleet ls --tag WORD` matches facts and
 
 | Fact | When a machine has it |
 |---|---|
-| `gpu` | it reports an NVIDIA GPU, or `nvidia-smi` is there but failing, or it is Apple silicon |
+| `gpu` | it reports an NVIDIA or AMD GPU, or `nvidia-smi`/`amd-smi` is there but failing, or it is Apple silicon |
 | `cuda` | `nvidia-smi` lists at least one GPU |
-| `multi-gpu` | `nvidia-smi` lists more than one GPU |
+| `rocm` | `amd-smi` or `rocm-smi` lists at least one AMD GPU |
+| `multi-gpu` | more than one GPU is listed |
 | `metal` | macOS on Apple silicon (no VRAM figure: its memory is shared) |
 | `vram-Ng` | its **largest single card** has at least N GiB (see the steps below) |
 | `cores-N` | at least N logical CPUs (a 16-core CPU with hyperthreading has 32) |
@@ -77,6 +78,7 @@ NOTE column. In order:
 | *gpuN: … MiB held by processes not visible to us -- do not treat as free* | a GPU's used memory exceeds what its visible processes account for by 256 MiB or more |
 | *disk MOUNT: N% full, NG left -- a long job will die on this* | a writable volume is at least 90% full |
 | *nvidia-smi present but failing: …* | `nvidia-smi` is installed but failing |
+| *amd-smi is installed but read no GPU -- is the amdgpu driver loaded?* | `amd-smi` or `rocm-smi` is there, and lists no card |
 | *… -- its notes and paths were not read* | the machine's [`machine.yaml`](../guides/resources.md#machineyaml) could not be read |
 | *KIND folder PATH does not exist there* | a folder named in `machine.yaml` is not on the machine |
 | *shared multi-user host -- not claimable* | always, for a `shared` machine |
@@ -95,7 +97,7 @@ older description of fleet.
 | Host | hostname, OS, kernel, architecture, uptime, logged-in users, container and rental signs | hostname, OS, version, architecture, uptime, logged-in users |
 | CPU | logical cores, model, load average | logical cores, model, current load |
 | Memory | total and available | total and free |
-| GPUs | per card from `nvidia-smi`: name, memory total/used/free, utilisation, temperature, power | the same, when `nvidia-smi` is on the PATH |
+| GPUs | per card from `nvidia-smi`, or for AMD from `amd-smi` (or `rocm-smi`): name, memory total/used/free, utilisation, temperature, power | NVIDIA, when `nvidia-smi` is on the PATH |
 | Disks | `/` and mounts under `/workspace`, `/data`, `/mnt`, `/home`, `/srv`, `/opt`, `/Volumes`, `/scratch` (or the paths set with `fleet edit --disk-path`) | fixed drives (or the paths set) |
 | Processes | GPU processes, and the busiest CPU processes | — |
 | Services | listening TCP ports, named by the program behind them | — |

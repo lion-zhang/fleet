@@ -86,7 +86,7 @@ contacts none of it. `fleet add NAME` adds one.
 
 Every reading is one script, piped over one SSH connection: `payload.sh` on Linux and
 macOS, `payload.ps1` on Windows — fleet notices which from the first answer. The script
-prints sections (host, CPU, memory, GPUs from `nvidia-smi`, disks, processes, listening
+prints sections (host, CPU, memory, GPUs from `nvidia-smi` or `amd-smi`, disks, processes, listening
 ports, model servers, software, the machine's own `machine.yaml`), and fleet parses them
 into a reading in `cache.db`. Nothing is installed. On Linux and macOS the script runs
 from a temporary file, removed when it finishes, and keeps two slow answers — folder
