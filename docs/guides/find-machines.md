@@ -39,7 +39,7 @@ and they cannot go stale: take a GPU out, and its facts go with it.
 
 | Facts | Meaning |
 |---|---|
-| `gpu`, `cuda`, `metal`, `multi-gpu` | it has a GPU; NVIDIA with a working driver; Apple silicon; more than one card |
+| `gpu`, `cuda`, `rocm`, `metal`, `multi-gpu` | it has a GPU; NVIDIA with a working driver; AMD with a working driver; Apple silicon; more than one card |
 | `vram-24g`, `vram-48g`, … | its largest card has at least that much memory |
 | `cores-16`, `ram-64g`, `storage-4t` | at least that many logical CPUs, that much memory, that much room on its largest volume |
 | `linux`, `macos`, `windows`, `x86_64`, `arm64` | what it runs |
@@ -52,11 +52,13 @@ exact steps are in the [reference](../reference/facts.md).
 ```bash
 fleet ls --tag cuda                      # every NVIDIA machine
 fleet ls --tag cuda --tag vram-24g       # ...with a card of at least 24 GB
+fleet ls --tag rocm                      # every AMD machine
 fleet ls --tag linux --tag ram-64g       # repeats mean "and"
 ```
 
-`gpu` without `cuda` means the card is there but its driver is not answering — often
-after a kernel upgrade — so the machine is kept away from CUDA work. A machine fleet has
+`gpu` without `cuda` or `rocm` means the card is there but its driver is not answering —
+often after a kernel upgrade — so the machine is kept away from GPU work. `rocm` and
+`cuda` never come together: an agent picks the matching build of torch for each. A machine fleet has
 never measured has only the facts its record gives it (its kind, `public-ip`) and matches
 nothing else; `fleet ls --tag` says how many it had to leave out.
 
@@ -130,7 +132,7 @@ of them, and treats them as blocking:
   why ([more](reaching-machines.md#when-a-machine-refuses));
 - **VRAM held by processes fleet cannot see** — do not treat it as free;
 - a **disk at 90%** or more;
-- **`nvidia-smi` failing**;
+- **`nvidia-smi` failing**, or an AMD tool (`amd-smi`, `rocm-smi`) that reads no card;
 - a **shared multi-user host** — not for claiming;
 - an **idle rental**.
 

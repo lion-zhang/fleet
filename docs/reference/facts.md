@@ -99,7 +99,7 @@ older description of fleet.
 | Memory | total and available | total and free |
 | GPUs | per card from `nvidia-smi`, or for AMD from `amd-smi` (or `rocm-smi`): name, memory total/used/free, utilisation, temperature, power | NVIDIA, when `nvidia-smi` is on the PATH |
 | Disks | `/` and mounts under `/workspace`, `/data`, `/mnt`, `/home`, `/srv`, `/opt`, `/Volumes`, `/scratch` (or the paths set with `fleet edit --disk-path`) | fixed drives (or the paths set) |
-| Processes | GPU processes, and the busiest CPU processes | — |
+| Processes | GPU processes, and the busiest CPU processes | GPU processes (from `nvidia-smi`) |
 | Services | listening TCP ports, named by the program behind them | — |
 | SLURM | your jobs and the partitions, on `shared` machines | — |
 

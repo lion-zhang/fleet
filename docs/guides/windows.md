@@ -44,6 +44,8 @@ say so:
 - `fleet edit box --path models=D:\models` writes the machine's notes to
   `%LOCALAPPDATA%\fleet\machine.yaml`; a machine-wide file can sit in
   `%ProgramData%\fleet\machine.yaml` ([more](resources.md#machineyaml)).
+- NVIDIA cards and their jobs are read with `nvidia-smi`, as on Linux. AMD cards are not
+  read on Windows yet.
 
 ## Running fleet on Windows
 
