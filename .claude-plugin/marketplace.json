@@ -11,7 +11,7 @@
     {
       "name": "fleet",
       "source": "./",
-      "description": "Every machine you have, for your coding agent: live GPU, VRAM, RAM and disk, and SSH.",
+      "description": "Every machine you have, for your agent: free GPUs, jobs, served models, software, over SSH.",
       "version": "0.5.2",
       "author": {
         "name": "Lin Zhang",

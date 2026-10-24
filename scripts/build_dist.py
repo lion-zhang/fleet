@@ -37,7 +37,7 @@ from fleet.cli import app  # noqa: E402
 NAME = "fleet"
 MCP_NAME = "io.github.lion-zhang/fleet"
 # The registry caps a description at 100 characters; one sentence serves everywhere.
-SHORT = "Every machine you have, for your coding agent: live GPU, VRAM, RAM and disk, and SSH."
+SHORT = "Every machine you have, for your agent: free GPUs, jobs, served models, software, over SSH."
 AUTHOR = {"name": "Lin Zhang", "url": "https://github.com/lion-zhang"}
 KEYWORDS = ["gpu", "inventory", "ssh", "remote", "compute", "mcp", "homelab", "mlops"]
 # What a client runs. `uvx` builds the environment on first use and caches it.
@@ -48,7 +48,7 @@ HOOK = ("command -v fleet >/dev/null 2>&1 || [ -x \"$HOME/.local/bin/fleet\" ] |
         "machine. If the user asks about their machines, GPUs or remote compute, tell "
         f"them it installs with: curl -LsSf {links.INSTALL_SH} | sh   (Windows: "
         f"irm {links.INSTALL_PS1} | iex, or anywhere: uv tool install {links.PACKAGE}). "
-        "Do not install it unasked: it makes this machine the center of a new fleet. "
+        "Do not install it unasked. "
         f"When they ask, follow {links.REPO}/blob/main/INSTALL.md.'")
 
 
@@ -190,10 +190,10 @@ def outputs() -> dict[str, str]:
             "manifest_version": "0.4", "name": NAME, "display_name": "fleet", "version": v,
             "description": SHORT,
             "long_description": ("Lets Claude see every machine you have -- which GPUs are "
-                                 "free, how much VRAM, RAM and disk -- and run commands on "
-                                 "them over SSH. Runs the fleet CLI, which keeps its state "
-                                 "on this machine; the first use makes this machine the "
-                                 "center of a new fleet."),
+                                 "free and what is running on them, the models served, the "
+                                 "software installed, where models and data live -- and run "
+                                 "commands on them over SSH, exactly as you would connect. "
+                                 "Runs the fleet CLI, which keeps its state on this machine."),
             "author": AUTHOR, "homepage": links.REPO, "documentation": links.REPO,
             "support": f"{links.REPO}/issues",
             "repository": {"type": "git", "url": links.REPO},

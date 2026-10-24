@@ -3,8 +3,8 @@
   "name": "fleet",
   "display_name": "fleet",
   "version": "0.5.2",
-  "description": "Every machine you have, for your coding agent: live GPU, VRAM, RAM and disk, and SSH.",
-  "long_description": "Lets Claude see every machine you have -- which GPUs are free, how much VRAM, RAM and disk -- and run commands on them over SSH. Runs the fleet CLI, which keeps its state on this machine; the first use makes this machine the center of a new fleet.",
+  "description": "Every machine you have, for your agent: free GPUs, jobs, served models, software, over SSH.",
+  "long_description": "Lets Claude see every machine you have -- which GPUs are free and what is running on them, the models served, the software installed, where models and data live -- and run commands on them over SSH, exactly as you would connect. Runs the fleet CLI, which keeps its state on this machine.",
   "author": {
     "name": "Lin Zhang",
     "url": "https://github.com/lion-zhang"

@@ -1,7 +1,7 @@
 # Security
 
-fleet places SSH keys on your machines, so a flaw in it can matter. Thank you for
-reporting one.
+fleet logs in to your machines over SSH and reports what is on them to your agents, so a
+flaw in it can matter. Thank you for reporting one.
 
 ## Reporting a problem
 
@@ -20,14 +20,20 @@ Fixes go into the latest release. Upgrade with `fleet update`, or
 ## What counts
 
 For example:
-- a way for one machine to reach another it was never granted;
-- a way for a revoke to report success while the key stays in place;
-- a way for anyone but the center to get a key into `authorized_keys`;
-- a key or password reaching the agent, a log or a file;
-- fleet changing a line in `authorized_keys` it did not write.
+- fleet writing to a machine anything but what [What fleet changes](docs/guides/what-fleet-changes.md)
+  lists;
+- a key, a password or a token reaching the agent, a log or a file -- a GPU job's
+  command line is shown with anything that looks like a secret replaced, and a way
+  round that counts;
+- a machine's own `machine.yaml` (which whoever controls that machine writes) getting
+  fleet to run something, to read a file it should not, or to pass anything but the
+  checked fields on to an agent;
+- the probe running something on a machine beyond what `src/fleet/probe/payload.sh`
+  (`payload.ps1` on Windows) says it does.
 
-Some things are known limits of the design, not flaws: whoever controls the center
-controls the fleet, and anyone with root on a machine can add a key back. They are
-listed in the [threat model](docs/design/access.md#threat-model-plainly). Everything fleet
-writes, and how to remove it, is in
-[What fleet changes](docs/guides/what-fleet-changes.md).
+Some things are outside what fleet decides, by design. fleet manages no access: who may
+reach which machine is decided by your SSH setup -- your keys, your ssh config, your
+Tailscale SSH policy, your rental provider -- and fleet connects exactly as you do. A
+machine you can log in to, fleet can log in to, and so can an agent you let run `fleet
+ssh`. How to reach each kind of machine, and what fleet will never do, is in
+[Reaching your machines](docs/guides/reaching-machines.md).

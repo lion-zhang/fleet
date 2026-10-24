@@ -1,7 +1,7 @@
 [project]
 name = "agents-fleet"
 version = "0.5.2"
-description = "Give Claude Code, Codex and Gemini every machine you have: a live GPU, VRAM, RAM and disk inventory across your servers, SSH access between them, and an MCP server."
+description = "Give Claude Code, Codex and Gemini every machine you have: free GPUs, running jobs, served models, installed software and data folders across your servers, over the SSH you already use, plus an MCP server."
 readme = "README.md"
 requires-python = ">=3.12"
 license = "MIT"
@@ -47,10 +47,6 @@ Documentation = "https://github.com/lion-zhang/fleet/blob/main/docs/README.md"
 Issues = "https://github.com/lion-zhang/fleet/issues"
 
 [project.optional-dependencies]
-# Only for `fleet access --migrate`, which reads passwords an older fleet stored.
-# Deliberately not dropped in the same release that added the migration: that would
-# strand the data behind a dependency you can no longer install.
-migrate = ["pyrage>=1.1"]
 # Kept so `agents-fleet[mcp]` in older notes still resolves; mcp is a core dependency now.
 mcp = []
 

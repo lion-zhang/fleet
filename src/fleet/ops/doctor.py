@@ -64,7 +64,15 @@ def _provider(dev: Device, snap: dict | None) -> str:
 
 
 def _key_lines(ep: Endpoint | None, *, windows: bool) -> list[str]:
-    found = keys.public_key()
+    # The key this machine is reached with, when the endpoint names one; else yours.
+    found = None
+    if ep is not None and ep.identity:
+        from pathlib import Path
+
+        pub = Path(ep.identity + ".pub")
+        if pub.is_file() and (text := pub.read_text(encoding="utf-8").strip()):
+            found = (pub, text)
+    found = found or keys.public_key()
     if found is None:
         return ["you have no ssh key yet -- make one first:  ssh-keygen -t ed25519",
                 "then run fleet doctor again for the line that puts it on the machine"]
@@ -155,7 +163,7 @@ def advise(dev: Device, status: str, detail: str, *, snap: dict | None = None,
                  "-i ~/.ssh/THE_KEY\""]
         return v
     v.why = "it is up, but does not accept your key" + (
-        " (a password-only login cannot be used by an agent)" if "password" in text else "")
+        " -- it would take a password, which fleet never uses" if "password" in text else "")
     v.fix = _key_lines(ep, windows=windows)
     return v
 
@@ -174,7 +182,9 @@ def diagnose(dev: Device, *, state: dict | None, snap: dict | None) -> Verdict:
     eps = inv.endpoints_of(dev)
     if not eps:
         return advise(dev, "unreachable", "", snap=snap)
-    res = probe_endpoints(eps, mode=dev.probe_mode, timeout=20)
+    # A fresh connection, not a multiplexed one: an open master from a minute ago would
+    # answer for a machine that has since stopped letting us in.
+    res = probe_endpoints(eps, mode=dev.probe_mode, timeout=20, multiplex=False)
     if res.ok:
         return advise(dev, Status.OK.value, "", snap=snap)
     server, verbose = ("", "")
