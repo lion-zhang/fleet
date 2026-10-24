@@ -112,10 +112,22 @@ def cmd_ls(names: list[str] = typer.Argument(None, help="only these devices"),
            json_out: bool = typer.Option(False, "--json", help="print JSON instead of a table, for scripts and agents"),
            refresh: bool = typer.Option(False, "--refresh", "-r", help="force a live probe"),
            rescan: bool = typer.Option(False, "--rescan", help="also re-read software versions and folder sizes, which machines otherwise cache for 6 hours"),
+           wait: int = typer.Option(0, "--wait", metavar="SECONDS",
+                                    help="with --rescan: wait up to this long for the folder sizes it started measuring"),
            online: bool = typer.Option(False, "--online", help="only reachable devices"),
            discover: bool = typer.Option(False, "--discover",
                                          help="list machines in your ~/.ssh/config and on "
                                               "your tailnet that are not added yet"),
+           hide: list[str] = typer.Option(None, "--hide", metavar="NAME",
+                                          help="with --discover: never offer this one again; "
+                                               "repeatable"),
+           unhide: list[str] = typer.Option(None, "--unhide", metavar="NAME",
+                                            help="with --discover: offer it again"),
+           show_all: bool = typer.Option(False, "--all",
+                                         help="with --discover: include hidden ones"),
+           fields: str = typer.Option(None, "--fields", metavar="A,B,...",
+                                      help="with --json: only these keys of each machine, "
+                                           "e.g. free_vram_mib,gpus,usd_per_hour"),
            tag: list[str] = typer.Option(None, "--tag", metavar="NAME",
                                          help="only machines carrying this tag or fact; "
                                               "repeatable, and all must match")):
@@ -124,8 +136,8 @@ def cmd_ls(names: list[str] = typer.Argument(None, help="only these devices"),
     [dim]Example:[/dim]  fleet ls --json
     """
     _first_run("ls")
-    if discover:
-        _print_discovered(json_out)
+    if discover or hide or unhide:
+        _print_discovered(json_out, hide=hide or [], unhide=unhide or [], show_all=show_all)
         return
     # A name that matches nothing is said, and fails: `fleet ls TYPO --json` answered an
     # empty list and exit 0, which an agent reads as "nothing wrong, nothing there".
@@ -136,7 +148,8 @@ def cmd_ls(names: list[str] = typer.Argument(None, help="only these devices"),
             err.print(f"[red]No machine named {', '.join(repr(n) for n in unknown)}[/red] "
                       "[dim]-- `fleet ls` lists them all[/dim]")
         raise typer.Exit(1)
-    rows = _rows(list(names) if names else None, refresh=refresh, rescan=rescan)
+    rows = _rescanned(list(names) if names else None, refresh=refresh, rescan=rescan,
+                      wait=wait, detail=Detail.COMPACT)
     if online:
         rows = [r for r in rows if r["status"] == "ok"]
     if tag:
@@ -152,6 +165,9 @@ def cmd_ls(names: list[str] = typer.Argument(None, help="only these devices"),
             err.print(f"[dim]! {len(blind)} with no telemetry were not considered: "
                       f"{', '.join(sorted(blind)[:6])}[/dim]")
     view = fleet_view(rows)
+    if fields and json_out:
+        wanted = [f.strip() for f in fields.split(",") if f.strip()]
+        view = {**view, "devices": [view_mod.select_fields(r, wanted) for r in rows]}
     if _emit(view, json_out):
         return
     if not rows:
@@ -168,12 +184,67 @@ def cmd_ls(names: list[str] = typer.Argument(None, help="only these devices"),
                   + (f" · ${s['hourly_burn']:.2f}/hr burning" if s["hourly_burn"] else "") + "[/dim]")
 
 
-def _print_discovered(json_out: bool) -> None:
+def _rescanned(names: list[str] | None, *, refresh: bool, rescan: bool, wait: int,
+               detail: Detail) -> list[dict]:
+    """Rows, and with `--rescan --wait N`, rows once the folder sizes are new.
+
+    The sizes come from a `du` the rescan starts in the background on each machine -- a
+    probe never waits on it, because on a disk of model weights it can take minutes. So
+    this waits here instead, re-reading every two seconds until every machine's sizes are
+    newer than they were before (compared with themselves, not with this machine's clock,
+    which the other one's need not agree with), or until the time is up.
+    """
+    if not (rescan and wait > 0):
+        return _rows(names, refresh=refresh, rescan=rescan, detail=detail)
+    devices = inv.live(inv.load())
+    if names:
+        devices = [d for d in (inv.find(devices, n) for n in names) if d]
+
+    def stamps() -> dict[str, set]:
+        """Each answering machine's folders and when each was sized. One that is not
+        answering is left out: waiting for it would only use up the time."""
+        conn = store.connect()
+        try:
+            out = {}
+            for d in devices:
+                state, snap = store.latest(conn, d.id)
+                if (state or {}).get("status") != Status.OK.value:
+                    continue
+                out[d.id] = {(st.get("path"), st.get("sized_at"))
+                             for st in (snap or {}).get("storage", []) if st.get("exists")}
+            return out
+        finally:
+            conn.close()
+
+    before = stamps()
+    rows = _rows(names, refresh=True, rescan=True, detail=detail)
+    deadline = time.monotonic() + wait
+    while time.monotonic() < deadline:
+        now = stamps()
+        pending = [d for d in devices if now.get(d.id) and any(
+            at is None or (path, at) in before.get(d.id, set()) for path, at in now[d.id])]
+        if not pending:
+            break
+        time.sleep(2)
+        rows = _rows(names, refresh=True, detail=detail)
+    else:
+        err.print(f"[dim]! folder sizes still being measured after {wait}s; they show on a "
+                  "later reading[/dim]")
+    return rows
+
+
+def _print_discovered(json_out: bool, *, hide: list[str] = (), unhide: list[str] = (),
+                      show_all: bool = False) -> None:
     """`fleet ls --discover`: what your ssh config and tailnet know that fleet does not."""
     from .ops import discover
 
-    found = discover.candidates()
-    if _emit({"candidates": [c.to_dict() for c in found]}, json_out):
+    if hide:
+        discover.set_hidden(list(hide), hide=True)
+    if unhide:
+        discover.set_hidden(list(unhide), hide=False)
+    found = discover.candidates(include_hidden=show_all)
+    if _emit({"candidates": [c.to_dict() for c in found],
+              "hidden": sorted(discover.hidden())}, json_out):
         return
     new = [c for c in found if not c.added]
     if not found:
@@ -192,13 +263,18 @@ def _print_discovered(json_out: bool) -> None:
     added = [c for c in found if c.added]
     if added:
         console.print(f"\n[dim]already added: {', '.join(c.added for c in added)}[/dim]")
+    if (gone := discover.hidden()) and not show_all:
+        console.print(f"[dim]hidden ({len(gone)}): --all lists them, --unhide NAME offers "
+                      "one again[/dim]")
 
 
 @app.command("show")
 def cmd_show(name: str = typer.Argument(None, help="defaults to this machine"),
              json_out: bool = typer.Option(False, "--json", help="print JSON instead of a table, for scripts and agents"),
              refresh: bool = typer.Option(True, "--refresh/--no-refresh", help="probe it now; --no-refresh shows the last reading"),
-             rescan: bool = typer.Option(False, "--rescan", help="also re-read software versions and folder sizes, which machines otherwise cache for 6 hours")):
+             rescan: bool = typer.Option(False, "--rescan", help="also re-read software versions and folder sizes, which machines otherwise cache for 6 hours"),
+             wait: int = typer.Option(0, "--wait", metavar="SECONDS",
+                                      help="with --rescan: wait up to this long for the folder sizes it started measuring")):
     """Full detail for one device.
 
     [dim]Example:[/dim]  fleet show machine_A
@@ -216,7 +292,8 @@ def cmd_show(name: str = typer.Argument(None, help="defaults to this machine"),
         else:
             name = _this_machine(inv.load(), "show").name
     if not unrecorded:
-        rows = _rows([name], refresh=refresh, detail=Detail.FULL, rescan=rescan)
+        rows = _rescanned([name], refresh=refresh, rescan=rescan, wait=wait,
+                          detail=Detail.FULL)
         if not rows:
             err.print(f"[red]No device named {name!r}.[/red]  Try [bold]fleet ls[/bold]")
             raise typer.Exit(1)
@@ -317,16 +394,23 @@ def _print_show(r: dict) -> None:
         console.print(f"  [dim]{r['notes'].strip()}[/dim]")
 
 
-def _edit_machine_paths(dev, specs: list[str], json_out: bool) -> None:
-    """`fleet edit NAME --path models=/data/models`: change the machine's own file."""
+def _edit_machine_file(dev, json_out: bool, *, paths: list[str], endpoints: list[str],
+                       note: str | None, tags_add: list[str], tags_remove: list[str],
+                       cost: float | None) -> None:
+    """Change the machine's own machine.yaml: folders, declared servers, tags, cost, note.
+
+    Never falls back to this machine's list when the machine cannot be reached: a change
+    that silently landed somewhere else would read back as done, and be invisible to
+    everyone else who looks at that machine. `--local` is how to ask for that.
+    """
     from .ops import machinefile
 
     wanted: dict[str, list[str] | None] = {}
-    for spec in specs:
+    for spec in paths:
         kind, sep, value = spec.partition("=")
         kind = kind.strip().lower()
         if not sep or not notes_mod.valid_kind(kind):
-            err.print(f"[red]--path {spec!r}[/red] is not KIND=PATH  "
+            err.print(f"[red]--path {escape(repr(spec))}[/red] is not KIND=PATH  "
                       "[dim]e.g. --path models=/data/models (kinds: "
                       f"{', '.join(notes_mod.KINDS)}, or your own)[/dim]")
             raise typer.Exit(2)
@@ -334,6 +418,18 @@ def _edit_machine_paths(dev, specs: list[str], json_out: bool) -> None:
             wanted.setdefault(kind, []).append(value.strip())  # type: ignore[union-attr]
         else:
             wanted[kind] = None
+    servers: dict[str, str | None] = {}
+    for spec in endpoints:
+        name, sep, value = spec.partition("=")
+        name = name.strip().lower()
+        if not sep or not notes_mod.valid_kind(name) or (
+                value.strip() and notes_mod.endpoint_spec(value) is None):
+            err.print(f"[red]--endpoint {escape(repr(spec))}[/red] is not "
+                      f"{escape('NAME=PORT[/PATH]')}  "
+                      "[dim]e.g. --endpoint myllm=9000 or myllm=9000/v1; myllm= removes "
+                      "it[/dim]")
+            raise typer.Exit(2)
+        servers[name] = value.strip() or None
     here = bool(identity.local_device_id()) and dev.id == identity.local_device_id()
     if not here:
         # `--path models=~/models` reaches us with `~` already turned into *this* machine's
@@ -355,26 +451,42 @@ def _edit_machine_paths(dev, specs: list[str], json_out: bool) -> None:
         err.print(f"[red]{dev.name} has no address to reach it at[/red]")
         raise typer.Exit(1)
     try:
-        before, after = machinefile.change(None if here else eps[0],
-                                           machinefile.platform_of(snap, here=here),
-                                           paths=wanted)
+        before, after = machinefile.change(
+            None if here else eps[0], machinefile.platform_of(snap, here=here),
+            paths=wanted or None, endpoints=servers or None, note=note,
+            tags_add=tags_add, tags_remove=tags_remove,
+            cost=cost if cost else None, clear_cost=cost == 0)
     except (machinefile.MachineFileError, notes_mod.NotesError) as exc:
-        if not _emit({"ok": False, "name": dev.name, "error": str(exc)}, json_out):
+        if not _emit({"ok": False, "name": dev.name, "error": str(exc),
+                      "hint": "--local keeps tags and cost in this machine's own list"},
+                     json_out):
             err.print(f"[red]Could not change {dev.name}'s machine.yaml:[/red] {exc}")
+            if tags_add or tags_remove or cost is not None:
+                err.print("  [dim]to keep tags or cost here instead: add --local[/dim]")
         raise typer.Exit(1)
-    result = notes_mod.parse(after).get("paths", {})
-    if _emit({"ok": True, "name": dev.name, "changed": before != after, "paths": result},
-             json_out):
+    result = notes_mod.parse(after)
+    if _emit({"ok": True, "name": dev.name, "changed": before != after, **result}, json_out):
         return
     if before == after:
-        console.print(f"[dim]· {dev.name}'s paths already say that.[/dim]")
+        console.print(f"[dim]· {dev.name}'s machine.yaml already says that.[/dim]")
         return
-    for kind, items in result.items():
-        console.print(f"[green]✓[/green] {dev.name} {kind}: {', '.join(items)}")
-    for kind in (k for k, v in wanted.items() if v is None):
-        console.print(f"[green]✓[/green] {dev.name} {kind}: [dim]cleared[/dim]")
-    console.print("  [dim]kept in machine.yaml on the machine itself, so every fleet that "
-                  "looks at it reads the same; sizes show after the next probe[/dim]")
+    for kind in wanted:
+        items = result.get("paths", {}).get(kind)
+        console.print(f"[green]✓[/green] {dev.name} {kind}: "
+                      + (", ".join(items) if items else "[dim]cleared[/dim]"))
+    for name in servers:
+        ep = result.get("endpoints", {}).get(name)
+        console.print(f"[green]✓[/green] {dev.name} server {name}: "
+                      + (f":{ep['port']}{ep['path']}" if ep else "[dim]removed[/dim]"))
+    if tags_add or tags_remove:
+        console.print(f"[green]✓[/green] {dev.name} tags: {' '.join(result.get('tags', [])) or '-'}")
+    if cost is not None:
+        c = (result.get("cost") or {}).get("usd_per_hour")
+        console.print(f"[green]✓[/green] {dev.name} cost: " + (f"${c:.2f}/hr" if c else "cleared"))
+    if note is not None:
+        console.print(f"[green]✓[/green] {dev.name} note: " + (result.get("notes") or "cleared"))
+    console.print("  [dim]kept in machine.yaml on the machine itself, so everyone who looks "
+                  "at it reads the same; it shows from the next probe[/dim]")
 
 
 def _tags(values) -> list[str] | None:
@@ -692,16 +804,26 @@ def cmd_edit(name: str = typer.Argument(None, help="defaults to this machine"),
              cost: float = typer.Option(None, "--cost", metavar="USD",
                                         help="what it costs per hour, for the $/HR column "
                                              "and the fleet's burn rate; 0 clears it"),
+             note: str = typer.Option(None, "--note", metavar="TEXT",
+                                      help='a line about the machine; --note "" clears it'),
              path: list[str] = typer.Option(None, "--path", metavar="KIND=PATH",
                                             help="where this machine keeps models, datasets, "
                                                  "media...: models=/data/models; repeat a "
-                                                 "kind for several, models= clears it. "
-                                                 "Written to the machine's own machine.yaml"),
+                                                 "kind for several, models= clears it"),
+             endpoint: list[str] = typer.Option(None, "--endpoint", metavar="NAME=PORT[/PATH]",
+                                                help="a model server fleet would not find by "
+                                                     "itself: myllm=9000 or myllm=9000/v1; "
+                                                     "myllm= removes it. Never a key"),
+             local: bool = typer.Option(False, "--local",
+                                        help="keep --tag/--untag/--cost in this machine's own "
+                                             "list instead of on that machine"),
              json_out: bool = typer.Option(False, "--json", help="print JSON instead of a table, for scripts and agents")):
     """Change a device's address or settings after it was added.
 
     Rentals recycle IPs and ports, so `--ssh` re-points a device without losing its
-    name, tags, cost or history.
+    name, tags, cost or history. Tags, cost, a note, folders (`--path`) and declared
+    servers (`--endpoint`) are written to that machine's own machine.yaml, so everyone
+    who looks at it reads the same; `--local` keeps tags and cost here instead.
 
     [dim]Example:[/dim]  fleet edit machine_A --ssh "ssh -p 40001 root@5.6.7.8"
     """
@@ -711,8 +833,17 @@ def cmd_edit(name: str = typer.Argument(None, help="defaults to this machine"),
         err.print(f"[red]No device named {name!r}[/red]")
         raise typer.Exit(1)
 
-    if path:
-        _edit_machine_paths(dev, path, json_out)
+    on_machine = bool(path or endpoint or note is not None
+                      or (not local and (tag or untag or cost is not None)))
+    if on_machine:
+        _edit_machine_file(dev, json_out, paths=path or [], endpoints=endpoint or [],
+                           note=note,
+                           tags_add=[] if local else (_tags(tag) or []),
+                           tags_remove=[] if local else (_tags(untag) or []),
+                           cost=None if local else cost)
+        if not local:
+            tag = untag = None
+            cost = None
         if not any(v not in (None, False, []) for v in (
                 ssh_command, disk_path, clear_disk_paths, new_name, new_alias, tag, untag,
                 cost)):
@@ -1042,7 +1173,7 @@ def cmd_update(name: str = typer.Argument(None, help="defaults to this machine")
 
 
 def _named_rows(names: list[str] | None, json_out: bool, *, refresh: bool,
-                detail: Detail) -> list[dict]:
+                detail: Detail, rescan: bool = False) -> list[dict]:
     """The rows for `ps` and `models`: every machine, or the named ones, as `ls` gets them."""
     _first_run("ls")
     unknown = [n for n in (names or []) if inv.find(inv.load(), n) is None]
@@ -1052,7 +1183,8 @@ def _named_rows(names: list[str] | None, json_out: bool, *, refresh: bool,
             err.print(f"[red]No machine named {', '.join(repr(n) for n in unknown)}[/red] "
                       "[dim]-- `fleet ls` lists them all[/dim]")
         raise typer.Exit(1)
-    return _rows(list(names) if names else None, refresh=refresh, detail=detail)
+    return _rows(list(names) if names else None, refresh=refresh, detail=detail,
+                 rescan=rescan)
 
 
 @app.command("ps")
@@ -1074,12 +1206,13 @@ def cmd_ps(names: list[str] = typer.Argument(None, help="only these machines"),
 @app.command("models")
 def cmd_models(names: list[str] = typer.Argument(None, help="only these machines"),
                json_out: bool = typer.Option(False, "--json", help="print JSON instead of a table, for scripts and agents"),
-               refresh: bool = typer.Option(False, "--refresh", "-r", help="force a live probe")):
+               refresh: bool = typer.Option(False, "--refresh", "-r", help="force a live probe"),
+               rescan: bool = typer.Option(False, "--rescan", help="also re-measure the model folders, which machines otherwise cache for 6 hours")):
     """Every model being served across the fleet: which server, where, and how to reach it.
 
     [dim]Example:[/dim]  fleet models --json
     """
-    rows = _named_rows(names, json_out, refresh=refresh, detail=Detail.COMPACT)
+    rows = _named_rows(names, json_out, refresh=refresh, detail=Detail.FULL, rescan=rescan)
     view = view_mod.models_view(rows)
     if _emit(view, json_out):
         return

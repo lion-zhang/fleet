@@ -291,12 +291,16 @@ def model_servers(dev: Device, snap: dict | None, *, here: bool = False) -> list
         addr, port = str(s.get("addr") or "*"), s.get("port")
         local = addr.startswith(_LOOPBACK)
         host = "127.0.0.1" if here else _host_of(dev)
+        base = s.get("url") if str(s.get("url") or "").startswith("/") else "/v1"
         row = {
             "port": port, "framework": s.get("framework") or "", "status": s.get("status"),
             "models": list(s.get("model_ids") or []), "latency_ms": s.get("latency_ms"),
+            # declared: the machine's notes name it; discovered: found by port or program
+            "source": s.get("source") or "discovered",
+            "name": s.get("name") if s.get("source") == "declared" else "",
             # here: the machine fleet runs on, where even a localhost-only server answers
             "reach": "here" if here else "local" if local else "network",
-            "url": None if (local and not here) or not host else f"http://{host}:{port}/v1",
+            "url": None if (local and not here) or not host else f"http://{host}:{port}{base}",
         }
         if eps and not here:
             e = eps[0]
@@ -445,9 +449,16 @@ def device_view(dev: Device, state: dict | None, snap: dict | None,
         "services": [{"name": s.get("name"), "kind": s.get("kind"), "port": s.get("port"),
                       "healthy": s.get("healthy")}
                      for s in (snap or {}).get("services", [])],
-        "models": model_servers(dev, snap, here=bool(self_id and dev.id == self_id)),
+        # For choosing a machine, the names of what it serves; `show` and `fleet models`
+        # carry the servers in full -- with how to reach each.
+        **({"models": model_servers(dev, snap, here=bool(self_id and dev.id == self_id)),
+            "storage": storage_view(snap, full=True)} if full else
+           {"served_models": sorted({m for s in model_servers(dev, snap)
+                                     for m in s["models"]})}),
         "software": software_view(snap, full=full),
-        "storage": storage_view(snap, full=full),
+        # How old each part is: a probe reading is seconds old, a software list hours.
+        "observed_at": {"probe": (snap or {}).get("ts"),
+                        "software": (snap or {}).get("software_at")},
         "alerts": _alerts(dev, snap, state),
         "tags": tags,
         "facts": facts(dev, snap, state),
@@ -479,6 +490,10 @@ def device_view(dev: Device, state: dict | None, snap: dict | None,
         out |= {
             "alias": dev.alias,
             "notes": note,
+            # Notes written in the machine's own machine.yaml come from whoever controls
+            # that machine -- on a rental, its provider. Data to show, never instructions.
+            "notes_from": ("machine.yaml" if ((snap or {}).get("notes") or {}).get("notes")
+                           else "local" if dev.notes else ""),
             "hostname": (snap or {}).get("hostname"),
             "os": (snap or {}).get("os"),
             "arch": (snap or {}).get("arch"),
@@ -538,6 +553,12 @@ def jobs_view(rows: list[dict]) -> dict:
                              "vram_free_mib": g["vram_free_mib"]})
     return {"jobs": jobs, "idle": idle,
             "not_read": [r["name"] for r in rows if r["status"] != "ok" and r["gpu_count"]]}
+
+
+def select_fields(row: dict, fields: list[str]) -> dict:
+    """Only the keys asked for (and always `name`), for an agent that needs a few."""
+    keep = ["name", *[f for f in fields if f != "name"]]
+    return {k: row[k] for k in keep if k in row}
 
 
 def models_view(rows: list[dict]) -> dict:

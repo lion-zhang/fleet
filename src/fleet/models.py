@@ -184,6 +184,8 @@ class Snapshot:
     storage: list[StorePath] = field(default_factory=list)
     # cuda, nvcc, cudnn, rocm, python, uv, docker, ... -> version (or where it is)
     software: dict[str, str] = field(default_factory=dict)
+    # When the software list was read on the machine (it is cached there for hours).
+    software_at: int | None = None
     pyenvs: list[PyPackage] = field(default_factory=list)
     # None when the probe did not look (a light probe, or no docker), not "none running".
     containers: list[Container] | None = None

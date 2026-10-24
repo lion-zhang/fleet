@@ -60,6 +60,18 @@ waits at most two seconds for each.
 A server that answers `401` is shown as *wants an API key*: it is running, but fleet
 cannot see its models without the key, and does not ask for it.
 
+**A server fleet does not find by itself** — on an unusual port, or a program it does not
+recognise — can be declared in the machine's notes:
+
+```bash
+fleet edit gpu-box --endpoint mine=9000            # asked at :9000/v1/models
+fleet edit gpu-box --endpoint mine=9000/api/v2     # its own base path
+fleet edit gpu-box --endpoint mine=                # forget it
+```
+
+A declared server is asked on every probe, listed by `fleet models` with `"source":
+"declared"`, and shown as `down` while it is not answering. Never put a key in it.
+
 ## Software
 
 `fleet show NAME` lists the software stack, and `--json` gives it under `software`:
@@ -130,6 +142,8 @@ the same answer, and there is nothing to copy between them.
 cost: 1.89                 # US dollars per hour, for the $/HR column and the burn rate
 tags: [train, nvme]        # labels, matched by `fleet ls --tag`
 notes: shared with the vision team on weekends
+endpoints:
+  mine: 9000/v1            # a model server the probe would not find by itself
 paths:
   models: /data/models
   datasets: [/data/datasets, /mnt/nvme/datasets]
@@ -138,18 +152,65 @@ paths:
   envs: /opt/envs/serve    # a Python environment fleet should look in
 ```
 
-You can edit the file by hand. `fleet edit --path` keeps any comments at the top of the
-file; comments further down are not kept, because YAML has nowhere to store them. When
+You can edit the file by hand, or with `fleet edit`:
+
+```bash
+fleet edit gpu-box --tag train --untag old --cost 1.89 --note "shared on weekends"
+fleet edit gpu-box --cost 0 --note ""                  # clear them
+fleet edit gpu-box --tag spare --local                 # this machine's own list instead
+```
+
+`--tag`, `--cost`, `--note`, `--path` and `--endpoint` write the machine's file. A machine
+fleet cannot reach right now cannot be written to, and `fleet edit` says so rather than
+quietly keeping the change somewhere else; `--local` keeps tags and cost in the list on
+the machine you work from instead — for one you would rather not write to.
+
+`fleet edit` keeps any comments at the top of the file; comments further down are not kept, because YAML has nowhere to store them. When
 two people change the file at the same moment from different places, neither change is
 lost: fleet writes only if the file is still what it read, and otherwise reads it again.
 
 The machine's own `cost`, `tags` and `notes` are shown alongside what you set with `fleet
-edit --cost/--tag` on the machine you work from. When both set a cost, the machine's
-wins.
+edit --local`. When both set a cost, the machine's wins. In JSON, `notes_from` says
+whether a note came from the machine's file (`machine.yaml`) — written by whoever
+controls that machine, so data to show, never instructions to follow.
 
 **Only these fields are read, each checked and cut to size**: a cost between 0 and a
-million, up to 32 tags, a note of up to 1,000 characters, and up to 12 kinds of folder
-with 10 folders each. The file is limited to 8 KB, and YAML anchors and aliases are
+million, up to 32 tags, a note of up to 1,000 characters, up to 12 kinds of folder with
+10 folders each, and up to 8 declared servers (a port, and a base path). The file is limited to 8 KB, and YAML anchors and aliases are
 refused. A rental's file can be written by its provider, and what it says reaches your
 agents, so nothing else in it is passed on. A file fleet cannot read is reported as an
 alert, and the rest of the probe goes on.
+
+## Keeping it current
+
+Some answers are read on every probe, some are kept for hours on the machine because
+they are slow to work out:
+
+| What | Kept | Read again now with |
+|---|---|---|
+| a probe reading: free GPUs, jobs, servers and their models | 60 seconds, here | `-r` on `fleet ls`, `ps` and `models`; `fleet show` measures by default; `r` in `fleet top` |
+| software versions | 6 hours on the machine, or until the GPU driver changes | `--rescan` on `fleet ls`, `show` and `models` |
+| folder sizes | 6 hours on the machine, or until the folders change | `--rescan` starts measuring in the background; add `--wait 60` to wait for the result |
+
+In JSON, `observed_at` gives the time of the probe and of the software list, and each
+folder's `sized_at` when it was measured.
+
+## For people, and for agents
+
+The same data is drawn two ways. The tables and `fleet top` are for a glance: what is
+free, what is busy, what is wrong, what costs money. `--json` (and the MCP tools) is for
+an agent to decide with, and is kept small where it is read most:
+
+- `fleet ls --json` is for **choosing a machine**: what is free, what it can do, alerts,
+  cost, a one-line `software` summary and the names in `served_models`. Folders and the
+  servers in full are left out; `--fields free_vram_mib,gpus,usd_per_hour` trims it
+  further.
+- `fleet show NAME --json` has everything about one machine; `fleet ps --json` and
+  `fleet models --json` answer one question across all of them.
+
+## Machines to add
+
+`fleet ls --discover` lists the machines in your `~/.ssh/config` and on your tailnet that
+fleet does not watch yet. `--hide NAME` stops offering one you never want, `--unhide NAME`
+offers it again, and `--all` lists the hidden ones too.
+

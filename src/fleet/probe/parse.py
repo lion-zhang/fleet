@@ -283,7 +283,9 @@ def _parse_resources(snap: Snapshot, kv: dict[str, str], rows: dict[str, list[st
 
     for ln in rows.get("SOFTWARE", []):
         k, _, v = ln.partition("|")
-        if k.strip() and v.strip():
+        if k.strip() == "scanned_at":
+            snap.software_at = _int(v)
+        elif k.strip() and v.strip():
             snap.software[k.strip()] = v.strip()
 
     for ln in rows.get("PYENV", []):
@@ -299,6 +301,21 @@ def _parse_resources(snap: Snapshot, kv: dict[str, str], rows: dict[str, list[st
                 snap.containers.append(Container(
                     image=f[0].strip(), name=f[1].strip(), status=f[2].strip(),
                     ports="|".join(f[3:]).strip()))
+
+    # Servers the machine's notes declare: marked as such, and listed even when no
+    # listening port was seen for them (it may be down -- the answer below says so).
+    by_port = {s.port: s for s in snap.services}
+    for name, ep in (snap.notes.get("endpoints") or {}).items():
+        svc = by_port.get(ep["port"])
+        if svc is None:
+            svc = Service(port=ep["port"], addr="127.0.0.1", comm="")
+            snap.services.append(svc)
+            by_port[ep["port"]] = svc
+        svc.source, svc.name = "declared", name
+        if svc.kind in ("unknown", "llm?"):
+            svc.kind = "llm"
+        if ep.get("path"):
+            svc.url = ep["path"]          # the base path; the view adds host and port
 
     answered: dict[int, tuple[str, int | None, list[str]]] = {}
     for ln in rows.get("LLMMODEL", []):

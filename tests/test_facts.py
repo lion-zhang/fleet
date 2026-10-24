@@ -255,10 +255,10 @@ def test_edit_adds_and_removes_tags(tmp_path, monkeypatch):
     from fleet.state import inventory as inv
 
     runner, cli = _cli(tmp_path, monkeypatch, [_dev(name="box")])
-    assert runner.invoke(cli.app, ["edit", "box", "--tag", "prod", "--tag", "nas"]).exit_code == 0
+    assert runner.invoke(cli.app, ["edit", "box", "--tag", "prod", "--tag", "nas", "--local"]).exit_code == 0
     assert inv.load(inv.INVENTORY_PATH)[0].tags == ["prod", "nas"]
 
-    assert runner.invoke(cli.app, ["edit", "box", "--untag", "prod"]).exit_code == 0
+    assert runner.invoke(cli.app, ["edit", "box", "--untag", "prod", "--local"]).exit_code == 0
     assert inv.load(inv.INVENTORY_PATH)[0].tags == ["nas"]
 
 
@@ -268,7 +268,7 @@ def test_tags_are_lowercased_on_write(tmp_path, monkeypatch):
     from fleet.state import inventory as inv
 
     runner, cli = _cli(tmp_path, monkeypatch, [_dev(name="box")])
-    runner.invoke(cli.app, ["edit", "box", "--tag", "NAS"])
+    runner.invoke(cli.app, ["edit", "box", "--tag", "NAS", "--local"])
     assert inv.load(inv.INVENTORY_PATH)[0].tags == ["nas"]
 
 

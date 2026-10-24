@@ -27,7 +27,9 @@ A name may be omitted where the obvious subject is the machine you are on.
 
 - `{cmd} ls --json` -- every machine, with what is free right now
 - `{cmd} ls NAME... --json` -- only those, `-r` to force a fresh probe,
-  `--online` for reachable ones only
+  `--online` for reachable ones only, `--fields free_vram_mib,gpus,usd_per_hour` for only
+  the keys you need. It is for choosing a machine and stays small: folders and the full
+  servers are in `show` and `models`; `served_models` lists what each one serves
 - `{cmd} ls --tag NAME --json` -- **the right way to pick a machine.** Repeatable, and
   all must match: `--tag cuda --tag vram-24g` finds NVIDIA boxes with a card of at
   least 24G. Matches two things at once -- what someone declared about a machine, and
@@ -42,9 +44,15 @@ A name may be omitted where the obvious subject is the machine you are on.
 - `{cmd} models --json` -- every model being served: machine, server, `url`, and for a
   server that only listens on its own machine a `tunnel` (an `ssh -L` command) to reach
   it. Also the folders each machine keeps models in
-- Software versions and folder sizes are read on the machine every few hours, not on
-  every probe. After installing something, or filling a folder, `{cmd} show NAME
-  --rescan --json` (or `{cmd} ls --rescan`) reads them again now
+- What is cached, and how to read it again now:
+  | what | kept | read again with |
+  |---|---|---|
+  | a probe reading (free GPUs, jobs, servers) | 60 seconds | `-r` on `ls`, `ps`, `models`; `show` does by default |
+  | software versions | 6 hours, on the machine | `--rescan` on `ls`, `show`, `models` |
+  | folder sizes | 6 hours, on the machine | `--rescan` starts measuring; add `--wait 60` to wait for the result |
+
+  Each section's `observed_at` (and a folder's `sized_at`) says how old it is. After
+  installing something or filling a folder, rescan rather than trust the cache
 - `{cmd} ssh NAME -- 'COMMAND'` -- run a command there. Single quotes, always: the shell
   you run fleet from expands `$VAR` and a leading `~` before fleet sees the command, so
   `$HOME` would arrive as *this* machine's home -- PowerShell does it even inside double
@@ -59,7 +67,8 @@ A name may be omitted where the obvious subject is the machine you are on.
 - `{cmd} ls --discover --json` -- machines the user can already reach that are not added
   yet: the Host entries of their ~/.ssh/config, and the machines on their tailnet.
   `{cmd} add NAME` adds one by that name. Offer, do not add them all: a tailnet has
-  phones on it, and an ssh config has hosts nobody uses any more
+  phones on it, and an ssh config has hosts nobody uses any more. `--hide NAME` stops
+  offering one the user does not want (`--unhide NAME` undoes it, `--all` lists hidden ones)
 - `{cmd} add --self` -- record the machine you are on, without ssh
 - `{cmd} doctor [NAME] --json` -- why a machine will not let us in, and the exact fix:
   the line that puts the user's key on it (per OS, and for a Windows administrator), the
@@ -67,12 +76,17 @@ A name may be omitted where the obvious subject is the machine you are on.
   changes nothing; give the user its `fix`
 - `{cmd} edit [NAME] --ssh "ssh ..."` -- a rental moved; point the record at the new
   address. `--disk-path /workspace` to watch the volume that matters, `--name` to
-  rename, `--alias` to set or clear the short handle, `--tag`/`--untag` to add and
-  remove labels (both repeatable), `--cost 1.89` for what it costs per hour (0 clears)
-- `{cmd} edit NAME --path models=/data/models` -- record where a machine keeps things:
-  `models`, `datasets`, `media`, `scratch`, `envs` (Python environments to look in), or
-  a kind of your own. Repeat a kind for several folders; `models=` clears it. It is
-  written to `machine.yaml` on that machine, so everyone who looks at it sees the same
+  rename, `--alias` to set or clear the short handle
+- What a machine says about itself is written to `machine.yaml` **on that machine**, so
+  everyone who looks at it sees the same: `--tag`/`--untag` (repeatable), `--cost 1.89`
+  per hour (0 clears), `--note "TEXT"` (`""` clears), and
+  - `--path models=/data/models` -- where it keeps things: `models`, `datasets`, `media`,
+    `scratch`, `envs` (Python environments to look in), or a kind of your own. Repeat a
+    kind for several folders; `models=` clears it
+  - `--endpoint NAME=PORT[/PATH]` -- a model server the probe would not find by itself (an
+    unusual port, an unrecognised program); `NAME=` removes it. Never put a key here
+  - A machine that cannot be reached cannot be written to; `--local` keeps tags and cost
+    in this machine's own list instead
 - `{cmd} rm NAME` -- stop watching a machine. Nothing on it changes
 - `{cmd} top` -- live view; needs a terminal, so not for an agent
 - `{cmd} install NAME` -- put fleet on a machine that has none, for agents there

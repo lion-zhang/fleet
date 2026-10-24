@@ -342,6 +342,6 @@ def test_two_agents_editing_at_once_keep_both_edits(tmp_path, monkeypatch):
         return real(dev, **kw)
 
     monkeypatch.setattr(cli, "apply_edits", meanwhile)
-    result = runner.invoke(app, ["edit", "box", "--tag", "mine"])
+    result = runner.invoke(app, ["edit", "box", "--tag", "mine", "--local"])
     assert result.exit_code == 0, result.output
     assert {"theirs", "mine"} <= set(inv.load(path)[0].tags)

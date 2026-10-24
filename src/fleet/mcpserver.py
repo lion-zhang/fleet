@@ -201,8 +201,16 @@ def build_server():
                     "x86_64/arm64, cores-NN, ram-NNg, storage-NNt, public-ip/mesh/lan, "
                     "rental/shared/appliance, plus any tag a human set.")
     def list_machines(names: list[str] | None = None, tag: list[str] | None = None,
-                      online: bool = False, refresh: bool = False) -> Any:
+                      online: bool = False, refresh: bool = False,
+                      rescan: bool = False, fields: list[str] | None = None) -> Any:
+        """`refresh` measures now instead of using a reading up to a minute old; `rescan`
+        also re-reads software versions and folder sizes, cached on each machine for
+        hours. `fields` returns only those keys of each machine (name always)."""
         args = ["ls", "--json", *(names or [])]
+        if fields:
+            args += ["--fields", ",".join(fields)]
+        if rescan:
+            args.append("--rescan")
         for t in tag or []:
             args += ["--tag", t]
         if online:
@@ -217,23 +225,29 @@ def build_server():
                              "environment's torch/vllm/mlx/... versions), the folders it "
                              "keeps models, datasets and media in, tags and facts. No "
                              "name means the machine fleet is running on.")
-    def show_machine(name: str | None = None, refresh: bool = True) -> Any:
+    def show_machine(name: str | None = None, refresh: bool = True,
+                     rescan: bool = False) -> Any:
+        """`rescan` re-reads software versions and folder sizes now (cached for hours)."""
         return _run(["show", *( [name] if name else [] ), "--json",
-                     "--refresh" if refresh else "--no-refresh"])
+                     "--refresh" if refresh else "--no-refresh",
+                     *(["--rescan"] if rescan else [])])
 
     @server.tool(description="Every job on every GPU across the fleet -- who runs it, "
                              "how much VRAM, for how long, the command -- and which GPUs "
                              "are idle. A GPU with jobs is someone's: ask before using it.")
-    def list_gpu_jobs(names: list[str] | None = None) -> Any:
-        return _run(["ps", "--json", *(names or [])])
+    def list_gpu_jobs(names: list[str] | None = None, refresh: bool = False) -> Any:
+        return _run(["ps", "--json", *(names or []), *(["--refresh"] if refresh else [])])
 
     @server.tool(description="Every model being served across the fleet: machine, server, "
                              "url, and for a server that only listens on its own machine "
                              "a `tunnel` command to reach it; plus the folders each "
                              "machine keeps models in. Check this before downloading a "
                              "model: one already served or on disk need not be fetched.")
-    def list_models(names: list[str] | None = None) -> Any:
-        return _run(["models", "--json", *(names or [])])
+    def list_models(names: list[str] | None = None, refresh: bool = False,
+                    rescan: bool = False) -> Any:
+        """`refresh` asks the servers again now; `rescan` also re-measures model folders."""
+        return _run(["models", "--json", *(names or []),
+                     *(["--refresh"] if refresh else []), *(["--rescan"] if rescan else [])])
 
     @server.tool(description="Record where a machine keeps things, in its own "
                              "machine.yaml: kind is models, datasets, media, scratch, envs "
@@ -245,6 +259,16 @@ def build_server():
         for p in paths or [""]:
             args += ["--path", f"{kind}={p}"]
         return _run(args)
+
+    @server.tool(description="Declare a model server the probe would not find by itself "
+                             "(an unusual port, a program it does not recognise), in the "
+                             "machine's own machine.yaml: port, and a base path if it is not "
+                             "/v1. port=None removes it. Never pass an API key; a server that "
+                             "wants one is shown as wanting one.")
+    def set_machine_endpoint(machine: str, name: str, port: int | None = None,
+                             path: str = "") -> Any:
+        spec = f"{name}=" if port is None else f"{name}={port}{path}"
+        return _run(["edit", machine, "--endpoint", spec, "--json"])
 
     @server.tool(description="Run one command on a machine and return its output and "
                              "exit code. This is how work actually gets started -- fleet "
@@ -305,16 +329,24 @@ def build_server():
                              "to watch for free space: disk_paths means exactly these paths "
                              "from now on -- for a container or rental whose `/` is not "
                              "where the space is -- and autodetect_disks goes back. rename "
-                             "gives it a new name, alias a short one (empty clears it). Tags "
-                             "are yours; measured facts such as cuda or vram-24g come from "
-                             "probes.")
+                             "gives it a new name, alias a short one (empty clears it). Tags, "
+                             "cost and note are written to the machine's own machine.yaml, so "
+                             "everyone who looks at it reads them; local=True keeps tags and "
+                             "cost in this machine's list instead (for a machine you cannot "
+                             "or should not write to). Measured facts such as cuda or "
+                             "vram-24g come from probes.")
     def edit_machine(name: str, add_tags: list[str] | None = None,
                      remove_tags: list[str] | None = None, cost_per_hour: float | None = None,
                      ssh_command: str | None = None,
                      disk_paths: list[str] | None = None,
                      autodetect_disks: bool = False, rename: str | None = None,
-                     alias: str | None = None) -> Any:
+                     alias: str | None = None, note: str | None = None,
+                     local: bool = False) -> Any:
         args = ["edit", name, "--json"]
+        if note is not None:
+            args += ["--note", note]
+        if local:
+            args.append("--local")
         if rename:
             args += ["--name", rename]
         if alias is not None:

@@ -259,6 +259,17 @@ def resource_checks(name: str) -> None:
     check("  and its size, once worked out", bool(sized), out[-600:], required=not WINDOWS)
     expect("ps --json", ["ps", "--json"], r'"jobs"')
     expect("ps", ["ps"], r".")
+    expect("edit --note and --tag land in the machine's own file",
+           ["edit", name, "--note", "e2e box", "--tag", "e2e-own", "--json"], r'"e2e-own"')
+    expect("edit --endpoint declares a server", ["edit", name, "--endpoint", "mine=9", "--json"],
+           r'"mine"')
+    ok, out = expect("show --rescan --wait", ["show", name, "--rescan", "--wait", "20", "--json"],
+                     r'"observed_at"')
+    expect("ls --json --fields", ["ls", "--json", "--fields", "free_vram_mib"], r'"free_vram_mib"')
+    expect("ls --discover --hide", ["ls", "--discover", "--hide", "e2e-nothing", "--json"],
+           r'"e2e-nothing"')
+    expect("edit --endpoint NAME= removes it", ["edit", name, "--endpoint", "mine=", "--json"],
+           r'"ok": true')
     expect("models --json", ["models", "--json"], r'"servers"')
     expect("models", ["models"], r".")
     expect("edit --path KIND= clears it", ["edit", name, "--path", "models=", "--json"],

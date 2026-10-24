@@ -48,8 +48,13 @@ fleet ls --json
 | `--json` | print JSON instead of a table, for scripts and agents |
 | `--refresh`, `-r` | force a live probe |
 | `--rescan` | also re-read software versions and folder sizes, which machines otherwise cache for 6 hours |
+| `--wait` `SECONDS` | with --rescan: wait up to this long for the folder sizes it started measuring |
 | `--online` | only reachable devices |
 | `--discover` | list machines in your ~/.ssh/config and on your tailnet that are not added yet |
+| `--hide` `NAME` | with --discover: never offer this one again; repeatable |
+| `--unhide` `NAME` | with --discover: offer it again |
+| `--all` | with --discover: include hidden ones |
+| `--fields` `A,B,...` | with --json: only these keys of each machine, e.g. free_vram_mib,gpus,usd_per_hour |
 | `--tag` `NAME` | only machines carrying this tag or fact; repeatable, and all must match |
 
 ## fleet show
@@ -75,6 +80,7 @@ fleet show machine_A
 | `--json` | print JSON instead of a table, for scripts and agents |
 | `--refresh`, `--no-refresh` | probe it now; --no-refresh shows the last reading |
 | `--rescan` | also re-read software versions and folder sizes, which machines otherwise cache for 6 hours |
+| `--wait` `SECONDS` | with --rescan: wait up to this long for the folder sizes it started measuring |
 
 ## fleet add
 
@@ -110,7 +116,7 @@ fleet add "ssh -p 58418 root@1.2.3.4"
 
 Change a device's address or settings after it was added.
 
-Rentals recycle IPs and ports, so `--ssh` re-points a device without losing its name, tags, cost or history.
+Rentals recycle IPs and ports, so `--ssh` re-points a device without losing its name, tags, cost or history. Tags, cost, a note, folders (`--path`) and declared servers (`--endpoint`) are written to that machine's own machine.yaml, so everyone who looks at it reads the same; `--local` keeps tags and cost here instead.
 
 ```
 fleet edit [OPTIONS] [NAME]
@@ -136,7 +142,10 @@ fleet edit machine_A --ssh "ssh -p 40001 root@5.6.7.8"
 | `--tag` `NAME` | add a label; repeatable |
 | `--untag` `NAME` | remove a label; repeatable |
 | `--cost` `USD` | what it costs per hour, for the $/HR column and the fleet's burn rate; 0 clears it |
-| `--path` `KIND=PATH` | where this machine keeps models, datasets, media...: models=/data/models; repeat a kind for several, models= clears it. Written to the machine's own machine.yaml |
+| `--note` `TEXT` | a line about the machine; --note "" clears it |
+| `--path` `KIND=PATH` | where this machine keeps models, datasets, media...: models=/data/models; repeat a kind for several, models= clears it |
+| `--endpoint` `NAME=PORT[/PATH]` | a model server fleet would not find by itself: myllm=9000 or myllm=9000/v1; myllm= removes it. Never a key |
+| `--local` | keep --tag/--untag/--cost in this machine's own list instead of on that machine |
 | `--json` | print JSON instead of a table, for scripts and agents |
 
 ## fleet install
@@ -238,6 +247,7 @@ fleet models --json
 |---|---|
 | `--json` | print JSON instead of a table, for scripts and agents |
 | `--refresh`, `-r` | force a live probe |
+| `--rescan` | also re-measure the model folders, which machines otherwise cache for 6 hours |
 
 ## fleet top
 

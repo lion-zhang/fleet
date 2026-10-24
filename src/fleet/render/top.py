@@ -477,7 +477,7 @@ def render_models(view: dict[str, Any]) -> list:
                                   if sv.get("tunnel") else "[dim]local only[/dim]")
             if sv["url"]:
                 reach = escape(reach)
-            label = f":{sv['port']} {sv['framework']}".strip()
+            label = f":{sv['port']} {sv['framework'] or sv.get('name') or ''}".strip()
             if not sv["models"]:
                 t.add_row("[yellow]wants an API key[/yellow]" if sv["status"] == "auth"
                           else "[dim]none listed[/dim]", sv["machine"], label, reach)

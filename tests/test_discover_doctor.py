@@ -216,3 +216,89 @@ def test_the_first_run_records_this_machine_once_and_starts_no_fleet(monkeypatch
     assert "center" not in said[0]
     assert [d.name for d in inv.load()] == ["laptop"]
     assert firstrun.maybe("ls", said.append) is False          # once
+
+
+# ---------------------------------------------------------------- hiding candidates
+def test_a_hidden_candidate_is_not_offered_until_unhidden(home, monkeypatch):
+    (home / ".ssh" / "config").write_text("Host lab\nHost old-box\n")
+    monkeypatch.setattr(discover, "tailnet", lambda status=None: [])
+    discover.set_hidden(["old-box"], hide=True)
+    assert [c.name for c in discover.candidates(home=home)] == ["lab"]
+    assert [c.name for c in discover.candidates(home=home, include_hidden=True)] == [
+        "lab", "old-box"]
+    discover.set_hidden(["OLD-BOX"], hide=False)
+    assert [c.name for c in discover.candidates(home=home)] == ["lab", "old-box"]
+
+
+def test_ls_discover_hide_says_what_is_hidden(monkeypatch):
+    monkeypatch.setattr(discover, "candidates", lambda **k: [])
+    r = CliRunner().invoke(cli.app, ["ls", "--discover", "--hide", "printer", "--json"])
+    assert r.exit_code == 0, r.output
+    assert json.loads(r.stdout)["hidden"] == ["printer"]
+
+
+# ---------------------------------------------------------------- edit: where it lands
+@pytest.fixture
+def this_box(tmp_path, monkeypatch):
+    """This machine, recorded, with its notes in a home of the test's own."""
+    from fleet.ops import identity
+
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.setattr(identity, "local_device_id", lambda: "id:me")
+    inv.save([Device(id="id:me", name="me")])
+    return tmp_path / ".config" / "fleet" / "machine.yaml"
+
+
+@pytest.mark.skipif(__import__("sys").platform == "win32", reason="POSIX sh")
+def test_tags_cost_note_and_servers_land_in_the_machines_own_file(this_box):
+    from fleet import notes
+
+    r = CliRunner().invoke(cli.app, ["edit", "me", "--tag", "GPU-Box", "--cost", "1.5",
+                                     "--note", "the lab box", "--endpoint", "mine=9000/v1",
+                                     "--json"])
+    assert r.exit_code == 0, r.output
+    assert notes.parse(this_box.read_text()) == {
+        "cost": {"usd_per_hour": 1.5}, "tags": ["gpu-box"], "notes": "the lab box",
+        "endpoints": {"mine": {"port": 9000, "path": "/v1"}}}
+    assert inv.load()[0].tags == [], "not into this machine's list"
+    r = CliRunner().invoke(cli.app, ["edit", "me", "--note", "", "--cost", "0",
+                                     "--endpoint", "mine=", "--json"])
+    assert notes.parse(this_box.read_text()) == {"tags": ["gpu-box"]}
+
+
+def test_local_keeps_tags_and_cost_in_this_machines_list(this_box):
+    r = CliRunner().invoke(cli.app, ["edit", "me", "--tag", "spare", "--cost", "2",
+                                     "--local", "--json"])
+    assert r.exit_code == 0, r.output
+    assert inv.load()[0].tags == ["spare"] and not this_box.exists()
+
+
+def test_an_unreachable_machine_is_not_written_somewhere_else_silently(monkeypatch):
+    inv.save([Device(id="id:far", name="far",
+                     endpoints=[{"target": "10.0.0.9", "user": "me", "port": 22}])])
+    from fleet.ops import machinefile
+
+    def refused(*a, **k):
+        raise machinefile.MachineFileError("Permission denied (publickey)")
+    monkeypatch.setattr(machinefile, "change", refused)
+    r = CliRunner().invoke(cli.app, ["edit", "far", "--tag", "x", "--json"])
+    assert r.exit_code == 1
+    out = json.loads(r.stdout)
+    assert out["ok"] is False and "--local" in out["hint"]
+    assert inv.load()[0].tags == []
+
+
+@pytest.mark.parametrize("spec", ["mine=http://x", "mine=0", "Bad Name=9000", "mine"])
+def test_a_wrong_endpoint_is_refused_before_anything_is_written(this_box, spec):
+    r = CliRunner().invoke(cli.app, ["edit", "me", "--endpoint", spec])
+    assert r.exit_code == 2 and not this_box.exists()
+
+
+def test_fields_keeps_only_what_was_asked(monkeypatch):
+    monkeypatch.setattr(cli, "_rows", lambda *a, **k: [
+        {"name": "a", "status": "ok", "kind": "permanent", "gpus": [], "usd_per_hour": 1,
+         "facts": [], "tags": [], "free_vram_mib": 0}])
+    inv.save([Device(id="id:a", name="a")])
+    r = CliRunner().invoke(cli.app, ["ls", "--json", "--fields", "usd_per_hour"])
+    assert r.exit_code == 0, r.output
+    assert json.loads(r.stdout)["devices"] == [{"name": "a", "usd_per_hour": 1}]

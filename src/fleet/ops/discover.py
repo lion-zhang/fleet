@@ -130,7 +130,37 @@ def tailnet(status: dict | None = None) -> list[Candidate]:
     return sorted(out, key=lambda c: c.name)
 
 
-def candidates(*, home: Path | None = None, status: dict | None = None) -> list[Candidate]:
+def _hidden_path() -> Path:
+    from .. import config
+
+    return config.CONFIG_DIR / "discover-hidden.txt"
+
+
+def hidden() -> set[str]:
+    """Names you chose never to be offered again, one per line in fleet's config folder."""
+    try:
+        text = _hidden_path().read_text(encoding="utf-8")
+    except OSError:
+        return set()
+    return {ln.strip().lower() for ln in text.splitlines() if ln.strip() and not ln.startswith("#")}
+
+
+def set_hidden(names: list[str], *, hide: bool) -> set[str]:
+    """Hide or unhide names, on the list as it is now. Returns the list after."""
+    from ..state.writes import atomic_write, turn
+    from ..config import ensure_dirs
+
+    ensure_dirs()
+    with turn(_hidden_path()):
+        now = hidden()
+        now = now | {n.lower() for n in names} if hide else now - {n.lower() for n in names}
+        atomic_write(_hidden_path(), "# machines `fleet ls --discover` does not offer\n"
+                     + "".join(f"{n}\n" for n in sorted(now)), mode=0o644)
+    return now
+
+
+def candidates(*, home: Path | None = None, status: dict | None = None,
+               include_hidden: bool = False) -> list[Candidate]:
     """Both sources, each machine once, marked with its name if it is already added."""
     devices = inv.live(inv.load())
     known: dict[str, str] = {}
@@ -140,7 +170,10 @@ def candidates(*, home: Path | None = None, status: dict | None = None) -> list[
         known.setdefault(d.name.lower(), d.name)
     out: list[Candidate] = []
     seen: set[str] = set()
+    skip = set() if include_hidden else hidden()
     for cand in ssh_config(home) + tailnet(status):
+        if cand.name.lower() in skip or cand.target.lower() in skip:
+            continue
         key = cand.target.lower()
         short = key.split(".", 1)[0]
         if key in seen or short in seen:
