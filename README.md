@@ -340,7 +340,7 @@ and prints the last step, `uv tool uninstall agents-fleet`. See
 - [Command reference](docs/reference/cli.md) — every command and option
 - [How fleet works](docs/design/how-it-works.md) — what happens, step by step, under the hood
 - [Design](docs/design/layers.md) — one core per machine, a skill per agent, MCP for the rest
-- [All documentation](docs/README.md)
+- [All documentation](docs/README.md), also as a website: [lion-zhang.github.io/fleet](https://lion-zhang.github.io/fleet/)
 
 **Status:** v0.6. The test suite runs on Linux, macOS and Windows, and every command is
 run end to end on a real machine of each OS in CI — from a script, as an agent runs it,

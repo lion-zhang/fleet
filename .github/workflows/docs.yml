@@ -1,0 +1,49 @@
+name: docs
+
+# The documentation site (mkdocs.yml) at https://lion-zhang.github.io/fleet/. A pull
+# request builds it in strict mode, so a broken link or anchor fails there; main also
+# publishes it. Publishing needs Settings → Pages → Source: GitHub Actions, once.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: pages-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+      # The reference pages are generated; a stale one would publish wrong docs.
+      - name: The generated files are current
+        run: |
+          uv run python scripts/build_dist.py
+          git diff --exit-code
+      - run: uv run --group docs mkdocs build
+      - if: github.event_name != 'pull_request'
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: site
+
+  deploy:
+    if: github.event_name != 'pull_request'
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      pages: write
+      id-token: write
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@v4

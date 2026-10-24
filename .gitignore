@@ -18,3 +18,6 @@ secrets.age
 # Local data / scratch -- never pushed.
 data/
 .remember/
+
+# The documentation site, built by `uv run --group docs mkdocs build`.
+site/

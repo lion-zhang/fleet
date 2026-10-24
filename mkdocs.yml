@@ -1,0 +1,85 @@
+# The documentation site: docs/ as it is, published to GitHub Pages by
+# .github/workflows/docs.yml. Build it here with `uv run --group docs mkdocs serve`.
+site_name: fleet
+site_description: Every machine you have, for your coding agent -- free GPUs, running jobs, served models, software and folders, over the SSH you already use.
+site_url: https://lion-zhang.github.io/fleet/
+repo_url: https://github.com/lion-zhang/fleet
+repo_name: lion-zhang/fleet
+edit_uri: edit/main/docs/
+docs_dir: docs
+strict: true
+# page.html, not page/: raw <img src="../assets/..."> in the docs then resolves as it does on GitHub.
+use_directory_urls: false
+
+nav:
+  - Home: README.md
+  - Getting started: getting-started.md
+  - Guides:
+      - Adding machines: guides/add-machines.md
+      - Reaching your machines: guides/reaching-machines.md
+      - Finding the right machine: guides/find-machines.md
+      - What is on each machine: guides/resources.md
+      - Running work: guides/run-work.md
+      - Agents: guides/agents.md
+      - What fleet changes: guides/what-fleet-changes.md
+      - Installing and upgrading: guides/install.md
+      - Upgrading from 0.5: guides/upgrading-from-0.5.md
+      - Windows: guides/windows.md
+      - Troubleshooting: guides/troubleshooting.md
+  - Reference:
+      - Commands: reference/cli.md
+      - Configuration: reference/configuration.md
+      - Facts, tags and alerts: reference/facts.md
+  - Design:
+      - How fleet works: design/how-it-works.md
+      - Core, skill and MCP: design/layers.md
+
+validation:
+  nav:
+    omitted_files: warn
+  links:
+    not_found: warn
+    anchors: warn
+    absolute_links: warn
+    unrecognized_links: warn
+
+theme:
+  name: material
+  palette:
+    - media: "(prefers-color-scheme: light)"
+      scheme: default
+      primary: black
+      toggle:
+        icon: material/brightness-7
+        name: Dark mode
+    - media: "(prefers-color-scheme: dark)"
+      scheme: slate
+      primary: black
+      toggle:
+        icon: material/brightness-4
+        name: Light mode
+  features:
+    - navigation.sections
+    - navigation.top
+    - navigation.footer
+    - search.suggest
+    - search.highlight
+    - content.code.copy
+    - content.action.edit
+  icon:
+    repo: fontawesome/brands/github
+
+markdown_extensions:
+  - admonition
+  - attr_list
+  - md_in_html
+  - tables
+  - toc:
+      permalink: true
+  - pymdownx.highlight
+  - pymdownx.superfences
+  - pymdownx.inlinehilite
+  - pymdownx.details
+
+exclude_docs: |
+  assets/social-preview.svg

@@ -34,5 +34,7 @@ Consequences:
   manifests and `docs/reference/cli.md` (`uv run python scripts/build_dist.py`), the README screenshots
   (`uv run python scripts/readme_screenshots.py`) and the demo
   (`uv run python scripts/readme_demo.py`).
+- Docs site: `docs/` is published by `.github/workflows/docs.yml` (`mkdocs.yml`); a new page
+  also goes in its `nav:`. Check with `uv run --group docs mkdocs build` (strict).
 - There is one install mode. Don't reintroduce "center" or "member": every machine
   running fleet is the same.
