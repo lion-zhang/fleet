@@ -210,12 +210,40 @@ def build_server():
             args.append("--refresh")
         return _run(args)
 
-    @server.tool(description="Full detail for one machine: CPU, RAM, every GPU and "
-                             "mount, listening services, tags and facts. No name means "
-                             "the machine fleet is running on.")
+    @server.tool(description="Full detail for one machine: CPU, RAM, every GPU and its "
+                             "jobs, mounts, listening services, the models its servers "
+                             "serve, its software (cuda, python, and each Python "
+                             "environment's torch/vllm/mlx/... versions), the folders it "
+                             "keeps models, datasets and media in, tags and facts. No "
+                             "name means the machine fleet is running on.")
     def show_machine(name: str | None = None, refresh: bool = True) -> Any:
         return _run(["show", *( [name] if name else [] ), "--json",
                      "--refresh" if refresh else "--no-refresh"])
+
+    @server.tool(description="Every job on every GPU across the fleet -- who runs it, "
+                             "how much VRAM, for how long, the command -- and which GPUs "
+                             "are idle. A GPU with jobs is someone's: ask before using it.")
+    def list_gpu_jobs(names: list[str] | None = None) -> Any:
+        return _run(["ps", "--json", *(names or [])])
+
+    @server.tool(description="Every model being served across the fleet: machine, server, "
+                             "url, and for a server that only listens on its own machine "
+                             "a `tunnel` command to reach it; plus the folders each "
+                             "machine keeps models in. Check this before downloading a "
+                             "model: one already served or on disk need not be fetched.")
+    def list_models(names: list[str] | None = None) -> Any:
+        return _run(["models", "--json", *(names or [])])
+
+    @server.tool(description="Record where a machine keeps things, in its own "
+                             "machine.yaml: kind is models, datasets, media, scratch, envs "
+                             "or one of your own; paths replace that kind's folders, and "
+                             "an empty list clears it. Ask the user where before "
+                             "recording a folder they did not name.")
+    def set_machine_paths(machine: str, kind: str, paths: list[str]) -> Any:
+        args = ["edit", machine, "--json"]
+        for p in paths or [""]:
+            args += ["--path", f"{kind}={p}"]
+        return _run(args)
 
     @server.tool(description="Run one command on a machine and return its output and "
                              "exit code. This is how work actually gets started -- fleet "

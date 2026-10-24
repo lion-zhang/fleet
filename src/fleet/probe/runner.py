@@ -110,7 +110,8 @@ def _kill(proc: subprocess.Popen) -> None:
         proc.kill()
 
 
-def probe_env(mode: str, disk_paths: list[str] | None = None) -> dict[str, str]:
+def probe_env(mode: str, disk_paths: list[str] | None = None, *, light: bool = False,
+              refresh: bool = False) -> dict[str, str]:
     """Environment handed to the remote payload.
 
     FLEET_DISK_PATHS is omitted rather than emptied when unset: absent means "use the
@@ -119,11 +120,18 @@ def probe_env(mode: str, disk_paths: list[str] | None = None) -> dict[str, str]:
     env = {"FLEET_MODE": mode}
     if disk_paths:
         env["FLEET_DISK_PATHS"] = " ".join(disk_paths)
+    # `fleet top` re-reads every machine every few seconds: it takes what the machine has
+    # cached and skips anything that waits on the network. `-r` rebuilds the caches.
+    if light:
+        env["FLEET_LIGHT"] = "1"
+    if refresh:
+        env["FLEET_REFRESH"] = "1"
     return env
 
 
 def run_probe_local(*, mode: str = "full", disk_paths: list[str] | None = None,
-                    timeout: float = 20.0) -> ProbeResult:
+                    timeout: float = 20.0, light: bool = False,
+                    refresh: bool = False) -> ProbeResult:
     """Probe the machine we are running on, without SSH.
 
     Requiring sshd, a key in authorized_keys and a working network path in order to
@@ -132,7 +140,7 @@ def run_probe_local(*, mode: str = "full", disk_paths: list[str] | None = None,
     on a laptop. Same payload, same parser, same ProbeResult as every other path.
     """
     started = time.monotonic()
-    env = {**os.environ, **probe_env(mode, disk_paths)}
+    env = {**os.environ, **probe_env(mode, disk_paths, light=light, refresh=refresh)}
     # The same choice the remote path makes, for the same reason. Without it a center on
     # Windows probed itself with payload.sh through whatever `sh` Git happened to
     # install, found no /etc/machine-id, and fell back to the `net:localhost:22` id that
@@ -259,7 +267,8 @@ def _spawn(argv: list[str], payload: bytes, timeout: float,
 
 def run_probe(ep: Endpoint, *, mode: str = "full", timeout: float = 20.0,
               connect_timeout: int = 8, multiplex: bool = True,
-              disk_paths: list[str] | None = None) -> ProbeResult:
+              disk_paths: list[str] | None = None, light: bool = False,
+              refresh: bool = False) -> ProbeResult:
     """Probe one endpoint. Never raises for a remote-side problem.
 
     A host whose shell is cmd.exe is retried in PowerShell. Detected rather than
@@ -268,11 +277,13 @@ def run_probe(ep: Endpoint, *, mode: str = "full", timeout: float = 20.0,
     second connection on Windows hosts only, and only the first time each probe runs.
     """
     res = _run_probe_once(ep, mode=mode, timeout=timeout, connect_timeout=connect_timeout,
-                          multiplex=multiplex, disk_paths=disk_paths)
+                          multiplex=multiplex, disk_paths=disk_paths, light=light,
+                          refresh=refresh)
     if res.ok or not _looks_like_cmd_exe(res):
         return res
     return _run_probe_once(ep, mode=mode, timeout=timeout, connect_timeout=connect_timeout,
-                           multiplex=multiplex, disk_paths=disk_paths, windows=True)
+                           multiplex=multiplex, disk_paths=disk_paths, light=light,
+                           refresh=refresh, windows=True)
 
 
 def _looks_like_cmd_exe(res: ProbeResult) -> bool:
@@ -290,9 +301,9 @@ def _looks_like_cmd_exe(res: ProbeResult) -> bool:
 
 def _run_probe_once(ep: Endpoint, *, mode: str = "full", timeout: float = 20.0,
                     connect_timeout: int = 8, multiplex: bool = True,
-                    disk_paths: list[str] | None = None,
-                    windows: bool = False) -> ProbeResult:
-    env = probe_env(mode, disk_paths)
+                    disk_paths: list[str] | None = None, light: bool = False,
+                    refresh: bool = False, windows: bool = False) -> ProbeResult:
+    env = probe_env(mode, disk_paths, light=light, refresh=refresh)
     if windows:
         # PowerShell reads the script from stdin with a trailing `-`, the same shape as
         # `sh -s`. The environment cannot ride the command line the same way: build_argv

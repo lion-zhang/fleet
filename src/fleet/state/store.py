@@ -187,9 +187,14 @@ def record(conn: sqlite3.Connection, device_id: str, res: ProbeResult, *,
          res.endpoint_used, now, last_ok, res.latency_ms, res.stderr_tail, probed_by,
          streak))
     if res.snapshot is not None:
+        payload = res.snapshot.to_dict()
+        if payload.get("light"):
+            last = conn.execute("SELECT payload FROM snapshot WHERE device_id=? AND source=? "
+                                "ORDER BY id DESC LIMIT 1", (device_id, source)).fetchone()
+            if last:
+                carry_over(json.loads(last["payload"]), payload)
         conn.execute("INSERT INTO snapshot (device_id, ts, source, payload) VALUES (?,?,?,?)",
-                     (device_id, res.snapshot.ts, source,
-                      json.dumps(res.snapshot.to_dict(), default=str)))
+                     (device_id, res.snapshot.ts, source, json.dumps(payload, default=str)))
         keep = int(load_config().snapshot_retention)
         # Retention is per source, or a chatty broadcast would evict the device's own
         # first-hand history from the single ring buffer they used to share.
@@ -200,6 +205,23 @@ def record(conn: sqlite3.Connection, device_id: str, res: ProbeResult, *,
             (device_id, source, device_id, source, keep))
     conn.commit()
     return True
+
+
+def carry_over(prev: dict, snap: dict) -> None:
+    """Fill what a light probe skipped from the reading before it.
+
+    `fleet top` probes light -- no HTTP calls, no docker -- and every frame is stored, so
+    without this a `fleet ls` right after `top` would find the models every server was
+    serving, and the running containers, gone.
+    """
+    if snap.get("containers") is None and prev.get("containers") is not None:
+        snap["containers"] = prev["containers"]
+    before = {s.get("port"): s for s in prev.get("services") or [] if s.get("status")}
+    for svc in snap.get("services") or []:
+        if not svc.get("status") and (old := before.get(svc.get("port"))) \
+                and old.get("comm") == svc.get("comm"):
+            for k in ("status", "healthy", "latency_ms", "model_ids", "kind"):
+                svc[k] = old.get(k)
 
 
 def forget_except(conn: sqlite3.Connection, keep: set[str]) -> int:

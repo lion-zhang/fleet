@@ -251,6 +251,119 @@ def _roomiest(snap: dict | None) -> dict | None:
     return max(disks, key=lambda d: d["free_gb"]) if disks else None
 
 
+# ---------------------------------------------------------------- resources
+#
+# What the machine has and is doing beyond its hardware: the jobs on its GPUs, the models
+# its servers serve, its software, and the folders its own machine.yaml points at.
+
+_LOOPBACK = ("127.", "::1", "[::1]", "localhost")
+
+
+def gpu_jobs(snap: dict | None) -> dict[str, list[dict]]:
+    """Each GPU's compute jobs, biggest first, keyed by the GPU's uuid."""
+    out: dict[str, list[dict]] = {}
+    for p in (snap or {}).get("processes", []):
+        if p.get("scope") != "gpu" or p.get("klass") != "compute":
+            continue
+        out.setdefault(p.get("gpu_uuid", ""), []).append({
+            "pid": p.get("pid"), "user": p.get("user", ""),
+            "vram_mib": p.get("vram_mib", 0), "runtime_s": p.get("etimes", 0),
+            "command": p.get("args") or p.get("comm", ""),
+        })
+    for jobs in out.values():
+        jobs.sort(key=lambda j: -j["vram_mib"])
+    return out
+
+
+def _host_of(dev: Device) -> str:
+    from ..state.inventory import endpoints_of
+    eps = sorted(endpoints_of(dev), key=lambda e: e.preference)
+    return eps[0].target if eps else ""
+
+
+def model_servers(dev: Device, snap: dict | None, *, here: bool = False) -> list[dict]:
+    """Every server here that answered as a model server, and how to reach it.
+
+    `reach` is honest about where it listens: `local` means only from that machine, so the
+    way in from anywhere else is the ssh tunnel beside it.
+    """
+    from ..state.inventory import endpoints_of
+    eps = sorted(endpoints_of(dev), key=lambda e: e.preference)
+    out = []
+    for s in (snap or {}).get("services", []):
+        if not s.get("status") or s.get("status") == "none":
+            continue
+        if s.get("kind") not in ("llm", "llm?"):
+            continue
+        addr, port = str(s.get("addr") or "*"), s.get("port")
+        local = addr.startswith(_LOOPBACK)
+        host = "127.0.0.1" if here else _host_of(dev)
+        row = {
+            "port": port, "framework": s.get("framework") or "", "status": s.get("status"),
+            "models": list(s.get("model_ids") or []), "latency_ms": s.get("latency_ms"),
+            # here: the machine fleet runs on, where even a localhost-only server answers
+            "reach": "here" if here else "local" if local else "network",
+            "url": None if (local and not here) or not host else f"http://{host}:{port}/v1",
+        }
+        if eps and not here:
+            e = eps[0]
+            dest = f"{e.user}@{e.target}" if e.user else e.target
+            row["tunnel"] = (f"ssh -N -L {port}:127.0.0.1:{port}"
+                             + (f" -p {e.port}" if e.port and e.port != 22 else "")
+                             + f" {dest}")
+        out.append(row)
+    return out
+
+
+def software_view(snap: dict | None, *, full: bool) -> dict:
+    """The stack: system versions, then each Python environment and what is in it."""
+    snap = snap or {}
+    envs: dict[str, dict] = {}
+    for p in snap.get("pyenvs", []):
+        e = envs.setdefault(p.get("env", ""), {"env": p.get("env", ""),
+                                               "python": p.get("python", ""), "packages": {}})
+        e["packages"][p.get("package", "")] = p.get("version", "")
+    if not full:
+        # The one-line answer: system versions, and each package's newest version anywhere.
+        best: dict[str, str] = {}
+        for e in envs.values():
+            for k, v in e["packages"].items():
+                best.setdefault(k, v)
+        keep = ("cuda", "nvcc", "rocm", "metal", "python", "docker")
+        return {**{k: v for k, v in snap.get("software", {}).items() if k in keep}, **best}
+    out = {"system": dict(snap.get("software", {})), "envs": list(envs.values())}
+    if snap.get("containers") is not None:
+        out["containers"] = snap["containers"]
+    return out
+
+
+def storage_view(snap: dict | None, *, full: bool) -> dict[str, list[dict]]:
+    out: dict[str, list[dict]] = {}
+    for st in (snap or {}).get("storage", []):
+        row = {"path": st.get("path"), "exists": bool(st.get("exists")),
+               "free_gb": round(st["avail_kb"] / 1048576, 1) if st.get("avail_kb") else None,
+               # three places under a gigabyte, or a 3 MB folder reads as empty
+               "size_gb": round(st["size_kb"] / 1048576, 3 if st["size_kb"] < 1048576 else 1)
+               if st.get("size_kb") is not None else None}
+        if full:
+            row["sized_at"] = st.get("sized_at")
+        out.setdefault(st.get("kind", ""), []).append(row)
+    return out
+
+
+def declared(dev: Device, snap: dict | None) -> tuple[list[str], dict, str]:
+    """Tags, cost and notes: the inventory's, with the machine's own machine.yaml over it.
+
+    The machine's file wins because it is the one every fleet that looks at the machine
+    reads; the inventory is only what this one machine was told.
+    """
+    notes = (snap or {}).get("notes") or {}
+    tags = [normalise_tag(t) for t in dev.tags]
+    tags += [t for t in (normalise_tag(x) for x in notes.get("tags", [])) if t not in tags]
+    cost = notes.get("cost") or dev.cost or {}
+    return tags, cost, notes.get("notes") or dev.notes
+
+
 def auth_of(dev: Device, state: dict | None) -> str:
     """Whether key auth works here. Derived, never stored.
 
@@ -296,6 +409,11 @@ def _alerts(dev: Device, snap: dict | None, state: dict | None) -> list[str]:
                            f"{dv['free_gb']}G left -- a long job will die on this")
         if snap.get("gpu_present") == "err":
             out.append(f"nvidia-smi present but failing: {snap.get('gpu_error', '')[:80]}")
+        if snap.get("notes_error"):
+            out.append(f"{snap['notes_error'][:160]} -- its notes and paths were not read")
+        for st in snap.get("storage", []):
+            if not st.get("exists"):
+                out.append(f"{st.get('kind')} folder {st.get('path')} does not exist there")
     if dev.kind is Kind.SHARED:
         out.append("shared multi-user host -- not claimable")
     if dev.kind is Kind.RENTAL and snap:
@@ -314,6 +432,9 @@ def device_view(dev: Device, state: dict | None, snap: dict | None,
     roomiest = _roomiest(snap)
     disks = [_disk_view(d) for d in (snap or {}).get("disks", [])]
 
+    tags, cost, note = declared(dev, snap)
+    jobs = gpu_jobs(snap)
+    full = detail is Detail.FULL
     out: dict[str, Any] = {
         "name": dev.name,
         "id": dev.id,
@@ -348,12 +469,15 @@ def device_view(dev: Device, state: dict | None, snap: dict | None,
         # way `gpus` is, so `fleet ls --json` stays small for the agents reading it.
         "disks": ([{"mount": d["mount"], "free_gb": d["free_gb"]} for d in disks]
                   if detail is Detail.COMPACT else disks),
-        "usd_per_hour": (dev.cost or {}).get("usd_per_hour"),
+        "usd_per_hour": cost.get("usd_per_hour"),
         "services": [{"name": s.get("name"), "kind": s.get("kind"), "port": s.get("port"),
                       "healthy": s.get("healthy")}
                      for s in (snap or {}).get("services", [])],
+        "models": model_servers(dev, snap, here=bool(self_id and dev.id == self_id)),
+        "software": software_view(snap, full=full),
+        "storage": storage_view(snap, full=full),
         "alerts": _alerts(dev, snap, state),
-        "tags": [normalise_tag(t) for t in dev.tags],
+        "tags": tags,
         "facts": facts(dev, snap, state),
         # How old the *hardware reading* is, which is not telemetry_age_s: store.latest
         # answers state and snapshot with two independent queries, so a device probed
@@ -362,6 +486,10 @@ def device_view(dev: Device, state: dict | None, snap: dict | None,
         # denominator.
         "snapshot_age_s": (int(time.time()) - snap["ts"]) if snap and snap.get("ts") else None,
     }
+    # Each GPU's jobs, by the order the GPUs are listed in.
+    for g, raw in zip(out["gpus"], (snap or {}).get("gpus", [])):
+        g["jobs"] = [{k: j[k] for k in ("pid", "user", "vram_mib", "runtime_s", "command")}
+                     for j in jobs.get(raw.get("uuid", ""), [])][:4 if not full else None]
     if state and status != Status.OK.value:
         out["error"] = {"class": state.get("error_class"), "detail": state.get("error_detail")}
         out["last_ok_at"] = state.get("last_ok_at")
@@ -379,7 +507,7 @@ def device_view(dev: Device, state: dict | None, snap: dict | None,
                           for p in procs if p.get("klass") == "display")
         out |= {
             "alias": dev.alias,
-            "notes": dev.notes,
+            "notes": note,
             "hostname": (snap or {}).get("hostname"),
             "os": (snap or {}).get("os"),
             "arch": (snap or {}).get("arch"),
@@ -400,7 +528,7 @@ def device_view(dev: Device, state: dict | None, snap: dict | None,
             "connect": connect_view(dev, state),
             "probe_policy": dev.probe_policy,
             "provider": dev.provider,
-            "cost": dev.cost,
+            "cost": cost,
         }
     return out
 
@@ -433,6 +561,29 @@ def connect_view(dev: Device, state: dict | None = None) -> dict[str, Any]:
     return {"ssh_command": best.ssh_command(), "auth": "key",
             "user": best.user, "port": best.port,
             "hint": f"Key auth. Run it directly, or `fleet ssh {dev.name}`."}
+
+
+def jobs_view(rows: list[dict]) -> dict:
+    """`fleet ps`: every GPU job across the fleet, the idle GPUs, and who was not read."""
+    jobs, idle = [], []
+    for r in rows:
+        if r["status"] != "ok":
+            continue
+        for g in r["gpus"]:
+            for j in g.get("jobs", []):
+                jobs.append({"machine": r["name"], "gpu": g["idx"], "gpu_name": g["name"], **j})
+            if not g.get("jobs") and not g.get("busy"):
+                idle.append({"machine": r["name"], "gpu": g["idx"], "gpu_name": g["name"],
+                             "vram_free_mib": g["vram_free_mib"]})
+    return {"jobs": jobs, "idle": idle,
+            "not_read": [r["name"] for r in rows if r["status"] != "ok" and r["gpu_count"]]}
+
+
+def models_view(rows: list[dict]) -> dict:
+    """`fleet models`: every model server across the fleet, and the model folders."""
+    return {"servers": [{"machine": r["name"], **m} for r in rows for m in r.get("models", [])],
+            "model_folders": [{"machine": r["name"], **st} for r in rows
+                              for st in (r.get("storage") or {}).get("models", [])]}
 
 
 def fleet_view(rows: list[dict]) -> dict:

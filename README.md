@@ -4,7 +4,8 @@
 # fleet — let your coding agent use every machine you have
 
 **Claude Code, Codex and Gemini see one machine: the one they run on.<br>
-fleet shows them all of yours — every GPU, how much is free, and how to get there.**
+fleet shows them all of yours — every GPU and what is running on it, the models being
+served, the software installed, and where your models and data live.**
 
 No account, no cloud service, nothing installed on the machines you add: just the SSH you already use.
 
@@ -83,6 +84,10 @@ You describe the work; the agent finds where it fits. It checks what each machin
 | "find me a box with a 24 GB card" | matched by what machines have — NVIDIA, VRAM, cores, RAM — not by name |
 | "run the tests on the Linux box" | the machine that runs Linux, results brought back |
 | "what's costing me money?" | idle paid rentals flagged, with their hourly price |
+| "who is using the GPUs?" | every job on every card — user, VRAM, how long, the command |
+| "is Llama 3 already served somewhere?" | every model server's models, and the URL or ssh tunnel to reach it |
+| "which box has torch 2.5 and CUDA 12?" | each machine's CUDA, Python environments and package versions |
+| "download the dataset where datasets go" | the folder that machine says holds datasets, and the room left there |
 | "let the laptop reach the NAS" | access granted, applied at once |
 
 Keys and passwords never go into the conversation, and anything irreversible waits for
@@ -149,7 +154,10 @@ Then drive it yourself:
 fleet ls                            # every machine, with what is free right now
 fleet ls --tag cuda --tag vram-24g  # by capability: NVIDIA, a card of 24 GB or more
 fleet top                           # live view, like htop for the whole fleet
-fleet show gpu-box                  # one machine in detail: GPU processes, services, disks
+fleet show gpu-box                  # one machine in detail: jobs, software, models, folders
+fleet ps                            # every job on every GPU, and which GPUs are idle
+fleet models                        # every model being served, and how to reach it
+fleet edit gpu-box --path models=/data/models   # where that machine keeps its models
 fleet ssh gpu-box -- nvidia-smi     # run something there
 fleet add "ssh ubuntu@10.0.0.7"     # add a machine; fleet invite NAME for a join line
 fleet access nas --allow laptop     # let one machine reach another
@@ -157,7 +165,15 @@ fleet access nas --allow laptop     # let one machine reach another
 
 <img src="docs/assets/fleet-ls.svg" alt="fleet ls: free GPU, VRAM, CPU, RAM and disk across seven machines — an A100 rental with one busy and one idle card, an idle H100 rental flagged as costing money, a busy RTX 3090 box with a nearly full disk, a laptop, a NAS and a machine that is switched off" width="100%">
 
-<img src="docs/assets/fleet-top.svg" alt="fleet top: a live view of GPU utilisation, free VRAM, CPU, RAM and disk across all machines" width="100%">
+<img src="docs/assets/fleet-top.svg" alt="fleet top: a live view of GPU utilisation, free VRAM, CPU, RAM, disk and who is running what on each GPU, across all machines" width="100%">
+
+<img src="docs/assets/fleet-ps.svg" alt="fleet ps: every job on every GPU — a training run on an A100 rental, a fine-tune and a vLLM server on a lab box with two RTX 3090s — and the three idle GPUs" width="100%">
+
+<img src="docs/assets/fleet-models.svg" alt="fleet models: Llama 3.1 served by vLLM on the lab box at its URL, and two ollama models on the RTX 4090 that listen only locally, with the ssh tunnel that reaches them" width="100%">
+
+Where a machine keeps its models, datasets and media is written on the machine itself,
+in `machine.yaml` (`fleet edit NAME --path models=/data/models`). Whoever looks at that
+machine reads the same answer, and the folder sizes and free space come with every probe.
 
 Rentals from vast.ai, RunPod or AutoDL show their price (`fleet edit a100 --cost 1.89`),
 the fleet's burn rate, and an alert when a rental sits idle. On Tailscale, ZeroTier

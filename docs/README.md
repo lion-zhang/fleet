@@ -15,6 +15,7 @@ Task by task: what to say to your agent, and the command it runs.
 |---|---|
 | [Adding machines](guides/add-machines.md) | add a server, a rental, a password-only host, one behind NAT, or one that does not exist yet |
 | [Finding the right machine](guides/find-machines.md) | let the agent pick by GPU, memory or OS; tag machines; track costs and idle rentals |
+| [What is on each machine](guides/resources.md) | see GPU jobs, served models, installed software, and where models and data live |
 | [Running work](guides/run-work.md) | run commands and long jobs on another machine |
 | [Access between machines](guides/access.md) | let one machine reach another, and take it back |
 | [The center](guides/center.md) | understand what the center does, what happens when it is off, and move it |

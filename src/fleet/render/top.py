@@ -278,6 +278,29 @@ def name_cell(row: dict[str, Any]) -> str:
     return name + "\n[dim]\u2502[/dim]" * (device_lines(row) - 1)
 
 
+def short_command(cmd: str, limit: int = 22) -> str:
+    """`python /home/me/train.py --lr 3e-4` -> `python train.py --lr 3e-4`, cut to fit."""
+    words = (cmd or "").split()
+    words = [w.rsplit("/", 1)[-1] if "/" in w and not w.startswith("-") else w for w in words]
+    out = " ".join(words)
+    return out if len(out) <= limit else out[:limit - 1] + "\u2026"
+
+
+def jobs_cell(row: dict[str, Any]) -> str:
+    """Who is using each GPU, one line per card like the GPU column beside it."""
+    lines = []
+    for g in row.get("gpus") or []:
+        jobs = g.get("jobs") or []
+        if not jobs:
+            lines.append("[dim]-[/dim]")
+            continue
+        first = jobs[0]
+        more = f" [dim]+{len(jobs) - 1}[/dim]" if len(jobs) > 1 else ""
+        lines.append(f"{escape(first.get('user') or '?')} "
+                     f"[dim]{escape(short_command(first.get('command', '')))}[/dim]{more}")
+    return "\n".join(lines) if lines else "[dim]-[/dim]"
+
+
 def render_fleet(rows: list[dict[str, Any]], summary: dict[str, Any],
                  live_within: int = 10) -> Table:
     t = Table(box=None, pad_edge=False, header_style="bold", expand=False)
@@ -296,6 +319,7 @@ def render_fleet(rows: list[dict[str, Any]], summary: dict[str, Any],
                     ("RAM FREE", {"justify": "right", "no_wrap": True}),
                     ("DISK FREE", {"justify": "left" if tall else "right",
                                    "no_wrap": True}),
+                    ("JOBS", {"no_wrap": True, "overflow": "ellipsis", "max_width": 24}),
                     ("AGE", {"justify": "right", "no_wrap": True}),
                     ("NOTE", {"no_wrap": True, "overflow": "ellipsis", "max_width": 34})):
         t.add_column(col, **kw)
@@ -314,6 +338,7 @@ def render_fleet(rows: list[dict[str, Any]], summary: dict[str, Any],
             "?" if pct is None else f"{pct}%",
             f"{row['ram_free_gb']:.0f}G" if row.get("ram_free_gb") else "-",
             disk_cell(row),
+            jobs_cell(row),
             # "live" only for a machine that answered: one that just failed to was
             # probed a second ago too, and calling it live beside "no answer" was a
             # contradiction in the one view meant to be watched.
@@ -352,8 +377,13 @@ def render_device(row: dict[str, Any], live_within: int = 10) -> Table:
                   f"{escape(meter(disk.get('use_pct', 0), 100, 20))} "
                   f"{disk.get('free_gb', 0):.0f}G free  [dim]{disk.get('mount', '')}[/dim]")
     for proc in (row.get("processes") or [])[:8]:
-        t.add_row("[dim]gpu proc[/dim]",
-                  f"{proc.get('vram_mib', 0)} MiB  [dim]{proc.get('comm', '')}[/dim]")
+        t.add_row("[dim]gpu job[/dim]",
+                  f"{proc.get('vram_mib', 0)} MiB  {escape(proc.get('user') or '?')}  "
+                  f"[dim]{escape(short_command(proc.get('args') or proc.get('comm', ''), 60))}[/dim]")
+    for m in row.get("models") or []:
+        t.add_row("[bold]models[/bold]",
+                  f":{m.get('port')} {escape(', '.join(m.get('models') or []) or '-')}  "
+                  f"[dim]{escape(m.get('framework') or '')}[/dim]")
     for proc in (row.get("top_cpu") or [])[:5]:
         t.add_row("[dim]cpu proc[/dim]",
                   f"{proc.get('cpu_pct', 0):.0f}%  [dim]{proc.get('comm', '')}[/dim]")
@@ -405,3 +435,78 @@ def render_ls(rows: list[dict[str, Any]]) -> Table:
                   f"${r['usd_per_hour']:.2f}" if r["usd_per_hour"] else "-",
                   age, note)
     return t
+
+
+def runtime(seconds: int) -> str:
+    """3d4h, 5h12m, 7m -- how long a job has been running, at a glance."""
+    seconds = int(seconds or 0)
+    d, rem = divmod(seconds, 86400)
+    h, rem = divmod(rem, 3600)
+    m = rem // 60
+    return f"{d}d{h}h" if d else f"{h}h{m:02d}m" if h else f"{m}m"
+
+
+def size(gb: float) -> str:
+    return f"{gb * 1024:.0f} MB" if gb < 1 else f"{gb:.1f} GB"
+
+
+def render_ps(view: dict[str, Any]) -> list:
+    """`fleet ps`: the jobs table, then the idle GPUs, then who could not be read."""
+    out: list = []
+    if view["jobs"]:
+        t = Table(box=None, pad_edge=False, header_style="bold")
+        for col in ("MACHINE", "GPU", "USER", "VRAM", "TIME", "COMMAND"):
+            t.add_column(col, justify="right" if col in ("VRAM", "TIME") else "left",
+                         no_wrap=True, overflow="ellipsis",
+                         max_width=70 if col == "COMMAND" else None)
+        for j in view["jobs"]:
+            t.add_row(j["machine"], f"{j['gpu']} [dim]{escape(_short_gpu(j['gpu_name']))}[/dim]",
+                      escape(j["user"] or "?"), f"{j['vram_mib'] / 1024:.1f}G",
+                      runtime(j["runtime_s"]), escape(j["command"] or ""))
+        out.append(t)
+    else:
+        out.append("[dim]No jobs on any GPU.[/dim]")
+    if view["idle"]:
+        out.append("\n[green]idle[/green]  " + "  ".join(
+            f"{i['machine']} gpu{i['gpu']} [dim]({i['vram_free_mib'] / 1024:.0f}G free)[/dim]"
+            for i in view["idle"]))
+    if view["not_read"]:
+        out.append(f"[yellow]![/yellow] [dim]not read just now: "
+                   f"{', '.join(view['not_read'])}[/dim]")
+    return out
+
+
+def _short_gpu(name: str) -> str:
+    return (name or "").replace("NVIDIA ", "").replace("GeForce ", "")
+
+
+def render_models(view: dict[str, Any]) -> list:
+    """`fleet models`: one row per model served, then the folders models are kept in."""
+    out: list = []
+    if not view["servers"]:
+        out.append("[dim]No model servers found. fleet looks for vLLM, SGLang, ollama, "
+                   "llama.cpp, LM Studio, MLX and other OpenAI-compatible servers on the "
+                   "ports they listen on.[/dim]")
+    else:
+        t = Table(box=None, pad_edge=False, header_style="bold")
+        for col in ("MODEL", "MACHINE", "SERVER", "REACH"):
+            t.add_column(col, no_wrap=col != "REACH")
+        for sv in view["servers"]:
+            reach = sv["url"] or ("[dim]local only, tunnel:[/dim] " + escape(sv["tunnel"])
+                                  if sv.get("tunnel") else "[dim]local only[/dim]")
+            if sv["url"]:
+                reach = escape(reach)
+            label = f":{sv['port']} {sv['framework']}".strip()
+            if not sv["models"]:
+                t.add_row("[yellow]wants an API key[/yellow]" if sv["status"] == "auth"
+                          else "[dim]none listed[/dim]", sv["machine"], label, reach)
+            for m in sv["models"]:
+                t.add_row(escape(m), sv["machine"], label, reach)
+        out.append(t)
+    if view["model_folders"]:
+        out.append("\n[bold]model folders[/bold]")
+        for st in view["model_folders"]:
+            shown = (size(st["size_gb"]) if st.get("size_gb") is not None else "size pending"
+                     ) if st["exists"] else "[yellow]missing[/yellow]"
+            out.append(f"  {st['machine']:<16} {escape(st['path'])}  [dim]{shown}[/dim]")
+    return out

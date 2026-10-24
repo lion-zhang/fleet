@@ -18,6 +18,8 @@ command accepts `--help`. For what to use when, start with the
 | [`fleet install`](#fleet-install) | Install fleet on a device, so you and its agents can use the fleet from there. |
 | [`fleet update`](#fleet-update) | Update fleet on the machines that have it, the way it was installed there. |
 | [`fleet sync`](#fleet-sync) | Merge this machine's inventory with the center's. |
+| [`fleet ps`](#fleet-ps) | What is running on every GPU, across the fleet, and which GPUs are idle. |
+| [`fleet models`](#fleet-models) | Every model being served across the fleet: which server, where, and how to reach it. |
 | [`fleet top`](#fleet-top) | Live view of the fleet, or of one device. Like htop, for your machines. |
 | [`fleet rm`](#fleet-rm) | Remove a device from the inventory. |
 | [`fleet ssh`](#fleet-ssh) | Open a shell on a device, or run a command: `fleet ssh machine_A -- nvidia-smi`. |
@@ -50,6 +52,7 @@ fleet ls --json
 |---|---|
 | `--json` | print JSON instead of a table, for scripts and agents |
 | `--refresh`, `-r` | force a live probe |
+| `--rescan` | also re-read software versions and folder sizes, which machines otherwise cache for 6 hours |
 | `--online` | only reachable devices |
 | `--tag` `NAME` | only machines carrying this tag or fact; repeatable, and all must match |
 
@@ -75,6 +78,7 @@ fleet show machine_A
 |---|---|
 | `--json` | print JSON instead of a table, for scripts and agents |
 | `--refresh`, `--no-refresh` | probe it now; --no-refresh shows the last reading |
+| `--rescan` | also re-read software versions and folder sizes, which machines otherwise cache for 6 hours |
 
 ## fleet add
 
@@ -187,6 +191,7 @@ fleet edit machine_A --ssh "ssh -p 40001 root@5.6.7.8"
 | `--untag` `NAME` | remove a label; repeatable |
 | `--role` | a label for what the machine is for; the center moves only with `fleet center NAME` |
 | `--cost` `USD` | what it costs per hour, for the $/HR column and the fleet's burn rate; 0 clears it |
+| `--path` `KIND=PATH` | where this machine keeps models, datasets, media...: models=/data/models; repeat a kind for several, models= clears it. Written to the machine's own machine.yaml |
 | `--json` | print JSON instead of a table, for scripts and agents |
 
 ## fleet install
@@ -264,6 +269,52 @@ fleet sync
 | `--serve` | run on the center: merge stdin, print the result |
 | `--from` `URL` | dial a center at this address and remember it, when it cannot reach you |
 | `--json` | print JSON instead of a table, for scripts and agents |
+
+## fleet ps
+
+What is running on every GPU, across the fleet, and which GPUs are idle.
+
+```
+fleet ps [OPTIONS] [NAMES]...
+```
+
+Example:
+
+```bash
+fleet ps --json
+```
+
+| Argument | |
+|---|---|
+| `NAMES` | only these machines |
+
+| Option | |
+|---|---|
+| `--json` | print JSON instead of a table, for scripts and agents |
+| `--refresh`, `-r` | force a live probe |
+
+## fleet models
+
+Every model being served across the fleet: which server, where, and how to reach it.
+
+```
+fleet models [OPTIONS] [NAMES]...
+```
+
+Example:
+
+```bash
+fleet models --json
+```
+
+| Argument | |
+|---|---|
+| `NAMES` | only these machines |
+
+| Option | |
+|---|---|
+| `--json` | print JSON instead of a table, for scripts and agents |
+| `--refresh`, `-r` | force a live probe |
 
 ## fleet top
 

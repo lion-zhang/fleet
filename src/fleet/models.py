@@ -74,6 +74,9 @@ class Process:
     cpu_pct: float = 0.0
     rss_kb: int = 0
     etimes: int = 0
+    # The command line, with anything that looks like a secret replaced (parse.redact):
+    # "python train.py --lr 3e-4" says what a job is, where comm only says "python".
+    args: str = ""
 
 
 @dataclass(slots=True)
@@ -91,6 +94,9 @@ class Service:
     latency_ms: int | None = None
     model_ids: list[str] = field(default_factory=list)
     source: str = "discovered"  # discovered | declared
+    # What asking it for its models said: ok | auth (it wants a key) | none (it answered,
+    # but not as a model server) | down. Empty when it was not asked.
+    status: str = ""
 
 
 @dataclass(slots=True)
@@ -102,6 +108,37 @@ class Disk:
     # Older snapshots have no such field and are assumed writable: treating them as
     # read-only would silently stop alerting on disks that really can fill up.
     writable: bool = True
+
+
+@dataclass(slots=True)
+class StorePath:
+    """A folder the machine's own notes say holds something: models, datasets, media."""
+
+    kind: str
+    path: str
+    exists: bool = False
+    avail_kb: int | None = None
+    # From `du`, which runs in the background on the machine; None until it has finished.
+    size_kb: int | None = None
+    sized_at: int | None = None
+
+
+@dataclass(slots=True)
+class PyPackage:
+    """One package of interest in one Python environment."""
+
+    env: str          # the environment's folder, `~/...` under the home folder
+    python: str
+    package: str
+    version: str
+
+
+@dataclass(slots=True)
+class Container:
+    image: str
+    name: str
+    status: str
+    ports: str = ""
 
 
 @dataclass(slots=True)
@@ -141,6 +178,18 @@ class Snapshot:
     services: list[Service] = field(default_factory=list)
     disks: list[Disk] = field(default_factory=list)
     slurm_info: dict[str, list[str]] = field(default_factory=dict)
+    # What the machine says about itself in its own machine.yaml, checked (notes.py).
+    notes: dict = field(default_factory=dict)
+    notes_error: str = ""
+    storage: list[StorePath] = field(default_factory=list)
+    # cuda, nvcc, cudnn, rocm, python, uv, docker, ... -> version (or where it is)
+    software: dict[str, str] = field(default_factory=dict)
+    pyenvs: list[PyPackage] = field(default_factory=list)
+    # None when the probe did not look (a light probe, or no docker), not "none running".
+    containers: list[Container] | None = None
+    # A quick re-read for `fleet top`: whatever the light probe skips is carried over
+    # from the reading before it (store.record).
+    light: bool = False
 
     def to_dict(self) -> dict:
         return asdict(self)
