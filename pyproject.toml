@@ -1,6 +1,6 @@
 [project]
 name = "agents-fleet"
-version = "0.5.2"
+version = "0.6.0"
 description = "Give Claude Code, Codex and Gemini every machine you have: free GPUs, running jobs, served models, installed software and data folders across your servers, over the SSH you already use, plus an MCP server."
 readme = "README.md"
 requires-python = ">=3.12"
