@@ -26,7 +26,8 @@ from ..render.view import Detail, device_view
 from . import identity
 
 
-def _probe(conn, due: list, cfg, *, me: str, schedule=None, tolerant: bool = False) -> None:
+def _probe(conn, due: list, cfg, *, me: str, schedule=None, tolerant: bool = False,
+           light: bool = False, refresh: bool = False) -> None:
     """Probe every device in `due` and record the results.
 
     Grouped by `(mode, disk_paths)` because `probe_many` applies one set of options to a
@@ -38,7 +39,8 @@ def _probe(conn, due: list, cfg, *, me: str, schedule=None, tolerant: bool = Fal
     for d in due:
         if me and d.id == me:
             # no ssh, no key, no network to look at the machine we are running on
-            res = run_probe_local(mode=d.probe_mode, disk_paths=d.disk_paths)
+            res = run_probe_local(mode=d.probe_mode, disk_paths=d.disk_paths, light=light,
+                                  refresh=refresh)
             store.record(conn, d.id, res)
             if schedule is not None:
                 schedule.record(d.id, ok=res.ok, now=now)
@@ -50,7 +52,8 @@ def _probe(conn, due: list, cfg, *, me: str, schedule=None, tolerant: bool = Fal
             results = probe_many(subset, mode=mode, disk_paths=list(paths),
                                  timeout=float(cfg.probe_timeout_s),
                                  connect_timeout=int(cfg.connect_timeout_s),
-                                 max_workers=int(cfg.max_workers))
+                                 max_workers=int(cfg.max_workers),
+                                 light=light, refresh=refresh)
         except Exception:
             # One unreachable host must not end a live session. probe_many already
             # isolates failures inside a batch; the loop around it has to do the same.
@@ -81,7 +84,7 @@ def _render(conn, devices: list, detail: Detail, me: str) -> list[dict]:
 
 
 def snapshot(names: list[str] | None = None, *, refresh: bool = False,
-             detail: Detail = Detail.COMPACT) -> list[dict]:
+             detail: Detail = Detail.COMPACT, rescan: bool = False) -> list[dict]:
     """Every device (or the named ones), probed if its telemetry has aged out."""
     cfg = load_config()
     devices = inv.live(inv.load())
@@ -108,10 +111,13 @@ def snapshot(names: list[str] | None = None, *, refresh: bool = False,
                 # `show` as by `top` -- before, every agent's `ls` measured it every
                 # minute. `-r` naming it still asks now.
                 ttl = max(ttl, int(cfg.shared_min_interval_s or 0))
-            if eligible and (refresh or not store.is_fresh(st, ttl, backoff_max=backoff)):
+            if eligible and (refresh or rescan
+                             or not store.is_fresh(st, ttl, backoff_max=backoff)):
                 stale.append(d)
         if stale:
-            _probe(conn, stale, cfg, me=me)
+            # `rescan` also rebuilds what the machines cache for hours -- software versions
+            # and folder sizes -- where `refresh` only asks for a reading now.
+            _probe(conn, stale, cfg, me=me, refresh=rescan)
         return _render(conn, devices, detail, me)
     finally:
         conn.close()
@@ -127,5 +133,7 @@ def tick(conn, devices: list, schedule, cfg, detail: Detail) -> list[dict]:
     me = identity.local_device_id()
     due = [d for d in schedule.due(devices, time.monotonic()) if d.probeable]
     if due:
-        _probe(conn, due, cfg, me=me, schedule=schedule, tolerant=True)
+        # Light: what the machines have cached, and nothing that waits on the network --
+        # a frame every few seconds cannot afford to ask every LLM server for its models.
+        _probe(conn, due, cfg, me=me, schedule=schedule, tolerant=True, light=True)
     return _render(conn, devices, detail, me)

@@ -11,7 +11,9 @@ from __future__ import annotations
 
 import re
 
-from ..models import Disk, Gpu, ProcClass, Process, Service, Snapshot
+from .. import notes as machine_notes
+from ..models import (Container, Disk, Gpu, ProcClass, Process, PyPackage, Service,
+                      Snapshot, StorePath)
 
 # Processes that hold VRAM because a desktop session exists, not because work is running.
 # Verified necessary: lin-xps idles with 439 MiB held by msedge/ptyxis/nautilus/code.
@@ -29,10 +31,15 @@ _SERVICE_SIGNATURES: tuple[tuple[str, str, str], ...] = (
     ("vllm", "llm", "vllm"),
     ("sglang", "llm", "sglang"),
     ("ollama", "llm", "ollama"),
+    ("omlx", "llm", "omlx"),
     ("mlx_lm", "llm", "mlx"),
     ("text-generation", "llm", "tgi"),
     ("llama-server", "llm", "llama.cpp"),
     ("lmstudio", "llm", "lmstudio"),
+    ("koboldcpp", "llm", "koboldcpp"),
+    ("tabby", "llm", "tabbyapi"),
+    ("litellm", "llm", "litellm"),
+    ("local-ai", "llm", "localai"),
     ("jupyter", "notebook", "jupyter"),
     ("milvus", "vectordb", "milvus"),
     ("neo4j", "graphdb", "neo4j"),
@@ -47,6 +54,24 @@ _SERVICE_SIGNATURES: tuple[tuple[str, str, str], ...] = (
 LLM_HINT_PORTS = frozenset({8000, 8001, 8010, 8080, 11434, 1234, 5000, 30000})
 # Never surface these as "services" -- they are OS plumbing, not something you can use.
 BORING_PORTS = frozenset({22, 53, 111, 631, 5353, 68, 67, 123})
+
+
+# What a command line must never carry out of the machine: a job started with
+# `--hf-token hf_...` would otherwise show its token to every agent that lists jobs.
+_SECRET_FLAG = re.compile(
+    r"(?i)(--?[\w-]*(?:token|secret|passw(?:or)?d|api[-_]?key|access[-_]?key|auth)[\w-]*"
+    r"(?:=|\s+))(\S+)")
+_SECRET_ENV = re.compile(r"(?i)\b([A-Z0-9_]*(?:TOKEN|SECRET|PASSWORD|API_KEY|ACCESS_KEY)"
+                         r"[A-Z0-9_]*=)(\S+)")
+_SECRET_VALUE = re.compile(r"\b(?:hf_[A-Za-z0-9]{8,}|sk-[A-Za-z0-9_-]{8,}|gh[pousr]_[A-Za-z0-9]{8,}"
+                           r"|xox[abprs]-[A-Za-z0-9-]{8,}|AKIA[0-9A-Z]{16}|AIza[0-9A-Za-z_-]{20,})")
+
+
+def redact(cmdline: str) -> str:
+    """The command line with every value that looks like a secret replaced by ***."""
+    out = _SECRET_FLAG.sub(lambda m: m.group(1) + "***", cmdline or "")
+    out = _SECRET_ENV.sub(lambda m: m.group(1) + "***", out)
+    return _SECRET_VALUE.sub("***", out)
 
 
 class MissingSentinel(ValueError):
@@ -194,6 +219,8 @@ def parse_payload(stdout: str) -> Snapshot:
         snap.processes.append(Process(
             pid=_int(f[1]) or 0, user=f[3].strip(), comm=comm, klass=klass,
             scope="gpu", gpu_uuid=f[0].strip(), vram_mib=vram, etimes=parse_etime(f[4]),
+            # rejoined: a command line may itself have held a `|` the probe removed
+            args=redact("|".join(f[6:]).strip()) if len(f) > 6 else "",
         ))
         if (gpu := by_uuid.get(f[0].strip())) is not None:
             if klass is ProcClass.COMPUTE:
@@ -235,4 +262,59 @@ def parse_payload(stdout: str) -> Snapshot:
         k, _, v = ln.partition("|")
         snap.slurm_info.setdefault(k.strip(), []).append(v.strip())
 
+    _parse_resources(snap, kv, rows)
     return snap
+
+
+def _parse_resources(snap: Snapshot, kv: dict[str, str], rows: dict[str, list[str]]) -> None:
+    """The machine's own notes, its folders, its software and what its servers serve."""
+    snap.light = kv.get("probe.light") == "1"
+    snap.notes, snap.notes_error = machine_notes.from_probe(kv)
+
+    for ln in rows.get("STORE", []):
+        f = ln.split("|")
+        if len(f) < 3 or not f[1].strip():
+            continue
+        snap.storage.append(StorePath(
+            kind=f[0].strip(), path=f[1].strip(), exists=f[2].strip() == "1",
+            avail_kb=_int(f[3]) if len(f) > 3 else None,
+            size_kb=_int(f[4]) if len(f) > 4 else None,
+            sized_at=_int(f[5]) if len(f) > 5 else None))
+
+    for ln in rows.get("SOFTWARE", []):
+        k, _, v = ln.partition("|")
+        if k.strip() and v.strip():
+            snap.software[k.strip()] = v.strip()
+
+    for ln in rows.get("PYENV", []):
+        f = [x.strip() for x in ln.split("|")]
+        if len(f) >= 4 and f[2]:
+            snap.pyenvs.append(PyPackage(env=f[0], python=f[1], package=f[2], version=f[3]))
+
+    if "CONTAINER" in rows:
+        snap.containers = []
+        for ln in rows["CONTAINER"]:
+            f = ln.split("|")
+            if len(f) >= 3:
+                snap.containers.append(Container(
+                    image=f[0].strip(), name=f[1].strip(), status=f[2].strip(),
+                    ports="|".join(f[3:]).strip()))
+
+    answered: dict[int, tuple[str, int | None, list[str]]] = {}
+    for ln in rows.get("LLMMODEL", []):
+        f = ln.split("|")
+        port = _int(f[0]) if f else None
+        if port is None or len(f) < 3:
+            continue
+        status, ms, models = answered.get(port, (f[1].strip(), _int(f[2]), []))
+        if len(f) > 3 and f[3].strip():
+            models.append(f[3].strip())
+        answered[port] = (status, ms, models)
+    for svc in snap.services:
+        if svc.port not in answered:
+            continue
+        svc.status, svc.latency_ms, svc.model_ids = answered[svc.port]
+        svc.healthy = svc.status in ("ok", "auth")
+        if svc.kind == "llm?" and svc.model_ids:
+            svc.kind = "llm"         # it listed models: no longer a guess. A 401 alone
+                                     # could be any web app with a login, so stays one.

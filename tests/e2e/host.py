@@ -279,6 +279,8 @@ def main() -> int:
     expect("edit --name (back)", ["edit", "loop2", "--name", name], r".")
     expect("edit --json", ["edit", name, "--cost", "0", "--json"], r"\{")
 
+    resource_checks(name)
+
     # top needs a terminal; without one it must say so rather than hang.
     code, out = fleet("top", "-i", "1", timeout=8)
     check("top without a terminal exits or explains", code != 124 or bool(out.strip()),
@@ -349,6 +351,36 @@ def main() -> int:
 
     report(a.report)
     return 1 if any(s == "FAIL" for s, _, _ in RESULTS) else 0
+
+
+def resource_checks(name: str) -> None:
+    """What a machine has beyond its hardware, over ssh to this runner as a target: the
+    folders its own machine.yaml names, its software, GPU jobs and model servers."""
+    folder = tempfile.mkdtemp(prefix="fleet-models-")
+    Path(folder, "weights.bin").write_bytes(b"x" * 200_000)
+    ok, out = expect("edit --path writes the machine's own machine.yaml",
+                     ["edit", name, "--path", f"models={folder}", "--json"], r'"ok": true')
+    ok, out = expect("show --rescan --json", ["show", name, "--rescan", "--json"], r'"storage"')
+    row = as_json(out) or {}
+    models = (row.get("storage") or {}).get("models") or []
+    check("  the folder is reported, and found", any(m.get("path") == folder and m.get("exists")
+                                                    for m in models), str(row.get("storage")))
+    check("  its software is reported", bool((row.get("software") or {}).get("system")),
+          str(row.get("software")), required=not WINDOWS)
+    for _ in range(10):                  # the size is worked out in the background
+        time.sleep(1)
+        ok, out = fleet("show", name, "--json")
+        sized = [m for m in ((as_json(out) or {}).get("storage") or {}).get("models", [])
+                 if m.get("size_gb") is not None]
+        if sized:
+            break
+    check("  and its size, once worked out", bool(sized), out[-600:], required=not WINDOWS)
+    expect("ps --json", ["ps", "--json"], r'"jobs"')
+    expect("ps", ["ps"], r".")
+    expect("models --json", ["models", "--json"], r'"servers"')
+    expect("models", ["models"], r".")
+    expect("edit --path KIND= clears it", ["edit", name, "--path", "models=", "--json"],
+           r'"ok": true')
 
 
 def interactive_checks(machine: str, user: str) -> None:

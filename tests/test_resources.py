@@ -1,0 +1,446 @@
+"""What a machine has beyond its hardware: GPU jobs, model servers, software, folders.
+
+The probe half runs payload.sh for real, in a home folder made for the test, so what is
+checked is what a machine would actually report -- the YAML shapes it can read, the
+Python environments it finds without importing anything, and what a model server says
+when asked. The rest is the parser, the views, and the machine's own notes file.
+"""
+
+from __future__ import annotations
+
+import base64
+import http.server
+import json
+import os
+import shutil
+import subprocess
+import sys
+import threading
+from pathlib import Path
+
+import pytest
+
+from fleet import notes
+from fleet.models import Device, Kind
+from fleet.probe.parse import parse_payload, redact
+from fleet.render.view import Detail, device_view, model_servers, software_view
+from fleet.state import store
+
+REPO = Path(__file__).resolve().parent.parent
+PAYLOAD = REPO / "src" / "fleet" / "probe" / "payload.sh"
+posix = pytest.mark.skipif(sys.platform == "win32" or not shutil.which("sh"),
+                           reason="runs payload.sh")
+
+
+def probe(home: Path, **env) -> str:
+    e = {"PATH": os.environ["PATH"], "HOME": str(home), **env}
+    p = subprocess.run(["sh", str(PAYLOAD)], env=e, capture_output=True, text=True,
+                       timeout=60)
+    assert "#END" in p.stdout, p.stderr
+    return p.stdout
+
+
+def make_home(tmp_path: Path, yaml_text: str = "") -> Path:
+    home = tmp_path / "home"
+    (home / ".config" / "fleet").mkdir(parents=True)
+    if yaml_text:
+        (home / ".config" / "fleet" / "machine.yaml").write_text(yaml_text)
+    return home
+
+
+def venv(home: Path, name: str, py: str, *pkgs: str) -> None:
+    site = home / ".venvs" / name / "lib" / f"python{py}" / "site-packages"
+    for p in pkgs:
+        (site / f"{p}.dist-info").mkdir(parents=True)
+
+
+# ---------------------------------------------------------------- the machine's notes
+@posix
+def test_every_way_of_writing_a_list_of_folders_is_read(tmp_path):
+    home = make_home(tmp_path, """\
+cost: 1.89
+tags: [train, nas]
+paths:
+  models: ~/models          # a scalar, with a comment
+  datasets: [/data/a, "~/b"]
+  media:
+    - /srv/media
+    - '~/pics'
+notes: the big box
+""")
+    (home / "models").mkdir()
+    snap = parse_payload(probe(home))
+    assert snap.notes == {"cost": {"usd_per_hour": 1.89}, "tags": ["train", "nas"],
+                          "notes": "the big box",
+                          "paths": {"models": ["~/models"], "datasets": ["/data/a", "~/b"],
+                                    "media": ["/srv/media", "~/pics"]}}
+    got = {(s.kind, s.path, s.exists) for s in snap.storage}
+    assert got == {("models", f"{home}/models", True), ("datasets", "/data/a", False),
+                   ("datasets", f"{home}/b", False), ("media", "/srv/media", False),
+                   ("media", f"{home}/pics", False)}
+    assert next(s for s in snap.storage if s.kind == "models").avail_kb
+
+
+@posix
+def test_a_broken_notes_file_is_reported_not_fatal(tmp_path):
+    home = make_home(tmp_path, "paths: [unclosed\n")
+    snap = parse_payload(probe(home))
+    assert snap.notes == {} and "not valid YAML" in snap.notes_error
+    view = device_view(Device(id="x", name="box"), {"status": "ok"}, snap.to_dict())
+    assert any("machine.yaml" in a for a in view["alerts"])
+
+
+@posix
+def test_folder_sizes_are_worked_out_in_the_background_and_reported_next_time(tmp_path):
+    home = make_home(tmp_path, "paths:\n  models: ~/models\n")
+    (home / "models").mkdir()
+    (home / "models" / "w.bin").write_bytes(b"x" * 300_000)
+    first = parse_payload(probe(home))
+    # Not waited for: unknown, unless the background `du` was quicker than the probe.
+    assert first.storage[0].size_kb is None or first.storage[0].sized_at
+    sizes = home / ".cache" / "fleet" / "sizes"
+    for _ in range(100):
+        if sizes.exists():
+            break
+        threading.Event().wait(0.05)
+    second = parse_payload(probe(home))
+    assert second.storage[0].size_kb and second.storage[0].size_kb >= 290
+    assert second.storage[0].sized_at
+
+
+# ---------------------------------------------------------------- software
+@posix
+def test_python_packages_are_read_from_their_folders_not_imported(tmp_path):
+    home = make_home(tmp_path)
+    venv(home, "train", "3.11", "torch-2.4.1+cu121", "transformers-4.44.0", "numpy-2.0.0")
+    venv(home, "mac", "3.12", "mlx-0.18.0", "mlx_lm-0.19.0")
+    snap = parse_payload(probe(home))
+    got = {(p.env, p.python, p.package, p.version) for p in snap.pyenvs}
+    assert {("~/.venvs/train", "3.11", "torch", "2.4.1+cu121"),
+            ("~/.venvs/train", "3.11", "transformers", "4.44.0"),
+            ("~/.venvs/mac", "3.12", "mlx", "0.18.0"),
+            ("~/.venvs/mac", "3.12", "mlx_lm", "0.19.0")} <= got
+    assert not any(p.package == "numpy" for p in snap.pyenvs)   # not one fleet reports
+
+
+@posix
+def test_the_software_scan_is_cached_and_a_light_probe_never_rebuilds_it(tmp_path):
+    home = make_home(tmp_path)
+    venv(home, "a", "3.11", "torch-2.0.0")
+    parse_payload(probe(home))
+    venv(home, "b", "3.11", "vllm-0.6.0")
+    # Cached: the new environment is not seen until the cache is rebuilt...
+    assert not any(p.package == "vllm" for p in parse_payload(probe(home)).pyenvs)
+    assert not any(p.package == "vllm"
+                   for p in parse_payload(probe(home, FLEET_LIGHT="1")).pyenvs)
+    # ...which `--rescan` asks for.
+    assert any(p.package == "vllm"
+               for p in parse_payload(probe(home, FLEET_REFRESH="1")).pyenvs)
+
+
+@posix
+def test_a_machine_whose_home_cannot_be_written_still_reports_its_software(tmp_path):
+    home = make_home(tmp_path)
+    venv(home, "a", "3.11", "torch-2.0.0")
+    (home / ".cache").write_text("not a folder")       # mkdir of the cache fails
+    assert any(p.package == "torch" for p in parse_payload(probe(home)).pyenvs)
+
+
+# ---------------------------------------------------------------- model servers
+class _Stub(http.server.BaseHTTPRequestHandler):
+    mode = "openai"
+
+    def log_message(self, *a):
+        pass
+
+    def do_GET(self):  # noqa: N802 - http.server's name
+        if self.mode == "auth":
+            self.send_response(401)
+            self.end_headers()
+            return
+        if self.mode == "openai" and self.path == "/v1/models":
+            body = {"data": [{"id": "Qwen/Qwen2.5-7B-Instruct",
+                              "permission": [{"id": "modelperm-abc"}]}]}
+        elif self.mode == "ollama" and self.path == "/api/tags":
+            body = {"models": [{"name": "llama3.1:8b", "details": {"family": "llama"}}]}
+        else:
+            self.send_response(404)
+            self.end_headers()
+            return
+        data = json.dumps(body).encode()
+        self.send_response(200)
+        self.send_header("Content-Type", "application/json")
+        self.end_headers()
+        self.wfile.write(data)
+
+
+def _serve(mode: str):
+    handler = type(f"Stub{mode}", (_Stub,), {"mode": mode})
+    srv = http.server.ThreadingHTTPServer(("127.0.0.1", 0), handler)
+    threading.Thread(target=srv.serve_forever, daemon=True).start()
+    return srv
+
+
+def _listen_lines(*ports: int) -> str:
+    return "".join(f"tcp|127.0.0.1|{p}|1|python3\n" for p in ports)
+
+
+@posix
+@pytest.mark.skipif(not (shutil.which("curl") or shutil.which("wget")), reason="curl or wget")
+def test_model_servers_are_asked_what_they_serve(tmp_path, monkeypatch):
+    servers = {m: _serve(m) for m in ("openai", "ollama", "auth")}
+    try:
+        port = {m: s.server_address[1] for m, s in servers.items()}
+        # The ports are random, so the LISTEN rows are given rather than discovered: a
+        # stand-in `ss` that reports these three as model servers.
+        bin_ = tmp_path / "bin"
+        bin_.mkdir()
+        rows = "".join(f"LISTEN 0 128 127.0.0.1:{p} 0.0.0.0:* "
+                       f'users:(("vllm",pid=1,fd=3))\n' for p in port.values())
+        (bin_ / "ss").write_text(f"#!/bin/sh\nprintf '%s' '{rows}'\n")
+        (bin_ / "ss").chmod(0o755)
+        home = make_home(tmp_path)
+        out = probe(home, PATH=f"{bin_}:{os.environ['PATH']}")
+        snap = parse_payload(out)
+        by_port = {s.port: s for s in snap.services}
+        assert by_port[port["openai"]].model_ids == ["Qwen/Qwen2.5-7B-Instruct"]
+        assert by_port[port["openai"]].status == "ok"
+        assert by_port[port["ollama"]].model_ids == ["llama3.1:8b"]
+        assert by_port[port["auth"]].status == "auth" and by_port[port["auth"]].healthy
+        # and a light probe asks nobody
+        assert "#LLMMODEL" not in probe(home, PATH=f"{bin_}:{os.environ['PATH']}",
+                                        FLEET_LIGHT="1")
+    finally:
+        for s in servers.values():
+            s.shutdown()
+
+
+def test_a_server_that_listed_models_is_no_longer_a_guess():
+    out = ("#FLEET v1\n#LISTEN proto|addr|port|pid|comm\ntcp|*|8000|5|python3\n"
+           "tcp|*|5000|6|python3\n"
+           "#LLMMODEL port|status|ms|model\n8000|ok|12|m1\n8000|ok|12|m2\n5000|auth|3|\n"
+           "#END rc=0\n")
+    by_port = {s.port: s for s in parse_payload(out).services}
+    assert by_port[8000].kind == "llm" and by_port[8000].model_ids == ["m1", "m2"]
+    assert by_port[8000].latency_ms == 12
+    # a 401 alone could be any web app with a login
+    assert by_port[5000].kind == "llm?" and by_port[5000].status == "auth"
+
+
+def _dev(**kw) -> Device:
+    d = Device(id="d1", name="box", kind=kw.pop("kind", Kind.PERMANENT),
+               endpoints=[{"target": "10.0.0.5", "user": "me", "port": 2222}])
+    for k, v in kw.items():
+        setattr(d, k, v)
+    return d
+
+
+def test_how_to_reach_a_server_depends_on_where_it_listens():
+    snap = {"services": [
+        {"port": 8000, "addr": "0.0.0.0", "kind": "llm", "status": "ok",
+         "model_ids": ["m"], "framework": "vllm"},
+        {"port": 11434, "addr": "127.0.0.1", "kind": "llm", "status": "ok",
+         "model_ids": ["llama3"], "framework": "ollama"},
+        {"port": 9000, "addr": "*", "kind": "web", "status": ""}]}
+    a, b = model_servers(_dev(), snap)
+    assert a["reach"] == "network" and a["url"] == "http://10.0.0.5:8000/v1"
+    assert b["reach"] == "local" and b["url"] is None
+    assert b["tunnel"] == "ssh -N -L 11434:127.0.0.1:11434 -p 2222 me@10.0.0.5"
+    # on the machine fleet runs on, even a localhost-only server answers
+    (here, here2) = model_servers(_dev(), snap, here=True)
+    assert here2["url"] == "http://127.0.0.1:11434/v1" and "tunnel" not in here2
+
+
+# ---------------------------------------------------------------- GPU jobs
+def test_a_jobs_command_line_never_carries_a_secret_out():
+    line = ("python serve.py --hf-token hf_abcdefghijkl --api-key=sk-proj-12345678 "
+            "HF_TOKEN=hf_zzzzzzzzzzzz --password hunter2 --lr 3e-4 ghp_abcdefghijklmnop")
+    out = redact(line)
+    for secret in ("hf_abcdefghijkl", "sk-proj-12345678", "hf_zzzzzzzzzzzz", "hunter2",
+                   "ghp_abcdefghijklmnop"):
+        assert secret not in out
+    assert "--lr 3e-4" in out and out.startswith("python serve.py")
+
+
+def test_each_gpu_lists_its_own_jobs():
+    out = ("#FLEET v1\n#GPU idx|uuid|name|total_mib|used_mib|free_mib|util_pct\n"
+           "0|U0|RTX 4090|24564|9000|15564|95\n1|U1|RTX 4090|24564|10|24554|0\n"
+           "#GPUPROC gpu_uuid|pid|vram_mib|user|etimes|comm|args\n"
+           "U0|42|8000|alice|7200|python|python /home/alice/train.py --token=abc123\n"
+           "U0|43|900|bob|60|Xorg|/usr/lib/Xorg\n"
+           "#END rc=0\n")
+    snap = parse_payload(out).to_dict()
+    view = device_view(_dev(), {"status": "ok"}, snap)
+    g0, g1 = view["gpus"]
+    assert [j["user"] for j in g0["jobs"]] == ["alice"]       # Xorg is the desktop, not a job
+    assert g0["jobs"][0]["command"] == "python /home/alice/train.py --token=***"
+    assert g0["jobs"][0]["runtime_s"] == 7200 and g1["jobs"] == []
+
+
+def test_an_old_probe_without_a_command_line_still_parses():
+    out = ("#FLEET v1\n#GPUPROC gpu_uuid|pid|vram_mib|user|etimes|comm\nU0|42|8000|a|5|python\n"
+           "#END rc=0\n")
+    (p,) = parse_payload(out).processes
+    assert p.comm == "python" and p.args == ""
+
+
+# ---------------------------------------------------------------- views
+def test_the_machines_own_notes_win_over_what_this_machine_was_told():
+    dev = _dev(tags=["old"], cost={"usd_per_hour": 0.5}, notes="from the inventory")
+    snap = {"notes": {"tags": ["gpu-box", "OLD"], "cost": {"usd_per_hour": 1.89},
+                      "notes": "from the machine"}}
+    v = device_view(dev, {"status": "ok"}, snap, Detail.FULL)
+    assert v["tags"] == ["old", "gpu-box"] and v["usd_per_hour"] == 1.89
+    assert v["notes"] == "from the machine"
+
+
+def test_software_compact_is_one_line_and_full_is_per_environment():
+    snap = {"software": {"cuda": "12.4", "python": "3.11.9", "uv": "0.8"},
+            "pyenvs": [{"env": "~/.venvs/a", "python": "3.11", "package": "torch",
+                        "version": "2.4.1"},
+                       {"env": "~/.venvs/b", "python": "3.12", "package": "torch",
+                        "version": "2.5.0"}],
+            "containers": [{"image": "vllm/vllm-openai", "name": "v", "status": "Up"}]}
+    compact = software_view(snap, full=False)
+    assert compact == {"cuda": "12.4", "python": "3.11.9", "torch": "2.4.1"}
+    full = software_view(snap, full=True)
+    assert [e["env"] for e in full["envs"]] == ["~/.venvs/a", "~/.venvs/b"]
+    assert full["containers"][0]["image"] == "vllm/vllm-openai"
+
+
+def test_a_missing_folder_is_an_alert():
+    snap = {"storage": [{"kind": "models", "path": "/data/models", "exists": False}]}
+    v = device_view(_dev(), {"status": "ok"}, snap)
+    assert "models folder /data/models does not exist there" in v["alerts"]
+    assert v["storage"] == {"models": [{"path": "/data/models", "exists": False,
+                                        "free_gb": None, "size_gb": None}]}
+
+
+def test_a_light_reading_keeps_what_the_full_one_before_it_found():
+    prev = {"containers": [{"image": "x"}],
+            "services": [{"port": 8000, "comm": "vllm", "status": "ok", "healthy": True,
+                          "latency_ms": 9, "model_ids": ["m"], "kind": "llm"}]}
+    light = {"light": True, "containers": None,
+             "services": [{"port": 8000, "comm": "vllm", "status": "", "kind": "llm?"},
+                          {"port": 9000, "comm": "other", "status": ""}]}
+    store.carry_over(prev, light)
+    assert light["containers"] == [{"image": "x"}]
+    assert light["services"][0]["model_ids"] == ["m"] and light["services"][0]["kind"] == "llm"
+    assert "model_ids" not in light["services"][1]
+
+
+def test_a_port_now_held_by_another_program_does_not_inherit_its_models():
+    prev = {"services": [{"port": 8000, "comm": "vllm", "status": "ok", "model_ids": ["m"]}]}
+    light = {"light": True, "services": [{"port": 8000, "comm": "jupyter", "status": ""}]}
+    store.carry_over(prev, light)
+    assert "model_ids" not in light["services"][0]
+
+
+# ---------------------------------------------------------------- notes.py
+def test_only_known_fields_survive_each_cut_to_size():
+    got = notes.check({"cost": "free", "tags": ["A", "a", 3, {"x": 1}],
+                       "notes": "n" * 5000, "paths": {"Models": "/m", "bad kind!": "/x",
+                                                      "media": [None, "/p" * 400]},
+                       "shell": "rm -rf /"})
+    assert "cost" not in got and "shell" not in got
+    assert got["tags"] == ["a", "3"] and len(got["notes"]) == notes.MAX_NOTE
+    assert got["paths"] == {"models": ["/m"], "media": [("/p" * 400)[:notes.MAX_PATH]]}
+
+
+def test_the_users_file_is_laid_over_the_machines():
+    kv = {"notes.system": base64.b64encode(b"paths:\n  models: /srv/m\n  media: /srv/x\n"
+                                           b"cost: 2\n").decode(),
+          "notes.user": base64.b64encode(b"paths:\n  models: ~/m\n").decode()}
+    got, err = notes.from_probe(kv)
+    assert not err
+    assert got == {"cost": {"usd_per_hour": 2.0},
+                   "paths": {"models": ["~/m"], "media": ["/srv/x"]}}
+
+
+def test_aliases_in_a_notes_file_are_refused():
+    bomb = "a: &a [x, x]\nb: &b [*a, *a]\npaths: *b\n"
+    with pytest.raises(notes.NotesError):
+        notes.parse(bomb)
+
+
+def test_editing_keeps_the_rest_of_the_file_and_its_top_comment():
+    text = "# my box\n# keep me\ncost: 1.5\npaths:\n  media: /srv\n  models: /old\n"
+    out = notes.edit(text, paths={"models": ["/data/m", "/data/n"], "media": None})
+    assert out.startswith("# my box\n# keep me\n")
+    assert notes.parse(out) == {"cost": {"usd_per_hour": 1.5},
+                                "paths": {"models": ["/data/m", "/data/n"]}}
+    assert notes.edit("", paths={"models": ["/m"]}).startswith(notes.TEMPLATE)
+
+
+def test_a_file_that_is_not_a_mapping_is_left_alone():
+    with pytest.raises(notes.NotesError):
+        notes.edit("- just\n- a list\n", paths={"models": ["/m"]})
+
+
+# ---------------------------------------------------------------- machinefile.py
+@posix
+def test_changing_this_machines_file_keeps_a_change_made_meanwhile(tmp_path, monkeypatch):
+    from fleet.ops import machinefile
+
+    monkeypatch.setenv("HOME", str(tmp_path))
+    f = tmp_path / ".config" / "fleet" / "machine.yaml"
+    f.parent.mkdir(parents=True)
+    f.write_text("cost: 1\n")
+    real = machinefile.read_bytes
+    calls = {"n": 0}
+
+    def racing_read(ep, platform):
+        raw = real(ep, platform)
+        calls["n"] += 1
+        if calls["n"] == 1:                      # somebody else edits right after we read
+            f.write_text("cost: 1\ntags: [theirs]\n")
+        return raw
+
+    monkeypatch.setattr(machinefile, "read_bytes", racing_read)
+    machinefile.change(None, "posix", paths={"models": ["/m"]})
+    assert calls["n"] == 2                       # it noticed, read again, and redid it
+    assert notes.parse(f.read_text()) == {"cost": {"usd_per_hour": 1.0}, "tags": ["theirs"],
+                                          "paths": {"models": ["/m"]}}
+
+
+@posix
+def test_a_file_saved_with_a_bom_is_still_one_we_can_change(tmp_path, monkeypatch):
+    from fleet.ops import machinefile
+
+    monkeypatch.setenv("HOME", str(tmp_path))
+    f = tmp_path / ".config" / "fleet" / "machine.yaml"
+    f.parent.mkdir(parents=True)
+    f.write_bytes(b"\xef\xbb\xbfcost: 1\r\n")
+    machinefile.change(None, "posix", paths={"models": ["/m"]})
+    assert notes.parse(f.read_text())["paths"] == {"models": ["/m"]}
+
+
+# ---------------------------------------------------------------- Windows twin
+PWSH = shutil.which("pwsh")
+
+
+@pytest.mark.skipif(PWSH is None, reason="needs PowerShell")
+def test_the_windows_probe_reports_notes_folders_and_servers(tmp_path):
+    srv = _serve("openai")
+    try:
+        port = srv.server_address[1]
+        local = tmp_path / "local"
+        (local / "fleet").mkdir(parents=True)
+        (local / "fleet" / "machine.yaml").write_text(
+            f"paths:\n  models: [{tmp_path}, /nope]\n")
+        fake = ("function Get-NetTCPConnection { param($State) "
+                f"[pscustomobject]@{{LocalAddress='127.0.0.1'; LocalPort={port}; "
+                "OwningProcess=$PID} }\n")
+        script = tmp_path / "probe.ps1"
+        script.write_text(fake + (REPO / "src" / "fleet" / "probe" / "payload.ps1").read_text())
+        p = subprocess.run([PWSH, "-NoProfile", "-File", str(script)], text=True,
+                           capture_output=True, timeout=120, stdin=subprocess.DEVNULL,
+                           env={**os.environ, "TERM": "dumb", "LOCALAPPDATA": str(local),
+                                "ProgramData": str(tmp_path / "none")})
+        snap = parse_payload(p.stdout)
+        assert snap.notes["paths"]["models"] == [str(tmp_path), "/nope"]
+        assert [(s.path, s.exists) for s in snap.storage] == [(str(tmp_path), True),
+                                                              ("/nope", False)]
+        assert snap.gpu_present == "0"      # read as a key, not a row of a section
+    finally:
+        srv.shutdown()

@@ -38,7 +38,19 @@ Anywhere. A name may be omitted where the obvious subject is the machine you are
   all must match: `--tag cuda --tag vram-24g` finds NVIDIA boxes with a card of at
   least 24G. Matches two things at once -- what someone declared about a machine, and
   what the last probe measured. Never pick a machine by remembering its name
-- `{cmd} show [NAME] --json` -- full detail; no name means this machine
+- `{cmd} show [NAME] --json` -- full detail; no name means this machine. Beyond the
+  hardware: `software` (cuda, nvcc, python, docker, and each Python environment with
+  the versions of torch, vllm, mlx, transformers... in it), `storage` (the folders the
+  machine says hold its models, datasets, media, with their size and the room left),
+  `models` (what its servers serve), and each GPU's `jobs`
+- `{cmd} ps --json` -- every job on every GPU across the fleet (who, how much VRAM, how
+  long, the command), and which GPUs are idle
+- `{cmd} models --json` -- every model being served: machine, server, `url`, and for a
+  server that only listens on its own machine a `tunnel` (an `ssh -L` command) to reach
+  it. Also the folders each machine keeps models in
+- Software versions and folder sizes are read on the machine every few hours, not on
+  every probe. After installing something, or filling a folder, `{cmd} show NAME
+  --rescan --json` (or `{cmd} ls --rescan`) reads them again now
 - `{cmd} ssh NAME -- 'COMMAND'` -- run a command there. Single quotes, always: the shell
   you run fleet from expands `$VAR` and a leading `~` before fleet sees the command, so
   `$HOME` would arrive as *this* machine's home -- PowerShell does it even inside double
@@ -82,6 +94,10 @@ Anywhere. A name may be omitted where the obvious subject is the machine you are
   address. `--disk-path /workspace` to watch the volume that matters, `--name` to
   rename, `--alias` to set or clear the short handle, `--tag`/`--untag` to add and
   remove labels (both repeatable), `--cost 1.89` for what it costs per hour (0 clears)
+- `{cmd} edit NAME --path models=/data/models` -- record where a machine keeps things:
+  `models`, `datasets`, `media`, `scratch`, `envs` (Python environments to look in), or
+  a kind of your own. Repeat a kind for several folders; `models=` clears it. It is
+  written to `machine.yaml` on that machine, so everyone who looks at it sees the same
 - `{cmd} install NAME` -- put fleet on a machine that has none
 - `{cmd} paths` -- where the inventory, keys and access list live on this machine
 
@@ -141,6 +157,15 @@ where to run them: report that to the user, nothing is queued.
   24 GB card is free") and you will pick the machine. Offer to add the first one.
 - Check `{cmd} ls --json` before assuming work must run locally. A free remote GPU is
   usually the better place for training, evaluation, or anything long-running.
+- **Use what is already there.** Before downloading a model, check `{cmd} models --json`:
+  one already served can be called at its `url`, and one already in a machine's `models`
+  folder need not be fetched again. Save models and datasets into the machine's declared
+  `storage` folders, not wherever is convenient; when a machine declares none, ask the
+  user where, and record the answer with `{cmd} edit NAME --path`. Pick a Python
+  environment that already has the stack the job needs (`software.envs`) rather than
+  installing torch again.
+- A GPU with `jobs` belongs to whoever runs them, even when it shows free VRAM. Do not
+  start work there without asking unless the job is yours.
 - Connect with `{cmd} ssh NAME`. Never hand-build an `ssh` invocation from inventory
   fields: the wrapper resolves the endpoint and uses the fleet key.
 - Treat `alerts` as blocking. A device reporting unattributed VRAM is not free, and a
