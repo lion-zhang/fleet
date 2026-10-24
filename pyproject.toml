@@ -9,8 +9,8 @@ license-files = ["LICENSE"]
 authors = [{ name = "Lin Zhang" }]
 keywords = [
     "claude-code", "codex", "gemini-cli", "ai-agents", "coding-agent", "mcp", "mcp-server",
-    "gpu", "gpu-monitoring", "nvidia", "vram", "ssh", "ssh-keys", "homelab", "mlops",
-    "devops", "inventory", "remote-execution", "vast-ai", "runpod",
+    "gpu", "gpu-monitoring", "nvidia", "vram", "ssh", "tailscale", "llm", "vllm", "ollama",
+    "homelab", "mlops", "devops", "inventory", "remote-execution", "vast-ai", "runpod",
 ]
 classifiers = [
     "Development Status :: 4 - Beta",
