@@ -345,8 +345,7 @@ def interactive_checks(machine: str, user: str) -> None:
 
     # What plain ssh returns for the same session is the bar: fleet must pass on exactly
     # that. On POSIX it is the shell's 7.
-    from fleet.config import FLEET_KEY
-    plain = Term(reporting_exit(["ssh", "-tt", "-i", str(FLEET_KEY), "-o",
+    plain = Term(reporting_exit(["ssh", "-tt", "-i", str(Path.home() / ".ssh" / "id_ed25519"), "-o",
                                  "StrictHostKeyChecking=accept-new", f"{user}@localhost"]),
                  env=env)
     try:
