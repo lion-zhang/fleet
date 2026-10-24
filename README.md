@@ -258,7 +258,8 @@ show` prints it.
 <details>
 <summary><b>What does fleet leave on the machines I add?</b></summary>
 
-Almost nothing: the notes file `fleet edit --path` writes there (`machine.yaml`), a
+Almost nothing: the notes file `fleet edit` writes there (`machine.yaml`: tags, cost,
+a note, folders, declared servers), a
 small cache of software versions and folder sizes in `~/.cache/fleet`, and nothing at
 all in `authorized_keys`. No program, no service.
 [What fleet changes](docs/guides/what-fleet-changes.md) has the full list.

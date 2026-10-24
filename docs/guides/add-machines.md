@@ -84,7 +84,7 @@ costs:
 
 ```bash
 fleet add "ssh -p 40001 root@1.2.3.4"
-fleet edit a100 --cost 1.89
+fleet edit a100 --cost 1.89      # written on the rental; --local keeps it on this machine
 ```
 
 fleet recognises vast.ai, RunPod and AutoDL machines as rentals by itself, from what it

@@ -220,16 +220,17 @@ gets the same answers as an agent with one.
 
 | Tool | Runs |
 |---|---|
-| `list_machines` | `fleet ls --json`, with `tag` to pick by what a machine has |
-| `show_machine` | `fleet show NAME --json` |
-| `list_gpu_jobs` | `fleet ps --json` |
-| `list_models` | `fleet models --json` |
+| `list_machines` | `fleet ls --json`, with `tag` to pick by what a machine has, `fields` for only some keys, `refresh`/`rescan` to measure now |
+| `show_machine` | `fleet show NAME --json`, with `rescan` |
+| `list_gpu_jobs` | `fleet ps --json`, with `refresh` |
+| `list_models` | `fleet models --json`, with `refresh`/`rescan` |
 | `run_on_machine` | `fleet ssh NAME -- COMMAND`: its output and exit code, within two minutes |
 | `add_machine` | `fleet add "ssh …" --json` |
 | `discover_machines` | `fleet ls --discover --json` |
 | `doctor_machine` | `fleet doctor [NAME] --json` |
-| `edit_machine` | `fleet edit NAME`: tags, cost, address, disks, name, alias |
+| `edit_machine` | `fleet edit NAME`: tags, cost, note (on the machine; `local` keeps tags and cost here), address, disks, name, alias |
 | `set_machine_paths` | `fleet edit NAME --path KIND=PATH` |
+| `set_machine_endpoint` | `fleet edit NAME --endpoint NAME=PORT[/PATH]`: a model server the probe would not find |
 
 Removing a machine, and installing, updating or uninstalling fleet, are not tools: they
 are yours to run, in a terminal.

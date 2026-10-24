@@ -13,7 +13,7 @@ reads what the machine has and what is free, and writes only these:
 |---|---|---|
 | temporary files | wherever `mktemp` says (usually `/tmp`), Linux and macOS | the script and its output, and what a model server answered; deleted when the reading finishes. On Windows the script is piped to PowerShell and nothing is written. |
 | a small cache | `~/.cache/fleet` (`$XDG_CACHE_HOME/fleet`), Linux and macOS | folder sizes, worked out by `du` in the background so a probe never waits for it, and the software list. Refreshed every six hours, or with `--rescan`. |
-| `machine.yaml` | `~/.config/fleet/machine.yaml`; Windows `%LOCALAPPDATA%\fleet\machine.yaml` | only when you run `fleet edit NAME --path …`: where the machine keeps models and data. [More](resources.md#machineyaml) |
+| `machine.yaml` | `~/.config/fleet/machine.yaml`; Windows `%LOCALAPPDATA%\fleet\machine.yaml` | only when you run `fleet edit NAME` with `--path`, `--endpoint`, `--note`, or `--tag`/`--cost` without `--local`: where it keeps models and data, servers to ask, its tags, cost and a note. [More](resources.md#machineyaml) |
 | `device-id` | `~/.config/fleet/device-id` (macOS `~/Library/Application Support/fleet`, Windows `%LOCALAPPDATA%\fleet`) | only on a machine cloned from another's image, so the two are told apart |
 
 That is everything, unless you put fleet itself on a machine with `fleet install NAME`

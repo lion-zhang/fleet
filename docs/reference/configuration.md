@@ -18,7 +18,7 @@ alone. `fleet paths` prints where the main files are on this machine.
 
 | File | What it is |
 |---|---|
-| `machines.yaml` | the machines you added on this machine: names, ssh commands, tags, cost. Written only here; share it with your dotfiles if you want the same list elsewhere. No keys or passwords are in it. |
+| `machines.yaml` | the machines you added on this machine: names, ssh commands, and the tags and cost you set with `--local`. Written only here; share it with your dotfiles if you want the same list elsewhere. No keys or passwords are in it. |
 | `config.yaml` | the settings below. Optional; fleet never creates it. |
 | `device-id` | only on a machine cloned from another's image: the id fleet gave it, so the two are told apart |
 
@@ -28,6 +28,7 @@ alone. `fleet paths` prints where the main files are on this machine.
 |---|---|
 | `cache.db` | measurements. Disposable: delete it, and the next reading rebuilds it. |
 | `first-run-done` | marks that the [first run](#environment-variables) has happened here |
+| `discover-hidden.txt` | names `fleet ls --discover --hide` stopped offering, one per line (config folder) |
 | `update.log`, `update.ps1`, `update-run.ps1`, `update-run.log` | Windows only: the last `fleet update` of this machine, which runs after fleet exits |
 
 Folders named `.NAME.queue` beside these files are the write queue; they come and go.
