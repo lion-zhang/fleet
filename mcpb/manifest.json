@@ -2,7 +2,7 @@
   "manifest_version": "0.4",
   "name": "fleet",
   "display_name": "fleet",
-  "version": "0.5.2",
+  "version": "0.6.0",
   "description": "Every machine you have, for your agent: free GPUs, jobs, served models, software, over SSH.",
   "long_description": "Lets Claude see every machine you have -- which GPUs are free and what is running on them, the models served, the software installed, where models and data live -- and run commands on them over SSH, exactly as you would connect. Runs the fleet CLI, which keeps its state on this machine.",
   "author": {
