@@ -1,8 +1,9 @@
 name: docs
 
-# The documentation site (mkdocs.yml) at https://lion-zhang.github.io/fleet/. A pull
+# The documentation site (mkdocs.yml) at https://agents-fleet.dev/. A pull
 # request builds it in strict mode, so a broken link or anchor fails there; main also
-# publishes it. Publishing needs Settings → Pages → Source: GitHub Actions, once.
+# publishes it. Publishing needs, once, Settings → Pages: Source "GitHub Actions" and the
+# custom domain agents-fleet.dev (DNS: the four GitHub Pages A records), HTTPS enforced.
 
 on:
   push:

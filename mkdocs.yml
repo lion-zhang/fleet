@@ -2,7 +2,7 @@
 # .github/workflows/docs.yml. Build it here with `uv run --group docs mkdocs serve`.
 site_name: fleet
 site_description: Every machine you have, for your coding agent -- free GPUs, running jobs, served models, software and folders, over the SSH you already use.
-site_url: https://lion-zhang.github.io/fleet/
+site_url: https://agents-fleet.dev/
 repo_url: https://github.com/lion-zhang/fleet
 repo_name: lion-zhang/fleet
 edit_uri: edit/main/docs/
