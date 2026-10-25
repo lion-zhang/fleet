@@ -82,7 +82,7 @@ These are written by scripts and checked by tests; edit the source, then regener
 
 ## The documentation site
 
-`docs/` is also published as a website, [lion-zhang.github.io/fleet](https://lion-zhang.github.io/fleet/),
+`docs/` is also published as a website, [agents-fleet.dev](https://agents-fleet.dev/),
 by `.github/workflows/docs.yml` on every push to main. The pages are the same Markdown files
 GitHub shows; `mkdocs.yml` only adds the sidebar. A new page goes in two places: the index,
 `docs/README.md`, and `nav:` in `mkdocs.yml`.
