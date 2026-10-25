@@ -217,10 +217,10 @@ def agents_block(cmd: str) -> str:
 # handing the job back to them.
 _INSTALL_HINT = """If `fleet` is not found, it is not installed on this machine. Never install it
 unasked. When the user asks you to install it, do -- following
-https://github.com/lion-zhang/fleet/blob/main/INSTALL.md:
+https://github.com/sinolion/fleet/blob/main/INSTALL.md:
 
-- macOS / Linux: `curl -LsSf https://raw.githubusercontent.com/lion-zhang/fleet/main/install.sh | sh`
-- Windows: `powershell -ExecutionPolicy ByPass -c "irm https://raw.githubusercontent.com/lion-zhang/fleet/main/install.ps1 | iex"`
+- macOS / Linux: `curl -LsSf https://raw.githubusercontent.com/sinolion/fleet/main/install.sh | sh`
+- Windows: `powershell -ExecutionPolicy ByPass -c "irm https://raw.githubusercontent.com/sinolion/fleet/main/install.ps1 | iex"`
 - or, where piping a script into a shell is not allowed:
   `uv tool install agents-fleet && uv tool update-shell && fleet setup`
 

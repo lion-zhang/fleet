@@ -4,10 +4,10 @@
   "description": "Every machine you have, for your agent: free GPUs, jobs, served models, software, over SSH.",
   "author": {
     "name": "Lin Zhang",
-    "url": "https://github.com/lion-zhang"
+    "url": "https://github.com/sinolion"
   },
-  "homepage": "https://github.com/lion-zhang/fleet",
-  "repository": "https://github.com/lion-zhang/fleet",
+  "homepage": "https://github.com/sinolion/fleet",
+  "repository": "https://github.com/sinolion/fleet",
   "license": "MIT",
   "keywords": [
     "gpu",

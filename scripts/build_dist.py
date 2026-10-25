@@ -6,7 +6,7 @@ One source, many formats: the skill text `fleet setup` writes (src/fleet/agents/
 and the version in pyproject.toml become
 
     skills/fleet/SKILL.md            Claude Code plugin, Gemini CLI extension,
-                                     `npx skills add lion-zhang/fleet`
+                                     `npx skills add sinolion/fleet`
     hooks/hooks.json                 Claude Code plugin: says how to install when missing
     .claude-plugin/plugin.json       Claude Code plugin manifest
     .claude-plugin/marketplace.json  this repository as its own plugin marketplace
@@ -35,10 +35,10 @@ from fleet.agents.usage import dist_skill_text  # noqa: E402
 from fleet.cli import app  # noqa: E402
 
 NAME = "fleet"
-MCP_NAME = "io.github.lion-zhang/fleet"
+MCP_NAME = "io.github.sinolion/fleet"
 # The registry caps a description at 100 characters; one sentence serves everywhere.
 SHORT = "Every machine you have, for your agent: free GPUs, jobs, served models, software, over SSH."
-AUTHOR = {"name": "Lin Zhang", "url": "https://github.com/lion-zhang"}
+AUTHOR = {"name": "Lin Zhang", "url": "https://github.com/sinolion"}
 KEYWORDS = ["gpu", "inventory", "ssh", "remote", "compute", "mcp", "homelab", "mlops"]
 # What a client runs. `uvx` builds the environment on first use and caches it.
 LAUNCH = {"command": "uvx", "args": [links.PACKAGE, "mcp"]}

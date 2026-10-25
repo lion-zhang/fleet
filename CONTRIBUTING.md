@@ -28,7 +28,7 @@ What follows from it:
 ## Setting up
 
 ```bash
-git clone https://github.com/lion-zhang/fleet && cd fleet
+git clone https://github.com/sinolion/fleet && cd fleet
 uv sync --all-extras
 uv run fleet --help
 ```

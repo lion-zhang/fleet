@@ -52,7 +52,7 @@ say so:
 Install it from PowerShell:
 
 ```powershell
-powershell -ExecutionPolicy ByPass -c "irm https://raw.githubusercontent.com/lion-zhang/fleet/main/install.ps1 | iex"
+powershell -ExecutionPolicy ByPass -c "irm https://raw.githubusercontent.com/sinolion/fleet/main/install.ps1 | iex"
 ```
 
 Open a new terminal afterwards so `fleet` is on your PATH. fleet uses Windows' own

@@ -23,7 +23,7 @@ own, and never asks for a password.
 Ask your agent:
 
 ```text
-Install fleet from https://github.com/lion-zhang/fleet
+Install fleet from https://github.com/sinolion/fleet
 ```
 
 The agent runs the installer. It installs the `fleet` command, records this machine, and
@@ -35,13 +35,13 @@ loads fleet's skill.
 <summary>Installing it yourself</summary>
 
 ```bash
-curl -LsSf https://raw.githubusercontent.com/lion-zhang/fleet/main/install.sh | sh
+curl -LsSf https://raw.githubusercontent.com/sinolion/fleet/main/install.sh | sh
 ```
 
 On Windows, in PowerShell:
 
 ```powershell
-powershell -ExecutionPolicy ByPass -c "irm https://raw.githubusercontent.com/lion-zhang/fleet/main/install.ps1 | iex"
+powershell -ExecutionPolicy ByPass -c "irm https://raw.githubusercontent.com/sinolion/fleet/main/install.ps1 | iex"
 ```
 
 Options, other package managers and upgrading: [Installing and upgrading](guides/install.md).

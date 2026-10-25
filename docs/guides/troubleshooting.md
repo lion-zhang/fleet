@@ -64,5 +64,5 @@ on stderr.
 
 `fleet COMMAND --help` explains every command, `fleet doctor` looks at every machine
 that is failing, and `fleet paths` shows where fleet keeps its files. Please
-[open an issue](https://github.com/lion-zhang/fleet/issues) with what you ran and what it
+[open an issue](https://github.com/sinolion/fleet/issues) with what you ran and what it
 said.

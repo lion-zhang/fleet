@@ -6,7 +6,7 @@ flaw in it can matter. Thank you for reporting one.
 ## Reporting a problem
 
 Please report it privately, not in a public issue:
-**[open a private security advisory](https://github.com/lion-zhang/fleet/security/advisories/new)**.
+**[open a private security advisory](https://github.com/sinolion/fleet/security/advisories/new)**.
 
 Say what you found, which version (`fleet --version`) and OS, and how to reproduce it if
 you can. You will get a reply within a week. Once a fix is released, the advisory is

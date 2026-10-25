@@ -2,7 +2,7 @@
   "name": "fleet",
   "owner": {
     "name": "Lin Zhang",
-    "url": "https://github.com/lion-zhang"
+    "url": "https://github.com/sinolion"
   },
   "metadata": {
     "description": "fleet, as a Claude Code plugin."
@@ -15,9 +15,9 @@
       "version": "0.6.1",
       "author": {
         "name": "Lin Zhang",
-        "url": "https://github.com/lion-zhang"
+        "url": "https://github.com/sinolion"
       },
-      "homepage": "https://github.com/lion-zhang/fleet",
+      "homepage": "https://github.com/sinolion/fleet",
       "license": "MIT",
       "keywords": [
         "gpu",

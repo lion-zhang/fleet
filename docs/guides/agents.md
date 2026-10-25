@@ -36,10 +36,10 @@ until a task needs a machine.
 
 | Agent | Install | |
 |---|---|---|
-| Claude Code | `/plugin marketplace add lion-zhang/fleet` then `/plugin install fleet@fleet`<br>(shell: `claude plugin marketplace add lion-zhang/fleet && claude plugin install fleet@fleet`) | ✓ |
-| Codex | `codex plugin marketplace add lion-zhang/fleet && codex plugin add fleet@fleet` | ✓ |
-| GitHub Copilot CLI | `copilot plugin marketplace add lion-zhang/fleet && copilot plugin install fleet@fleet` | ✓ |
-| Gemini CLI | `gemini extensions install https://github.com/lion-zhang/fleet` — the skill and the MCP server | ✓ |
+| Claude Code | `/plugin marketplace add sinolion/fleet` then `/plugin install fleet@fleet`<br>(shell: `claude plugin marketplace add sinolion/fleet && claude plugin install fleet@fleet`) | ✓ |
+| Codex | `codex plugin marketplace add sinolion/fleet && codex plugin add fleet@fleet` | ✓ |
+| GitHub Copilot CLI | `copilot plugin marketplace add sinolion/fleet && copilot plugin install fleet@fleet` | ✓ |
+| Gemini CLI | `gemini extensions install https://github.com/sinolion/fleet` — the skill and the MCP server | ✓ |
 
 ## One command
 
@@ -72,7 +72,7 @@ These register fleet's MCP server, launched as `uvx agents-fleet mcp`.
 | Kiro | [Add to Kiro](https://kiro.dev/launch/mcp/add?name=fleet&config=%7B%22command%22%3A%22uvx%22%2C%22args%22%3A%5B%22agents-fleet%22%2C%22mcp%22%5D%7D) |
 | LM Studio | [Add to LM Studio](https://lmstudio.ai/install-mcp?name=fleet&config=eyJjb21tYW5kIjoidXZ4IiwiYXJncyI6WyJhZ2VudHMtZmxlZXQiLCJtY3AiXX0%3D) |
 | Goose | `goose://extension?cmd=uvx&arg=agents-fleet&arg=mcp&id=fleet&name=fleet&description=fleet&timeout=300` (paste into a browser) |
-| Claude Desktop | download `fleet.mcpb` from the [latest release](https://github.com/lion-zhang/fleet/releases/latest) and open it ✓ |
+| Claude Desktop | download `fleet.mcpb` from the [latest release](https://github.com/sinolion/fleet/releases/latest) and open it ✓ |
 
 These links are built from each agent's documented format; the Claude Desktop bundle was
 validated, packed and run here.
@@ -207,7 +207,7 @@ successor is Kilo Code, above.
 Agents that read `SKILL.md` files can get fleet's skill without any MCP server:
 
 ```bash
-npx skills add lion-zhang/fleet          # ✓ — installs into every agent it recognises
+npx skills add sinolion/fleet          # ✓ — installs into every agent it recognises
 ```
 
 For Hermes, install the CLI and run `fleet setup --target hermes`, which writes into

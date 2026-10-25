@@ -1,7 +1,7 @@
 #!/bin/sh
-# Install fleet: https://github.com/lion-zhang/fleet
+# Install fleet: https://github.com/sinolion/fleet
 #
-#   curl -LsSf https://raw.githubusercontent.com/lion-zhang/fleet/main/install.sh | sh
+#   curl -LsSf https://raw.githubusercontent.com/sinolion/fleet/main/install.sh | sh
 #
 # Installs the `fleet` command and teaches every supported agent installed here (Claude
 # Code, Codex, Gemini CLI, ...) to use it. Install it where you work, and wherever else
@@ -104,7 +104,7 @@ install_core() {
             # become a forced install of the repository's main branch over it.
             if grep -qiE 'not found in the (package )?registry|no solution found|404' "$errs"; then
                 say "  (not on PyPI from here; installing from GitHub)"
-                "$uv" tool install $force --quiet "git+https://github.com/lion-zhang/fleet" </dev/null \
+                "$uv" tool install $force --quiet "git+https://github.com/sinolion/fleet" </dev/null \
                     || { rm -f "$errs"; die "could not install fleet"; }
             else
                 cat "$errs" >&2; rm -f "$errs"

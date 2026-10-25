@@ -42,9 +42,10 @@ dependencies = [
 ]
 
 [project.urls]
-Homepage = "https://github.com/lion-zhang/fleet"
+Homepage = "https://github.com/sinolion/fleet"
 Documentation = "https://agents-fleet.dev/"
-Issues = "https://github.com/lion-zhang/fleet/issues"
+Repository = "https://github.com/sinolion/fleet"
+Issues = "https://github.com/sinolion/fleet/issues"
 
 [project.optional-dependencies]
 # Kept so `agents-fleet[mcp]` in older notes still resolves; mcp is a core dependency now.

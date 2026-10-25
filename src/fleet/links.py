@@ -4,8 +4,8 @@ all name the same URLs."""
 from __future__ import annotations
 
 PACKAGE = "agents-fleet"
-REPO = "https://github.com/lion-zhang/fleet"
-RAW = "https://raw.githubusercontent.com/lion-zhang/fleet/main"
+REPO = "https://github.com/sinolion/fleet"
+RAW = "https://raw.githubusercontent.com/sinolion/fleet/main"
 INSTALL_SH = f"{RAW}/install.sh"
 INSTALL_PS1 = f"{RAW}/install.ps1"
 
