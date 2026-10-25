@@ -453,4 +453,4 @@ def test_installed_from_pypi_the_repo_is_the_one_it_was_published_from(tmp_path,
     monkeypatch.setattr(cli, "install_source", lambda: None)
     monkeypatch.setattr(cli.Path, "home", staticmethod(lambda: tmp_path))
     monkeypatch.setattr(cli, "__file__", str(tmp_path / "site-packages" / "fleet" / "cli.py"))
-    assert cli.configured_repo() == "https://github.com/lion-zhang/fleet.git"
+    assert cli.configured_repo() == "https://github.com/sinolion/fleet.git"

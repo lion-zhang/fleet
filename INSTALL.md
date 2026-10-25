@@ -18,8 +18,8 @@ The installer needs no terminal and asks no questions.
 
 | | |
 |---|---|
-| macOS, Linux | `curl -LsSf https://raw.githubusercontent.com/lion-zhang/fleet/main/install.sh \| sh` |
-| Windows (PowerShell) | `powershell -ExecutionPolicy ByPass -c "irm https://raw.githubusercontent.com/lion-zhang/fleet/main/install.ps1 \| iex"` |
+| macOS, Linux | `curl -LsSf https://raw.githubusercontent.com/sinolion/fleet/main/install.sh \| sh` |
+| Windows (PowerShell) | `powershell -ExecutionPolicy ByPass -c "irm https://raw.githubusercontent.com/sinolion/fleet/main/install.ps1 \| iex"` |
 
 **If piping a script into a shell is not allowed** — by your rules, your sandbox or the
 user — install the same thing from PyPI instead:

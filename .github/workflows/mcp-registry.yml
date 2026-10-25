@@ -3,8 +3,11 @@ name: mcp registry
 # Lists the released version in the MCP Registry (registry.modelcontextprotocol.io) from
 # server.json, once `release` has put that version on PyPI -- the registry checks the
 # package there. Signed in with this workflow's GitHub identity: no token is stored, and
-# only this repository can publish io.github.lion-zhang/*. Also runnable from the
-# Actions tab, for a release that went out before this workflow existed.
+# only this repository can publish io.github.sinolion/*. The registry already lists
+# io.github.lion-zhang/fleet (through 0.6.1) and will not rename that server; this name
+# is a new listing. Publishing the current PyPI release will not move the old one: its
+# README still carries the old mcp-name, so the new name goes out with the next release.
+# Also runnable from the Actions tab, for a release that went out before this workflow existed.
 on:
   workflow_run:
     workflows: [release]

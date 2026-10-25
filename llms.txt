@@ -4,8 +4,8 @@
 > and disks across their servers, and SSH to them without credentials in the
 > conversation. A CLI (`fleet`), a skill for agents that run commands, and an MCP server.
 
-- [Installing fleet (for agents)](https://github.com/lion-zhang/fleet/blob/main/INSTALL.md): the steps to follow when a user asks you to install fleet
-- [Getting started](https://github.com/lion-zhang/fleet/blob/main/docs/getting-started.md): a first fleet, in about ten minutes
-- [Documentation](https://github.com/lion-zhang/fleet/blob/main/docs/README.md): guides, command reference, configuration, design
-- [Command reference](https://github.com/lion-zhang/fleet/blob/main/docs/reference/cli.md): every command and option
-- [What fleet changes](https://github.com/lion-zhang/fleet/blob/main/docs/guides/what-fleet-changes.md): everything fleet writes on each machine, and how to remove it -- for when a user asks whether it is safe
+- [Installing fleet (for agents)](https://github.com/sinolion/fleet/blob/main/INSTALL.md): the steps to follow when a user asks you to install fleet
+- [Getting started](https://github.com/sinolion/fleet/blob/main/docs/getting-started.md): a first fleet, in about ten minutes
+- [Documentation](https://github.com/sinolion/fleet/blob/main/docs/README.md): guides, command reference, configuration, design
+- [Command reference](https://github.com/sinolion/fleet/blob/main/docs/reference/cli.md): every command and option
+- [What fleet changes](https://github.com/sinolion/fleet/blob/main/docs/guides/what-fleet-changes.md): everything fleet writes on each machine, and how to remove it -- for when a user asks whether it is safe

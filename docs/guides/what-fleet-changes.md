@@ -74,4 +74,4 @@ wrote one, `machine.yaml`.
 [Upgrading from 0.5](upgrading-from-0.5.md) lists what it left and how to remove it.
 
 Found a security problem? Please report it privately; see
-[SECURITY.md](https://github.com/lion-zhang/fleet/blob/main/SECURITY.md).
+[SECURITY.md](https://github.com/sinolion/fleet/blob/main/SECURITY.md).

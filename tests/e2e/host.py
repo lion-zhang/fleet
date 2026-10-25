@@ -499,7 +499,7 @@ def migration_check() -> None:
     if not check("migration: no checkout of fleet left on the machine", not checkout.exists(),
                  str(checkout)):
         return
-    script = install_script("https://github.com/lion-zhang/fleet", update_only=True,
+    script = install_script("https://github.com/sinolion/fleet", update_only=True,
                             platform="windows" if WINDOWS else "")
     if WINDOWS:
         ps1 = stub / "update.ps1"

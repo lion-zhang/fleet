@@ -7,14 +7,14 @@
   "long_description": "Lets Claude see every machine you have -- which GPUs are free and what is running on them, the models served, the software installed, where models and data live -- and run commands on them over SSH, exactly as you would connect. Runs the fleet CLI, which keeps its state on this machine.",
   "author": {
     "name": "Lin Zhang",
-    "url": "https://github.com/lion-zhang"
+    "url": "https://github.com/sinolion"
   },
-  "homepage": "https://github.com/lion-zhang/fleet",
-  "documentation": "https://github.com/lion-zhang/fleet",
-  "support": "https://github.com/lion-zhang/fleet/issues",
+  "homepage": "https://github.com/sinolion/fleet",
+  "documentation": "https://github.com/sinolion/fleet",
+  "support": "https://github.com/sinolion/fleet/issues",
   "repository": {
     "type": "git",
-    "url": "https://github.com/lion-zhang/fleet"
+    "url": "https://github.com/sinolion/fleet"
   },
   "server": {
     "type": "uv",

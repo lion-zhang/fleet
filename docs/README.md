@@ -43,5 +43,5 @@ Why fleet works the way it does.
 
 ## Contributing
 
-[CONTRIBUTING.md](https://github.com/lion-zhang/fleet/blob/main/CONTRIBUTING.md) covers running the tests, the end-to-end checks on
+[CONTRIBUTING.md](https://github.com/sinolion/fleet/blob/main/CONTRIBUTING.md) covers running the tests, the end-to-end checks on
 each OS, and the files that are generated rather than written.

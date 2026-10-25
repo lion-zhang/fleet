@@ -1,4 +1,4 @@
-<!-- mcp-name: io.github.lion-zhang/fleet -->
+<!-- mcp-name: io.github.sinolion/fleet -->
 <div align="center">
 
 <img src="docs/assets/logo.svg" alt="" width="88">
@@ -12,7 +12,7 @@ served, the software installed, and where your models and data live.**
 No account, no cloud service, nothing installed on the machines you add, no keys handed
 out: fleet logs in exactly as you do, with the SSH you already use.
 
-[![tests](https://github.com/lion-zhang/fleet/actions/workflows/test.yml/badge.svg)](https://github.com/lion-zhang/fleet/actions/workflows/test.yml)
+[![tests](https://github.com/sinolion/fleet/actions/workflows/test.yml/badge.svg)](https://github.com/sinolion/fleet/actions/workflows/test.yml)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 ![Linux | macOS | Windows](https://img.shields.io/badge/platform-linux%20%7C%20macos%20%7C%20windows-lightgrey.svg)
 ![MCP server](https://img.shields.io/badge/MCP-server-8A2BE2.svg)
@@ -38,7 +38,7 @@ Paste this into Claude Code, Codex, Gemini CLI, or any agent that can run comman
 the machine you work from:
 
 ```text
-Install fleet from https://github.com/lion-zhang/fleet
+Install fleet from https://github.com/sinolion/fleet
 ```
 
 <sub>Agents: the steps are in [INSTALL.md](INSTALL.md).</sub>
@@ -106,7 +106,7 @@ Desktop apps and editors get fleet in one click; it runs as an MCP server:
 
 | App | Install |
 |---|---|
-| **Claude Desktop** | open `fleet.mcpb` from the [latest release](https://github.com/lion-zhang/fleet/releases/latest) |
+| **Claude Desktop** | open `fleet.mcpb` from the [latest release](https://github.com/sinolion/fleet/releases/latest) |
 | **Cursor** | [![Add to Cursor](https://cursor.com/deeplink/mcp-install-dark.svg)](https://cursor.com/en/install-mcp?name=fleet&config=eyJjb21tYW5kIjoidXZ4IiwiYXJncyI6WyJhZ2VudHMtZmxlZXQiLCJtY3AiXX0%3D) |
 | **VS Code** | [![Install in VS Code](https://img.shields.io/badge/VS_Code-Install_fleet-0098FF?logo=visualstudiocode&logoColor=white)](https://insiders.vscode.dev/redirect/mcp/install?name=fleet&config=%7B%22command%22%3A%22uvx%22%2C%22args%22%3A%5B%22agents-fleet%22%2C%22mcp%22%5D%7D) |
 
@@ -138,10 +138,10 @@ Everything the agent does is a plain `fleet` command. To install fleet yourself,
 on the machine you work from (this is also what your agent runs when you ask it):
 
 ```bash
-curl -LsSf https://raw.githubusercontent.com/lion-zhang/fleet/main/install.sh | sh
+curl -LsSf https://raw.githubusercontent.com/sinolion/fleet/main/install.sh | sh
 ```
 
-<sub>Windows: `powershell -ExecutionPolicy ByPass -c "irm https://raw.githubusercontent.com/lion-zhang/fleet/main/install.ps1 | iex"`</sub>
+<sub>Windows: `powershell -ExecutionPolicy ByPass -c "irm https://raw.githubusercontent.com/sinolion/fleet/main/install.ps1 | iex"`</sub>
 
 Then drive it yourself:
 

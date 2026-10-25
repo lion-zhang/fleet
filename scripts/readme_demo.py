@@ -125,8 +125,8 @@ def script(tl: Timeline, rows: list[dict]) -> None:
     tl.say("  at your provider if you are done with it; I will not touch it without your "
            "yes.", hold=4.0)
     tl.blank()
-    tl.say("[dim]fleet · github.com/lion-zhang/fleet · ask your agent: "
-           "\"Install fleet from https://github.com/lion-zhang/fleet\"[/dim]", hold=5.0)
+    tl.say("[dim]fleet · github.com/sinolion/fleet · ask your agent: "
+           "\"Install fleet from https://github.com/sinolion/fleet\"[/dim]", hold=5.0)
 
 
 def busy(rows: list[dict]) -> None:

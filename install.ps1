@@ -1,6 +1,6 @@
-# Install fleet on Windows: https://github.com/lion-zhang/fleet
+# Install fleet on Windows: https://github.com/sinolion/fleet
 #
-#   powershell -ExecutionPolicy ByPass -c "irm https://raw.githubusercontent.com/lion-zhang/fleet/main/install.ps1 | iex"
+#   powershell -ExecutionPolicy ByPass -c "irm https://raw.githubusercontent.com/sinolion/fleet/main/install.ps1 | iex"
 #
 # Installs the `fleet` command and teaches every supported agent installed here (Claude
 # Code, Codex, Gemini CLI, ...) to use it. Install it where you work, and wherever else
@@ -71,7 +71,7 @@ function Install-FleetCore($uv, $kind) {
             throw 'could not install fleet'
         }
         Write-Host '  (not on PyPI from here; installing from GitHub)'
-        & $uv tool install @force --quiet 'git+https://github.com/lion-zhang/fleet'
+        & $uv tool install @force --quiet 'git+https://github.com/sinolion/fleet'
         if ($LASTEXITCODE -ne 0) { throw 'could not install fleet' }
     }
 }
