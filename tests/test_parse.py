@@ -267,3 +267,37 @@ def test_the_probe_does_not_ask_vllm_engine_ports_for_models():
     out = subprocess.run(["awk", "-F|", prog.group(1)], input=rows, capture_output=True,
                          text=True, check=True).stdout
     assert [ln.split("|")[1] for ln in out.split()] == ["8080", "41001"], out
+
+
+def _laptop(listen: str, llm: str):
+    body = load("macos-laptop").replace("#LISTEN proto|addr|port|pid|comm\n",
+                                        "#LISTEN proto|addr|port|pid|comm\n" + listen)
+    return parse_payload(body.replace("#END", "#LLMMODEL port|status|ms|model\n" + llm
+                                      + "#END", 1))
+
+
+def _served(snap):
+    from fleet.models import Device, Kind
+    from fleet.render.view import model_servers
+
+    return model_servers(Device(id="id:l", name="l", kind=Kind.PERMANENT), snap.to_dict())
+
+
+def test_macos_airplay_on_port_5000_is_not_a_model_server():
+    """ControlCenter (the AirPlay receiver) answers 403 on :5000 -- a port model servers
+    also use -- and `fleet models` listed it as one that "wants an API key"."""
+    snap = _laptop("", "5000|auth|1|\n")
+    assert 5000 not in {s["port"] for s in _served(snap)}
+
+
+def test_the_ollama_app_does_not_list_every_model_twice():
+    """The Ollama desktop app listens on a port of its own and passes `ollama serve`'s
+    list through: each model came out on :11434 and again on the app's port."""
+    snap = _laptop("tcp|127.0.0.1|11434|10|ollama\ntcp|127.0.0.1|49317|11|Ollama\n",
+                   "49317|ok|2|qwen3-vl:8b\n11434|ok|2|qwen3-vl:8b\n")
+    assert [s["port"] for s in _served(snap)] == [11434]
+
+
+def test_a_program_name_with_spaces_reads_as_spaces():
+    snap = _laptop("tcp|127.0.0.1|15292|12|Adobe\\x20Desktop\\x20Service\n", "")
+    assert "Adobe Desktop Service" in {s.name for s in snap.services}

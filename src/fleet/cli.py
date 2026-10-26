@@ -168,6 +168,14 @@ def cmd_ls(names: list[str] = typer.Argument(None, help="only these devices"),
     if fields and json_out:
         wanted = [f.strip() for f in fields.split(",") if f.strip()]
         view = {**view, "devices": [view_mod.select_fields(r, wanted) for r in rows]}
+        # A typo used to come back as rows holding only `name`, which reads as "no
+        # machine has this" rather than "no such field".
+        known = {k for r in rows for k in r}
+        if rows and (unknown := [f for f in wanted if f not in known]):
+            err.print(f"[yellow]--fields: no such field: {', '.join(unknown)}[/yellow]  "
+                      f"[dim]fields: {', '.join(sorted(known))}[/dim]")
+    elif fields:
+        err.print("[dim]· --fields applies to --json[/dim]")
     if _emit(view, json_out):
         return
     if not rows:
@@ -489,6 +497,14 @@ def _edit_machine_file(dev, json_out: bool, *, paths: list[str], endpoints: list
                   "at it reads the same; it shows from the next probe[/dim]")
 
 
+def _no_such(devices, name: str):
+    """Not found -- and, where a prefix fits several machines, which ones it could be."""
+    err.print(f"[red]No device named {name!r}[/red]")
+    if near := inv.near_matches(devices, name):
+        err.print(f"  [dim]did you mean: {', '.join(near)}[/dim]")
+    raise typer.Exit(1)
+
+
 def _tags(values) -> list[str] | None:
     """Normalise a repeatable --tag/--untag into a clean list, or None if unmentioned.
 
@@ -574,8 +590,19 @@ def cmd_add(ssh_command: str = typer.Argument(None, help='e.g. "ssh -p 58418 roo
         with _chatter_to_stderr(json_out):
             split = _split_a_clone(devices, dev, res, write=not dry_run)
     if dry_run:
-        # `name`, as the real add answers: agents read the same key from both.
-        _emit({"name": dev.name, "id": dev.id, "kind": dev.kind.value,
+        # `name` and `action`, as the real add answers: agents read the same keys from
+        # both. A machine already recorded keeps its name, so that is the one to report
+        # -- `cloud-1-2`, the name a new machine would have got, named nothing.
+        known = None if split else inv.find_exact(devices, dev.id)
+        if known is not None:
+            have = {(e.target, e.user, e.port) for e in inv.endpoints_of(known)}
+            new_eps = [e for e in inv.endpoints_of(dev) if (e.target, e.user, e.port) not in have]
+            action = ("restored" if known.deleted_at
+                      else "endpoint_added" if new_eps else "unchanged")
+        else:
+            action = "added"
+        _emit({"action": action, "name": known.name if known else dev.name, "id": dev.id,
+               "kind": (dev.kind if kind or known is None else known.kind).value,
                "status": res.status.value, "dry_run": True,
                "clone_of_a_known_machine": split}, True)
         return
@@ -618,11 +645,9 @@ def cmd_add(ssh_command: str = typer.Argument(None, help='e.g. "ssh -p 58418 roo
     # report. Reporting the requested name sent agents after a machine that did not exist
     # ("No device named 'loop'") on the very next command.
     asked = dev.name
-    if action in ("endpoint_added", "unchanged") and (
-            survivor := inv.find_exact(devices, dev.id)):
-        dev.name = survivor.name
     if survivor := inv.find_exact(devices, dev.id):
-        dev.kind = survivor.kind        # what is stored, which is what to report
+        # A restored machine too: it comes back under its old name.
+        dev.name, dev.kind = survivor.name, survivor.kind
     for t in tags:
         if view_mod.is_fact_name(t):
             err.print(f"  [dim]note: {t!r} is also derived from telemetry — "
@@ -632,21 +657,21 @@ def cmd_add(ssh_command: str = typer.Argument(None, help='e.g. "ssh -p 58418 roo
         store.record(conn, dev.id, res)
         conn.close()
     if not json_out:
+        what = f"({dev.kind.value}, {res.status.value})"
         if action == "restored":
-            console.print(f"[green]✓[/green] restored [bold]{dev.name}[/bold] — it had been "
-                          "removed, and everything recorded about it is back.")
+            console.print(f"[green]✓[/green] restored [bold]{dev.name}[/bold] {what} — it "
+                          "had been removed, and everything recorded about it is back.")
         elif action == "endpoint_added":
-            console.print(f"[green]✓[/green] {dev.name} was already known — added another endpoint "
-                          "(same machine-id, so this is one device, not two).")
+            console.print(f"[green]✓[/green] {dev.name} {what} was already known — added "
+                          "another endpoint (same machine-id, so this is one device, not two).")
         elif action == "unchanged":
-            console.print(f"[dim]· {dev.name} already recorded with this endpoint.[/dim]")
-        if action in ("endpoint_added", "unchanged") and name and name != dev.name:
+            console.print(f"[dim]· {dev.name} {what} already recorded with this endpoint.[/dim]")
+        if action != "added" and name and name != dev.name:
             console.print(f"  [dim]it keeps its name; to rename it: [bold]fleet edit "
                           f"{dev.name} --name {asked}[/bold][/dim]")
-        else:
-            console.print(f"[green]✓[/green] added [bold]{dev.name}[/bold] "
-                          f"({dev.kind.value}, {res.status.value})")
-            if action == "added" and not name:
+        if action == "added":
+            console.print(f"[green]✓[/green] added [bold]{dev.name}[/bold] {what}")
+            if not name:
                 # Said, because a guessed name is the one thing here nobody asked for,
                 # and the hostname a cloud image ships with is rarely the one you meant.
                 from .onboard import name_source
@@ -851,8 +876,7 @@ def cmd_edit(name: str = typer.Argument(None, help="defaults to this machine"),
     devices = inv.load()
     dev = _this_machine(devices, "edit") if name is None else inv.find(devices, name)
     if dev is None:
-        err.print(f"[red]No device named {name!r}[/red]")
-        raise typer.Exit(1)
+        _no_such(devices, name)
 
     on_machine = bool(path or endpoint or note is not None
                       or (not local and (tag or untag or cost is not None)))
@@ -863,8 +887,10 @@ def cmd_edit(name: str = typer.Argument(None, help="defaults to this machine"),
                            tags_remove=[] if local else (_tags(untag) or []),
                            cost=None if local else cost)
         if not local:
-            tag = untag = None
-            cost = None
+            tag = cost = None
+            # `fleet add --tag` keeps its tags in this list, so removing one has to
+            # reach here as well: otherwise it said "tags: -" and `ls` still showed it.
+            untag = [t for t in (_tags(untag) or []) if t in dev.tags] or None
         if not any(v not in (None, False, []) for v in (
                 ssh_command, disk_path, clear_disk_paths, new_name, new_alias, tag, untag,
                 cost)):
@@ -1004,8 +1030,7 @@ def cmd_install(name: str = typer.Argument(None,
     devices = inv.load()
     dev = inv.find(devices, name)
     if dev is None:
-        err.print(f"[red]No device named {name!r}[/red]")
-        raise typer.Exit(1)
+        _no_such(devices, name)
     eps = inv.endpoints_of(dev)
     if not eps:
         err.print(f"[red]{dev.name} has no endpoint recorded[/red]")
@@ -1096,8 +1121,7 @@ def cmd_update(name: str = typer.Argument(None, help="defaults to this machine")
     elif name:
         one = inv.find(devices, name)
         if one is None:
-            err.print(f"[red]No device named {name!r}[/red]")
-            raise typer.Exit(1)
+            _no_such(devices, name)
         targets = [one]
     else:
         targets = []
@@ -1261,8 +1285,7 @@ def cmd_top(name: str = typer.Argument(None, help="one device, instead of the wh
     if name:
         one = inv.find(devices, name)
         if one is None:
-            err.print(f"[red]No device named {name!r}[/red]")
-            raise typer.Exit(1)
+            _no_such(devices, name)
         devices = [one]
 
     schedule = Schedule(interval=interval,
@@ -1408,10 +1431,10 @@ def cmd_probe(name: str = typer.Argument(None, help="defaults to this machine"),
             {"status": res.status.value, "latency_ms": res.latency_ms,
              "snapshot": res.snapshot.to_dict() if res.snapshot else None}, default=str))
         raise typer.Exit(0 if res.ok else 1)
-    dev = inv.find(inv.load(), name)
+    devices = inv.load()
+    dev = inv.find(devices, name)
     if dev is None:
-        err.print(f"[red]No device named {name!r}[/red]")
-        raise typer.Exit(1)
+        _no_such(devices, name)
     eps = inv.endpoints_of(dev)
     if raw:
         argv = build_argv(sorted(eps, key=lambda e: e.preference)[0],
@@ -1437,10 +1460,10 @@ def cmd_ssh(ctx: typer.Context,
 
     [dim]Example:[/dim]  fleet ssh machine_A -- nvidia-smi
     """
-    dev = inv.find(inv.load(), name)
+    devices = inv.load()
+    dev = inv.find(devices, name)
     if dev is None:
-        err.print(f"[red]No device named {name!r}[/red]")
-        raise typer.Exit(1)
+        _no_such(devices, name)
     eps = sorted(inv.endpoints_of(dev), key=lambda e: e.preference)
     if not eps:
         if dev.id == identity.local_device_id():

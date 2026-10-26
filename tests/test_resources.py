@@ -532,3 +532,15 @@ def test_the_probe_asks_a_declared_server_at_its_own_path(tmp_path):
         assert svc.source == "declared" and svc.model_ids == ["Qwen/Qwen2.5-7B-Instruct"]
     finally:
         srv.shutdown()
+
+
+@posix
+def test_removing_a_tag_a_machine_never_had_writes_no_file_there(tmp_path, monkeypatch):
+    """`fleet edit cloud-2 --untag gpu` on a machine with no machine.yaml created one
+    holding only the header -- litter on somebody's machine, from a no-op."""
+    from fleet.ops import machinefile
+
+    monkeypatch.setenv("HOME", str(tmp_path))
+    before, after = machinefile.change(None, "posix", tags_remove=["gpu"])
+    assert before == after
+    assert not (tmp_path / ".config" / "fleet" / "machine.yaml").exists()

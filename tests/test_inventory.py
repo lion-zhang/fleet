@@ -217,3 +217,11 @@ def test_an_address_or_a_rental_gateway_still_defers_to_the_hostname():
                    "fe80::1"):
         assert suggest_name(snap, Endpoint(target=target), set()) == "gpu-box", target
     assert name_source(snap, Endpoint(target="10.0.0.7")) == "its hostname"
+
+
+def test_a_vast_label_names_the_box_whole():
+    """`C.12345678` was cut at its first dot like a hostname, naming every vast box `c`."""
+    from fleet.models import Snapshot
+
+    snap = Snapshot(ts=1, vast_label="C.12345678")
+    assert suggest_name(snap, Endpoint(target="ssh2.vast.ai"), set()) == "c-12345678"

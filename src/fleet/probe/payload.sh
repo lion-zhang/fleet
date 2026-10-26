@@ -676,6 +676,7 @@ PY
     printf '%s\n' "$listen" | awk -F'|' '
       BEGIN { split("8000 8001 8010 8080 11434 1234 5000 30000", h, " "); for (i in h) hint[h[i]] = 1 }
       tolower($5) ~ /^(vllm|sglang)::/ && tolower($5) !~ /::(api|http)/ { next }   # engine workers
+      tolower($5) ~ /^(controlce|ctrlcenter|airplay)/ { next }                 # macOS AirPlay on :5000
       tolower($5) ~ /vllm|sglang|ollama|mlx|llama|lmstudio|lms|text-gen|omlx|kobold|tabby|aphrodite|litellm|local-ai|exllama/ || ($3 in hint) { print $2 "|" $3 "|" }'
   } | awk -F'|' '$2 != "" && !seen[$2]++' | head -8 | while IFS='|' read -r addr port base; do
     case "$addr" in

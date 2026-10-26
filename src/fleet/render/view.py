@@ -311,7 +311,20 @@ def model_servers(dev: Device, snap: dict | None, *, here: bool = False) -> list
                              + (f" -p {e.port}" if e.port and e.port != 22 else "")
                              + f" {dest}")
         out.append(row)
-    return out
+    return _one_per_ollama(out)
+
+
+def _one_per_ollama(rows: list[dict]) -> list[dict]:
+    """The Ollama desktop app listens on a port of its own and passes the model list
+    through from `ollama serve`, so every model was listed twice. Keep one: :11434,
+    ollama's own port, when it is among them."""
+    keep: dict[tuple, dict] = {}
+    for r in sorted((r for r in rows if r["framework"] == "ollama" and r["models"]),
+                    key=lambda r: (r["port"] != 11434, r["port"] or 0)):
+        keep.setdefault(tuple(sorted(r["models"])), r)
+    chosen = {id(r) for r in keep.values()}
+    return [r for r in rows if r["framework"] != "ollama" or not r["models"]
+            or id(r) in chosen]
 
 
 def software_view(snap: dict | None, *, full: bool) -> dict:

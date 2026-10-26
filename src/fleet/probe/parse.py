@@ -50,6 +50,8 @@ _SERVICE_SIGNATURES: tuple[tuple[str, str, str], ...] = (
     ("tensorboard", "web", "tensorboard"),
     ("ray", "compute", "ray"),
 )
+# Programs that sit on a port model servers also use, and are never one.
+_NOT_MODEL_SERVERS = ("controlce", "ctrlcenter", "airplay")
 # Ports that commonly carry an OpenAI-compatible API; the HTTP probe confirms.
 LLM_HINT_PORTS = frozenset({8000, 8001, 8010, 8080, 11434, 1234, 5000, 30000})
 # Never surface these as "services" -- they are OS plumbing, not something you can use.
@@ -125,6 +127,10 @@ def _classify_service(comm: str, port: int) -> tuple[str, str]:
     # and so on. Their ports are the engine's own sockets, not an API: one `vllm serve`
     # was listed as seven model servers. Only the API server (`vllm`, or `VLLM::APIServer`
     # when it runs several) serves models.
+    # macOS's AirPlay receiver (ControlCenter) holds :5000 and :7000 and answers 403: it
+    # was listed as a model server that "wants an API key".
+    if low.startswith(_NOT_MODEL_SERVERS):
+        return "unknown", ""
     for engine in ("vllm", "sglang"):
         if low.startswith(engine + "::") and not low[len(engine) + 2:].startswith(("api", "http")):
             return "internal", engine
@@ -257,7 +263,8 @@ def parse_payload(stdout: str) -> Snapshot:
         addr = f[1].strip()
         # ss appends an interface scope ("127.0.0.53%lo"); strip it for a usable address
         addr = addr.split("%", 1)[0]
-        comm = f[4].strip()
+        # lsof writes a space in a program's name as `\x20` ("Adobe\x20Desktop\x20Service").
+        comm = re.sub(r"\\x([0-9a-fA-F]{2})", lambda m: chr(int(m.group(1), 16)), f[4].strip())
         kind, framework = _classify_service(comm, port)
         if kind == "unknown" and not comm:
             continue      # an anonymous high port is noise, not a service
