@@ -590,8 +590,27 @@ def cmd_add(ssh_command: str = typer.Argument(None, help='e.g. "ssh -p 58418 roo
         # the incoming record, so on a machine already known -- re-adding a rental whose
         # port moved, say -- the tags would be dropped without a word. Apply them to the
         # record that actually survived.
-        if tags and (survivor := inv.find_exact(current, dev.id)):
-            apply_edits(survivor, add_tags=tags)
+        survivor = inv.find_exact(current, dev.id)
+        if survivor is not None and survivor is not dev:
+            if tags:
+                apply_edits(survivor, add_tags=tags)
+            # The same for what was said explicitly: `fleet add ... --kind rental` on a
+            # machine removed earlier printed "added (rental)" and kept it permanent.
+            if kind and survivor.kind is not dev.kind:
+                survivor.kind = dev.kind
+                if dev.kind in (Kind.SHARED, Kind.MOBILE):
+                    survivor.probe_policy = dev.probe_policy
+                inv.touch(survivor)
+            elif dev.provider and survivor.kind is Kind.PERMANENT:
+                # Unsaid, the probe decides as it would for a new machine: a box that
+                # answers as a vast.ai instance is rented, whatever it was recorded as.
+                survivor.kind = Kind.RENTAL
+                inv.touch(survivor)
+            if dev.provider and survivor.provider != dev.provider:
+                survivor.provider = dev.provider
+                inv.touch(survivor)
+            if alias and not survivor.alias and alias != survivor.name:
+                apply_edits(survivor, alias=alias)
         return current, action
 
     devices, action = inv.update(_record)
@@ -602,6 +621,8 @@ def cmd_add(ssh_command: str = typer.Argument(None, help='e.g. "ssh -p 58418 roo
     if action in ("endpoint_added", "unchanged") and (
             survivor := inv.find_exact(devices, dev.id)):
         dev.name = survivor.name
+    if survivor := inv.find_exact(devices, dev.id):
+        dev.kind = survivor.kind        # what is stored, which is what to report
     for t in tags:
         if view_mod.is_fact_name(t):
             err.print(f"  [dim]note: {t!r} is also derived from telemetry — "
@@ -1663,7 +1684,10 @@ def cmd_uninstall(purge: bool = typer.Option(False, "--purge",
     if _emit({"ok": True, **dataclasses.asdict(out)}, json_out):
         return
     for path in out.agents:
-        console.print(f"[green]✓[/green] removed {path}")
+        # A file that is still there held more than fleet -- an agent's MCP config, an
+        # AGENTS.md -- and only fleet's part of it went.
+        what = f"fleet from {path}" if Path(path).exists() else path
+        console.print(f"[green]✓[/green] removed {what}")
     if out.files_removed:
         console.print(f"[green]✓[/green] deleted {len(out.files_removed)} of fleet's files")
     elif out.files_kept:

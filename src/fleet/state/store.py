@@ -4,7 +4,9 @@ rebuilds everything. Nothing durable may live here."""
 from __future__ import annotations
 
 import json
+import os
 import sqlite3
+import sys
 import time
 from pathlib import Path
 
@@ -39,10 +41,51 @@ CREATE TABLE IF NOT EXISTS event (
 
 
 def connect(path: Path | None = None) -> sqlite3.Connection:
-    ensure_dirs()
-    conn = sqlite3.connect(str(path or DB_PATH), timeout=10.0)
+    path = path or DB_PATH
+    conn = None
+    try:
+        ensure_dirs()
+        # SQLite quietly opens a file it may not write read-only, and the first write
+        # then fails far from here; ask first.
+        for p in (path, path.parent):
+            if p.exists() and not os.access(p, os.W_OK):
+                raise PermissionError(f"{p} is not writable")
+        conn = sqlite3.connect(str(path), timeout=10.0)
+        conn.execute("PRAGMA journal_mode=WAL")
+        return _prepare(conn)
+    except (OSError, sqlite3.OperationalError) as exc:
+        # A sandbox that lets fleet read but not write its state dir -- Codex's
+        # workspace-write, running `tar ... && fleet ssh ...` -- crashed every command
+        # with "unable to open database file". The file is a cache: read what is there,
+        # keep this run's writes in memory, and say once that they will not be kept.
+        if conn is not None:
+            conn.close()
+        return _in_memory(path, exc)
+
+
+_warned = False
+
+
+def _in_memory(path: Path, exc: BaseException) -> sqlite3.Connection:
+    global _warned
+    if not _warned:
+        _warned = True
+        print(f"fleet: cannot write its cache at {path} ({exc}); carrying on without "
+              "saving what this run sees", file=sys.stderr)
+    conn = sqlite3.connect(":memory:")
+    try:
+        disk = sqlite3.connect(f"{path.resolve().as_uri()}?mode=ro&immutable=1", uri=True)
+        try:
+            disk.backup(conn)
+        finally:
+            disk.close()
+    except (OSError, sqlite3.Error):
+        pass                       # nothing readable there either: start empty
+    return _prepare(conn)
+
+
+def _prepare(conn: sqlite3.Connection) -> sqlite3.Connection:
     conn.row_factory = sqlite3.Row
-    conn.execute("PRAGMA journal_mode=WAL")
     conn.execute("PRAGMA busy_timeout=5000")
     # Two fleet processes opening the cache just after an upgrade used to both see the
     # old shape and both alter it; the second died on "duplicate column name". One at a

@@ -96,11 +96,19 @@ def suggest_name(snap: Snapshot | None, ep: Endpoint, taken: set[str]) -> str:
     return "device"
 
 
+def rental_provider(snap: Snapshot | None) -> str:
+    """The rental provider a machine says it runs on, from what the probe saw there."""
+    if snap is None:
+        return ""
+    return ("vastai" if snap.vast_label else "runpod" if snap.runpod_id
+            else "autodl" if snap.autodl else "")
+
+
 def classify_kind(snap: Snapshot | None, ep: Endpoint, *, override: str | None = None) -> Kind:
     if override:
         return Kind(override)
     if snap:
-        if snap.vast_label or snap.runpod_id or snap.autodl:
+        if rental_provider(snap):
             return Kind.RENTAL
         # SLURM, or several distinct humans logged in, means it is not yours to fill.
         if snap.slurm or (snap.users or 0) > 3:
@@ -156,6 +164,7 @@ def onboard_self(*, name: str | None = None, kind: str | None = None,
         alias=alias,
         endpoints=[],
         needs_review=not res.ok,
+        provider=rental_provider(snap),
     )
     return dev, res
 
@@ -213,6 +222,5 @@ def onboard(ssh_command: str, *, name: str | None = None, kind: str | None = Non
         dev.probe_policy = "on_demand"
     if dev.kind is Kind.MOBILE:
         dev.probe_policy = "never"
-    if snap and snap.vast_label:
-        dev.provider = "vastai"
+    dev.provider = rental_provider(snap)
     return dev, res

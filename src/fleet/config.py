@@ -71,7 +71,10 @@ _WARNED: set[str] = set()
 
 
 def load_config() -> Config:
-    ensure_dirs()
+    try:
+        ensure_dirs()
+    except OSError:
+        pass        # a sandbox may let fleet read here but not write: reading must work
     data = dict(DEFAULTS)
     if CONFIG_PATH.exists():
         try:
