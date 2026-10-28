@@ -276,6 +276,11 @@ def carry_over(prev: dict, snap: dict) -> None:
     """
     if snap.get("containers") is None and prev.get("containers") is not None:
         snap["containers"] = prev["containers"]
+    # Windows skips the software scan in a light probe instead of reading its cache, so
+    # one `fleet top` there left `fleet show` listing no software at all.
+    if not snap.get("software") and prev.get("software"):
+        snap["software"] = prev["software"]
+        snap["software_at"] = prev.get("software_at")
     before = {s.get("port"): s for s in prev.get("services") or [] if s.get("status")}
     for svc in snap.get("services") or []:
         if not svc.get("status") and (old := before.get(svc.get("port"))) \

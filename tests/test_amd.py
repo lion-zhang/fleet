@@ -148,3 +148,48 @@ def test_an_older_probe_without_a_vendor_is_nvidia():
     snap = {"gpu_present": "1",
             "gpus": [{"vram_total_mib": 24564, "vram_used_mib": 0, "vram_free_mib": 24564}]}
     assert "cuda" in facts(_dev(), snap, None)
+
+
+@posix
+def test_cards_that_report_no_serial_stay_apart(tmp_path):
+    """rocm-smi says "N/A" for a card's unique id on many boards, and the string is not
+    empty: every card got the uuid "N/A", so each card was every card, and one job was
+    shown on all of them."""
+    bin_ = _bin(tmp_path)
+    cards = {k: {**v, "Unique ID": "N/A"} if k.startswith("card") else v
+             for k, v in ROCM_SMI["--showuniqueid"].items()}
+    _tool(bin_, "rocm-smi", {**ROCM_SMI, "--showuniqueid": cards})
+    snap = parse_payload(probe(make_home(tmp_path),
+                               PATH=f"{bin_}:{os.environ['PATH']}")).to_dict()
+    g0, g1 = snap["gpus"]
+    assert g0["uuid"] != g1["uuid"] and "N/A" not in (g0["uuid"], g1["uuid"])
+    view = device_view(_dev(), {"status": "ok"}, snap)
+    assert [j["pid"] for j in view["gpus"][0]["jobs"]] == [ME]
+    assert view["gpus"][1]["jobs"] == []
+
+
+@posix
+def test_an_mi300_is_read_by_the_sensor_it_has(tmp_path):
+    """An MI300 reports its edge temperature as "N/A"; the hotspot one is the reading.
+    Its serial can be "N/A" on both cards of a node too."""
+    bin_ = _bin(tmp_path)
+    metric = {"usage": {"gfx_activity": {"value": 3, "unit": "%"}},
+              "power": {"socket_power": "N/A", "average_socket_power": {"value": 140, "unit": "W"}},
+              "temperature": {"edge": "N/A", "hotspot": {"value": 45, "unit": "C"}},
+              "mem_usage": {"total_vram": {"value": 196592, "unit": "MB"},
+                            "used_vram": {"value": 0, "unit": "MB"}}}
+    _tool(bin_, "amd-smi", {
+        "static": [{"gpu": i, "asic": {"market_name": "AMD Instinct MI300X",
+                                       "asic_serial": "N/A"}} for i in (0, 1)],
+        "metric": [{"gpu": i, **metric} for i in (0, 1)],
+        "process": [{"gpu": 1, "process_list": [{"process_info": {
+            "name": "python3", "pid": ME,
+            "memory_usage": {"vram_mem": {"value": 2 ** 30, "unit": "B"}}}}]}],
+    })
+    snap = parse_payload(probe(make_home(tmp_path),
+                               PATH=f"{bin_}:{os.environ['PATH']}")).to_dict()
+    g0, g1 = snap["gpus"]
+    assert (g0["temp_c"], g0["power_w"]) == (45, 140.0)
+    assert g0["uuid"] != g1["uuid"]
+    view = device_view(_dev(), {"status": "ok"}, snap)
+    assert view["gpus"][0]["jobs"] == [] and [j["pid"] for j in view["gpus"][1]["jobs"]] == [ME]

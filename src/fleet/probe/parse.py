@@ -302,7 +302,9 @@ def _parse_resources(snap: Snapshot, kv: dict[str, str], rows: dict[str, list[st
         if len(f) < 3 or not f[1].strip():
             continue
         snap.storage.append(StorePath(
-            kind=f[0].strip(), path=f[1].strip(), exists=f[2].strip() == "1",
+            # Lowercased as the notes' own kinds are: `Models:` written by hand was
+            # missing from `fleet models` and from `--tag`-free lookups by kind.
+            kind=f[0].strip().lower(), path=f[1].strip(), exists=f[2].strip() == "1",
             avail_kb=_int(f[3]) if len(f) > 3 else None,
             size_kb=_int(f[4]) if len(f) > 4 else None,
             sized_at=_int(f[5]) if len(f) > 5 else None))

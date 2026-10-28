@@ -158,6 +158,8 @@ def _model(name: str) -> str:
 
 def _gb(gb: float) -> str:
     """Free space at a glance: "1648G" is arithmetic, "1.6T" is the answer."""
+    if gb >= 1024 ** 2:                     # a network share: "1024.0T" was 1 PB
+        return f"{gb / 1024 ** 2:.1f}P"
     return f"{gb / 1024:.1f}T" if gb >= 1024 else f"{gb:.0f}G"
 
 
@@ -405,9 +407,14 @@ def render_device(row: dict[str, Any], live_within: int = 10) -> Table:
                   f"{gpu.get('vram_free_mib', 0) / 1024:.1f}G free  "
                   f"[dim]{gpu.get('util_pct', 0)}% util  {escape(gpu.get('name') or '')}[/dim]")
     for disk in row.get("disks") or []:
+        # A read-only mount cannot fill: drawn as a bar it read as a full disk, as it did
+        # in `fleet ls` and the fleet view. And in the units they use: not "1048576G".
+        if disk.get("writable") is False:
+            t.add_row("[bold]disk[/bold]", f"[dim]read-only  {escape(str(disk.get('mount', '')))}[/dim]")
+            continue
         t.add_row("[bold]disk[/bold]",
                   f"{escape(meter(disk.get('use_pct', 0), 100, 20))} "
-                  f"{disk.get('free_gb', 0):.0f}G free  [dim]{escape(str(disk.get('mount', '')))}[/dim]")
+                  f"{_gb(disk.get('free_gb', 0))} free  [dim]{escape(str(disk.get('mount', '')))}[/dim]")
     for proc in (row.get("processes") or [])[:8]:
         t.add_row("[dim]gpu job[/dim]",
                   f"{proc.get('vram_mib', 0)} MiB  {escape(proc.get('user') or '?')}  "
@@ -510,9 +517,15 @@ def render_ps(view: dict[str, Any]) -> list:
                          no_wrap=True, overflow="ellipsis",
                          max_width=70 if col == "COMMAND" else None)
         for j in view["jobs"]:
+            # A process the login cannot see -- in a container, or another user's on a
+            # locked-down host -- has no user, age or command: "0m" and a blank said it
+            # had just started and was nothing.
+            hidden = not j["user"] and not j["command"]
             t.add_row(escape(j["machine"]), f"{j['gpu']} [dim]{escape(_short_gpu(j['gpu_name']))}[/dim]",
                       escape(j["user"] or "?"), f"{j['vram_mib'] / 1024:.1f}G",
-                      runtime(j["runtime_s"]), escape(j["command"] or ""))
+                      "-" if hidden else runtime(j["runtime_s"]),
+                      f"[dim]pid {j.get('pid', '?')}, not visible from this login "
+                      "(a container?)[/dim]" if hidden else escape(j["command"] or ""))
         out.append(t)
     else:
         out.append("[dim]No jobs on any GPU.[/dim]")

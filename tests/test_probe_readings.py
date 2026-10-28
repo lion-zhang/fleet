@@ -212,3 +212,27 @@ def test_redaction_leaves_ordinary_flags_alone():
 
     line = "python train.py --keyframes 3 --monkey 2 --lr 3e-4 http://host:8000/v1"
     assert redact(line) == line
+
+
+@linux
+def test_a_machine_with_only_netstat_names_its_servers(tmp_path):
+    """Without ss or lsof the probe reads netstat, which names a port's program as
+    "4242/vllm": that was never read, so every port there was nameless."""
+    bin_ = tmp_path / "bin"
+    bin_.mkdir()
+    for d in ("/usr/local/bin", "/usr/bin", "/bin", "/usr/sbin", "/sbin"):
+        for f in Path(d).iterdir() if Path(d).is_dir() else []:
+            if f.name not in ("ss", "lsof", "netstat") and not (bin_ / f.name).exists():
+                (bin_ / f.name).symlink_to(f)
+    _stub(bin_, "netstat", """echo "Active Internet connections (only servers)"
+echo "Proto Recv-Q Send-Q Local Address           Foreign Address         State       PID/Program name"
+echo "tcp        0      0 0.0.0.0:8000            0.0.0.0:*               LISTEN      4242/vllm"
+echo "tcp6       0      0 :::7860                 :::*                    LISTEN      77/Web Content"
+""")
+    home = tmp_path / "home"
+    home.mkdir()
+    p = subprocess.run(["sh", str(PAYLOAD)], env={"PATH": str(bin_), "HOME": str(home)},
+                       capture_output=True, text=True, timeout=60)
+    by_port = {s.port: s for s in parse_payload(p.stdout).services}
+    assert by_port[8000].comm == "vllm" and by_port[8000].pid == 4242
+    assert by_port[7860].comm == "Web Content"

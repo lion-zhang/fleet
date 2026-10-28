@@ -72,7 +72,7 @@ for ($i = 0; $i -lt 2; $i++) {
     $f = $notesFiles[$i]
     if (-not (Test-Path -LiteralPath $f)) { continue }
     $bytes = [System.IO.File]::ReadAllBytes($f)
-    if ($bytes.Length -gt 8192) { $bytes = $bytes[0..8191] }
+    if ($bytes.Length -gt 8193) { $bytes = $bytes[0..8192] }   # one past the limit: see payload.sh
     Emit $keys[$i] ([Convert]::ToBase64String($bytes))
     $inPaths = $false; $inEp = $false; $kind = ''
     foreach ($ln in ([System.Text.Encoding]::UTF8.GetString($bytes) -split "`r?`n")) {

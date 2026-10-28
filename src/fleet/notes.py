@@ -52,10 +52,15 @@ class NotesError(ValueError):
 
 def decode(b64: str) -> str:
     try:
-        return base64.b64decode(b64.encode(), validate=False)[:MAX_BYTES].decode(
-            "utf-8", errors="replace")
+        raw = base64.b64decode(b64.encode(), validate=False)
     except (binascii.Error, ValueError) as e:
         raise NotesError(f"unreadable: {e}") from None
+    # The probe sends one byte past the limit, so a larger file is known for one. Read
+    # cut at 8 KB it was a different file -- a list ending early, the keys after the cut
+    # gone -- taken as what the machine said, without a word.
+    if len(raw) > MAX_BYTES:
+        raise NotesError(f"larger than {MAX_BYTES // 1024} KB, so it was not read")
+    return raw.decode("utf-8", errors="replace")
 
 
 def _str(v, limit: int) -> str:

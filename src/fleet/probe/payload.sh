@@ -210,6 +210,26 @@ def find(d, *names):
             if r is not None:
                 return r
     return None
+def first_num(d, *names):
+    # the first of names that holds a number: an MI300 reports its edge sensor as "N/A"
+    # and the junction one as a number, and reading only the first name found gave none
+    for name in names:
+        n = num(find(d, name))[0]
+        if n is not None:
+            return n
+    return None
+def ident(v):
+    # "N/A", or a serial of zeros, names no card: every card of a box got the same "N/A"
+    v = str(v or "").strip()
+    return None if not v or v.upper() in ("N/A", "NA", "NONE", "UNKNOWN") \
+        or not v.strip("0xX") else v
+def unique(gpus):
+    # two cards reporting one serial stay two cards, each with its own jobs
+    seen = set()
+    for g in gpus:
+        if g[1] in seen:
+            g[1] = f"{g[1]}-{g[0]}"
+        seen.add(g[1])
 gpus, apps = [], []
 def cell(x):
     return "" if x is None else (str(int(x)) if isinstance(x, float) and x.is_integer() else str(x))
@@ -224,7 +244,8 @@ if tool.endswith("amd-smi"):
         by.setdefault(m.get("gpu"), {})["m"] = m
     for idx, d in sorted(by.items(), key=lambda kv: (kv[0] is None, kv[0])):
         s, m = d.get("s", {}), d.get("m", {})
-        uuid = str(find(s, "asic_serial", "serial", "uuid") or f"amd-{idx}")
+        uuid = ident(find(s, "asic_serial")) or ident(find(s, "serial")) \
+            or ident(find(s, "uuid")) or f"amd-{idx}"
         name = str(find(s, "market_name", "product_name", "name") or "AMD GPU")
         total = mib(find(m.get("mem_usage", m), "total_vram"), "MB")
         used = mib(find(m.get("mem_usage", m), "used_vram"), "MB")
@@ -232,9 +253,10 @@ if tool.endswith("amd-smi"):
         if free is None and total is not None and used is not None:
             free = total - used
         util = num(find(m.get("usage", m), "gfx_activity", "gfx_usage"))[0]
-        temp = num(find(m.get("temperature", m), "edge", "hotspot", "junction"))[0]
-        power = num(find(m.get("power", m), "socket_power", "average_socket_power"))[0]
+        temp = first_num(m.get("temperature", m), "edge", "hotspot", "junction")
+        power = first_num(m.get("power", m), "socket_power", "average_socket_power")
         gpus.append([idx, uuid, name, total, used, free, util, temp, power])
+    unique(gpus)
     if mode != "shared":
         uuid_of = {g[0]: g[1] for g in gpus}
         procs = run("process", "--json") or []
@@ -252,16 +274,17 @@ else:
     cards = sorted((k for k in data if re.fullmatch(r"card\d+", k)), key=lambda k: int(k[4:]))
     for k in cards:
         c, idx = data[k], int(k[4:])
-        uuid = str(find(c, "unique id") or f"amd-{idx}")
+        uuid = ident(find(c, "unique id")) or f"amd-{idx}"
         name = str(find(c, "card series", "card model", "card sku") or "AMD GPU")
         total, used = mib(find(c, "vram total memory")), mib(find(c, "vram total used memory"))
         free = total - used if total is not None and used is not None else None
         util = num(find(c, "gpu use"))[0]
-        temp = num(find(c, "temperature (sensor edge)", "temperature (sensor junction)",
-                        "temperature"))[0]
-        power = num(find(c, "average graphics package power", "current socket graphics",
-                         "power"))[0]
+        temp = first_num(c, "temperature (sensor edge)", "temperature (sensor junction)",
+                         "temperature")
+        power = first_num(c, "average graphics package power", "current socket graphics",
+                          "power")
         gpus.append([idx, uuid, name, total, used, free, util, temp, power])
+    unique(gpus)
     if mode != "shared":
         pids = (run("--showpids", "--json") or {}).get("system", {})
         where = (run("--showpidgpus", "--json") or {}).get("system", {})
@@ -314,8 +337,9 @@ notes_sys=""; notes_user=""
 for f in "$HOME/.config/fleet/machine.yaml" "$HOME/Library/Application Support/fleet/machine.yaml"; do
   if [ -r "$f" ]; then notes_user=$f; break; fi
 done
-[ -n "$notes_sys" ] && emit notes.system "$(head -c 8192 "$notes_sys" 2>/dev/null | b64)"
-[ -n "$notes_user" ] && emit notes.user "$(head -c 8192 "$notes_user" 2>/dev/null | b64)"
+# One byte past the 8 KB limit, so the parser knows a file is over it rather than cut.
+[ -n "$notes_sys" ] && emit notes.system "$(head -c 8193 "$notes_sys" 2>/dev/null | b64)"
+[ -n "$notes_user" ] && emit notes.user "$(head -c 8193 "$notes_user" 2>/dev/null | b64)"
 
 # The `paths:` block of those files, as kind|path lines. Reads the shapes YAML allows for
 # a list of strings -- `models: /a`, `models: [/a, /b]`, and `models:` then `- /a` -- which
@@ -505,7 +529,14 @@ elif have ss; then
 elif have netstat; then
   # The exit status of `netstat`, not of `tail`: piped, the fallback never ran.
   ns=$(netstat -tlnp 2>/dev/null) || ns=$(netstat -tln 2>/dev/null)
-  printf '%s\n' "$ns" | tail -n +3
+  # netstat names the program as "1234/python3", not as ss does: read as it came, every
+  # port it found was a nameless one, and a model server on a box without ss was unknown.
+  printf '%s\n' "$ns" | tail -n +3 | awk '$7 ~ /^[0-9]+\// {
+      c = substr($0, index($0, $7)); pid = c; sub(/\/.*/, "", pid)
+      sub(/^[0-9]+\//, "", c); sub(/[ \t]+$/, "", c)
+      printf "%s %s %s %s %s %s users:((\"%s\",pid=%s,fd=0))\n", $1, $2, $3, $4, $5, $6, c, pid
+      next }
+    { print }'
 elif have lsof; then
   lsof +c 0 -nP -iTCP -sTCP:LISTEN 2>/dev/null | tail -n +2 \
     | awk '{la=$9; port=la; sub(/.*:/, "", port); addr=substr(la, 1, length(la)-length(port)-1)
