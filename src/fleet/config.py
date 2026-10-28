@@ -12,8 +12,17 @@ from platformdirs import PlatformDirs
 
 _DIRS = PlatformDirs(appname="fleet", appauthor=False, roaming=False)
 
-CONFIG_DIR = Path(os.environ.get("FLEET_CONFIG_DIR") or _DIRS.user_config_dir)
-STATE_DIR = Path(os.environ.get("FLEET_STATE_DIR") or _DIRS.user_state_dir)
+
+def _dir(var: str, default: str) -> Path:
+    """An app's MCP settings pass `"FLEET_CONFIG_DIR": "~/fleet"` with no shell to expand
+    it, and fleet made a folder named `~` wherever the app happened to start it -- an
+    empty list of machines, a different one from each working directory."""
+    value = os.environ.get(var)
+    return Path(value).expanduser().absolute() if value else Path(default)
+
+
+CONFIG_DIR = _dir("FLEET_CONFIG_DIR", _DIRS.user_config_dir)
+STATE_DIR = _dir("FLEET_STATE_DIR", _DIRS.user_state_dir)
 # The machines added by hand. Not `inventory.yaml`, which fleet 0.5 kept with the access
 # list and the center's record: 0.6 starts from a clean list (docs/guides/upgrading-from-0.5.md).
 INVENTORY_PATH = CONFIG_DIR / "machines.yaml"
@@ -68,6 +77,9 @@ def ensure_dirs() -> None:
 
 
 _WARNED: set[str] = set()
+# Settings fleet 0.5 had, left in a config.yaml written for it. They did something once,
+# so they are passed over quietly, as the configuration reference says.
+_FROM_0_5 = {"sync_ttl_s", "access_retry_s"}
 
 
 def load_config() -> Config:
@@ -77,35 +89,55 @@ def load_config() -> Config:
         pass        # a sandbox may let fleet read here but not write: reading must work
     data = dict(DEFAULTS)
     if CONFIG_PATH.exists():
+        # A broken config must never stop you from listing devices -- but every setting
+        # in it was dropped without a word, as was a misspelt one (`max_wrkers: 4`).
         try:
             loaded = yaml.safe_load(CONFIG_PATH.read_text(encoding="utf-8")) or {}
-            if isinstance(loaded, dict):
-                data.update(loaded)
-        except (yaml.YAMLError, OSError, UnicodeDecodeError):
-            pass      # a broken config must never stop you from listing devices
+        except (yaml.YAMLError, OSError, UnicodeDecodeError) as e:
+            loaded = {}
+            _warn("", f"is not readable ({str(e).splitlines()[0]}); using the defaults")
+        if isinstance(loaded, dict):
+            for key in loaded:
+                if key not in DEFAULTS and key not in _FROM_0_5:
+                    import difflib
+                    near = difflib.get_close_matches(str(key), DEFAULTS, n=1)
+                    _warn(str(key), "is not a setting, so it does nothing"
+                          + (f" -- did you mean {near[0]}?" if near else ""))
+            data.update({k: v for k, v in loaded.items() if k in DEFAULTS})
+        else:
+            _warn("", "is not a list of settings (key: value); using the defaults")
     # A setting that is not a number (`telemetry_ttl_s: 5m`) used to raise on every read
     # that used it. Fall back to the default, and say so once. So does one below its
     # least: `max_workers: 0` raised in the thread pool on every `ls`, a timeout of 0
     # showed every machine offline, and `snapshot_retention: 0` deleted each reading as
     # it was stored.
     for key, default in DEFAULTS.items():
-        if isinstance(default, int) and not isinstance(data.get(key), bool):
+        if isinstance(default, int):
             least = _LEAST.get(key, 0)
             try:
+                # `probe_timeout_s: no` is YAML for False, which int() reads as 0: every
+                # machine then showed "no response within 0s", with nothing said.
+                if isinstance(data[key], bool):
+                    raise TypeError
                 value = int(data[key])
                 if value < least:
                     raise ValueError
                 data[key] = value
             except (TypeError, ValueError):
-                if key not in _WARNED:
-                    import sys
-                    _WARNED.add(key)
-                    why = ("is not a number" if not isinstance(data[key], (int, float))
-                           else f"is less than {least}")
-                    print(f"fleet: config.yaml: {key}: {data[key]!r} {why}; "
-                          f"using {default}", file=sys.stderr)
+                why = ("is not a number" if isinstance(data[key], bool)
+                       or not isinstance(data[key], (int, float)) else f"is less than {least}")
+                _warn(key, f"{data[key]!r} {why}; using {default}")
                 data[key] = default
     return Config(data)
+
+
+def _warn(key: str, what: str) -> None:
+    """Once per run for each setting (or the file, when `key` is empty)."""
+    if key in _WARNED:
+        return
+    import sys
+    _WARNED.add(key)
+    print(f"fleet: config.yaml: {key + ': ' if key else ''}{what}", file=sys.stderr)
 
 
 # The least each number setting can be and still work. The rest may be 0: a

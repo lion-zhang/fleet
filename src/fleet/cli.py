@@ -1461,7 +1461,7 @@ def cmd_top(name: str = typer.Argument(None, help="one device, instead of the wh
     detail = Detail.FULL
     live_within = max(int(interval * 3), 5)
 
-    def frame():
+    def frame(keys: bool = True):
         rows = _live_tick(conn, devices, schedule, cfg, detail, named=bool(name))
         if name:
             return render_device(rows[0], live_within)
@@ -1471,12 +1471,13 @@ def cmd_top(name: str = typer.Argument(None, help="one device, instead of the wh
         return Group(table, Text.from_markup(
             f"\n[dim]{s['online']}/{s['total']} online · {s['gpus_free']} free GPU(s)"
             + (f" · ${s['hourly_burn']:.2f}/hr" if s["hourly_burn"] else "")
-            + "  ·  q quit   r refresh[/dim]"))
+            + ("  ·  q quit   r refresh" if keys else "") + "[/dim]"))
 
     # A live loop in a pipe would spin forever, and an agent is exactly what would run
-    # it that way. One frame is also the more useful thing for a script.
+    # it that way. One frame is also the more useful thing for a script -- and no keys
+    # to press: "q quit  r refresh" under a frame that had already ended.
     if not sys.stdout.isatty() or os.environ.get("TERM") == "dumb":
-        console.print(frame())
+        console.print(frame(keys=False))
         if sys.stdout.isatty():
             # A terminal that cannot move the cursor: the live view drew nothing at all
             # and said nothing about why, so one frame and the reason instead.

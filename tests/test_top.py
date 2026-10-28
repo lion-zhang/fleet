@@ -362,6 +362,8 @@ def test_top_without_a_terminal_prints_one_frame_and_exits(tmp_path, monkeypatch
     result = runner.invoke(app, ["top"])
     assert result.exit_code == 0, result.output
     assert "a" in result.output
+    # Over by the time anyone reads it: no keys to press.
+    assert "q quit" not in result.output and "online" in result.output
 
 
 def test_top_rejects_an_unknown_device(tmp_path, monkeypatch):

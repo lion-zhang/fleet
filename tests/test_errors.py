@@ -8,6 +8,7 @@ from __future__ import annotations
 import json
 import subprocess
 import sys
+from pathlib import Path
 
 import pytest
 
@@ -113,3 +114,51 @@ def test_numbers_typed_into_machines_yaml_are_read_as_they_were_meant(tmp_path):
                     'cost: {usd_per_hour: "1.50"}}\n', encoding="utf-8")
     (dev,) = inv.load(path)
     assert dev.tags == ["gpu", "7"] and dev.cost["usd_per_hour"] == 1.5
+
+
+def test_a_yes_or_no_is_not_taken_for_a_number(cfg_at, capsys):
+    """`probe_timeout_s: no` is YAML for False, which int() reads as 0: every machine
+    showed "no response within 0s", and nothing said why."""
+    cfg_at.write_text("probe_timeout_s: no\nmax_workers: true\n", encoding="utf-8")
+    cfg = config.load_config()
+    assert (cfg.probe_timeout_s, cfg.max_workers) == (20, 8)
+    assert "probe_timeout_s: False is not a number; using 20" in capsys.readouterr().err
+
+
+@pytest.mark.parametrize("text,says", [
+    ("max_wrkers: 4\n", "max_wrkers: is not a setting, so it does nothing -- did you mean "
+                        "max_workers?"),
+    ("- max_workers: 4\n", "is not a list of settings"),
+    ("max_workers: [\n", "is not readable"),
+])
+def test_a_setting_that_does_nothing_is_said(cfg_at, capsys, text, says):
+    """A misspelt setting, a file that is not settings at all, or one that does not
+    parse: each was dropped without a word, and the defaults used instead."""
+    cfg_at.write_text(text, encoding="utf-8")
+    assert config.load_config().max_workers == 8
+    assert says in capsys.readouterr().err
+
+
+def test_a_setting_left_from_0_5_is_passed_over_quietly(cfg_at, capsys):
+    cfg_at.write_text("sync_ttl_s: 300\naccess_retry_s: 300\n", encoding="utf-8")
+    config.load_config()
+    assert capsys.readouterr().err == ""
+
+
+def test_a_folder_named_with_a_tilde_is_in_the_home_folder(tmp_path):
+    """An app's MCP settings pass `"FLEET_CONFIG_DIR": "~/fleet"` with no shell to
+    expand it: fleet made a folder named `~` in whatever folder it was started from."""
+    import os
+
+    home, work = tmp_path / "home", tmp_path / "work"
+    home.mkdir(), work.mkdir()
+    env = {**os.environ, "HOME": str(home), "USERPROFILE": str(home),
+           "FLEET_CONFIG_DIR": "~/fleet-c", "FLEET_STATE_DIR": "fleet-s",
+           "FLEET_NO_FIRST_RUN": "1", "PYTHONUTF8": "1", "NO_COLOR": "1"}
+    p = subprocess.run([sys.executable, "-c", "from fleet import config; "
+                        "print(config.CONFIG_DIR); print(config.STATE_DIR)"],
+                       env=env, cwd=work, capture_output=True, text=True, timeout=60)
+    cfg, state = p.stdout.split()
+    assert Path(cfg).resolve() == (home / "fleet-c").resolve()
+    assert Path(state).is_absolute()
+    assert Path(state).resolve() == (work / "fleet-s").resolve()
