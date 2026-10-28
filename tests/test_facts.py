@@ -317,6 +317,32 @@ def test_ls_says_what_it_could_not_judge(tmp_path, monkeypatch):
     assert "not considered" in r.output and "a" in r.output
 
 
+
+def test_a_machine_whose_only_fact_is_its_kind_is_counted_as_not_judged(tmp_path, monkeypatch):
+    """`rental`, `shared` and `appliance` come from the list, not from a reading, so a
+    rental never reached has a fact -- and went uncounted, while its permanent twin was
+    named: 200 dead machines read as 60 that could not be judged."""
+    from fleet import cli as cli_mod
+
+    runner, cli = _cli(tmp_path, monkeypatch, [_dev(name="a"), _dev(name="b")])
+    monkeypatch.setattr(cli_mod, "_rows", lambda *a, **k: [
+        {"name": "a", "tags": [], "facts": ["rental"], "status": "timeout",
+         "observed_at": {"probe": None}},
+        {"name": "b", "tags": [], "facts": ["linux"], "status": "timeout",
+         "observed_at": {"probe": 1793200000}},
+    ])
+    monkeypatch.setattr(cli_mod, "fleet_view", lambda rows: {"devices": rows, "summary": {}})
+    r = runner.invoke(cli.app, ["ls", "--tag", "gpu"])
+    said = " ".join(r.output.split())
+    assert "1 with no telemetry were not considered: a" in said
+    # Asked for what the list itself says, both are judged: nothing to report -- and
+    # `b`, not a rental, is ruled out by that alone.
+    r = runner.invoke(cli.app, ["ls", "--tag", "rental"])
+    assert "not considered" not in r.output
+    r = runner.invoke(cli.app, ["ls", "--tag", "rental", "--tag", "cuda"])
+    assert "1 with no telemetry were not considered: a" in " ".join(r.output.split())
+
+
 # ------------------------------------------------------------------ portability
 
 def test_the_console_forces_utf8_output():

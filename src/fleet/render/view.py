@@ -185,6 +185,11 @@ def _reachability(dev: Device, state: dict | None) -> list[str]:
             if (v == "public-ip" and "public" in vias) or v in vias]
 
 
+# The facts that come from the list -- a machine's kind and how it is reached -- rather
+# than from a reading, so they can be judged for a machine never reached.
+LISTED_FACTS = frozenset({"rental", "shared", "appliance", "public-ip", "mesh", "lan"})
+
+
 def matches_tag(row: dict, tag: str) -> bool:
     """One matcher, here rather than in cli.py, so every surface agrees.
 

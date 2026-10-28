@@ -164,7 +164,14 @@ def cmd_ls(names: list[str] = typer.Argument(None, help="only these devices"),
         # `fleet ls koa04 --tag gpu` probes and answers differently.
         # A machine with tags of its own but no reading is just as blind to `--tag cuda`:
         # counting only the untagged ones left it out of the count as well as the list.
-        blind = [r["name"] for r in rows if not r["facts"]
+        # So is one whose only fact is its kind -- `rental`, `shared`, `appliance` come
+        # from the list, not a reading: a fleet of rentals never reached went uncounted.
+        # Those facts, asked for, are judged all the same: `--tag rental` needs no reading,
+        # and a machine that is not a rental fails `--tag rental --tag cuda` on that alone.
+        listed = [t for t in tag if view_mod.normalise_tag(t) in view_mod.LISTED_FACTS]
+        blind = [r["name"] for r in rows
+                 if not (r.get("observed_at") or {}).get("probe")
+                 and all(matches_tag(r, t) for t in listed)
                  and not all(matches_tag(r, t) for t in tag)]
         rows = [r for r in rows if all(matches_tag(r, t) for t in tag)]
         if blind:
