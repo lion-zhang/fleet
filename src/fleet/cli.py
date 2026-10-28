@@ -889,7 +889,8 @@ def _split_a_clone(devices, dev, res, *, write: bool = True) -> bool:
     from .ssh.keys import remote_device_id_command
 
     plat = remote_platform({"uname_s": new.uname_s, "os": new.os})
-    ok, said = _run_script(new_eps[0], remote_device_id_command(new_id, platform=plat),
+    ok, said = _run_script(new_eps[0], remote_device_id_command(new_id, host=host,
+                                                                platform=plat),
                            platform=plat, capture=True) if new_eps else (False, "")
     if not (ok and "ok" in said):
         console.print("  [dim]its id could not be written on it, so it may be taken for "

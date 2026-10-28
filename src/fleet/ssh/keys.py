@@ -77,16 +77,24 @@ def copy_id_argv(ep: Endpoint) -> list[str] | None:
     return argv
 
 
-def remote_device_id_command(device_id: str, *, platform: str = "posix") -> str:
+def remote_device_id_command(device_id: str, *, host: str = "",
+                             platform: str = "posix") -> str:
     """Write the id fleet gave a clone into fleet's config folder on that machine.
 
     Two machines cloned from one image share a machine-id, so the id derived from it
     cannot tell them apart; the second is given `<machine-id id>:<suffix>`. Written
     where fleet on that machine looks (`identity.DEVICE_ID_FILE`) and where the probe
     reads it, so every fleet that looks at it, and every later probe, agree.
+
+    On Linux and macOS the line names the host it is for, and the lines for other hosts
+    are kept: clones that share a home -- containers on one volume, nodes on one NFS
+    home -- share the file too, and the one id in it was read by all of them, so the
+    next `fleet add` took one clone for the other.
     """
     if not re.fullmatch(r"[A-Za-z0-9:._-]{1,200}", device_id):
         raise ValueError(f"not a device id: {device_id!r}")
+    if not re.fullmatch(r"[A-Za-z0-9._-]{1,200}", host or ""):
+        host = ""
     if platform == "windows":
         return ("$d=Join-Path $env:LOCALAPPDATA 'fleet';"
                 "if(!(Test-Path $d)){New-Item -ItemType Directory -Path $d|Out-Null};"
@@ -95,4 +103,8 @@ def remote_device_id_command(device_id: str, *, platform: str = "posix") -> str:
     return ('case "$(uname -s)" in '
             'Darwin) d="$HOME/Library/Application Support/fleet" ;; '
             '*) d="$HOME/.config/fleet" ;; '
-            f'esac; mkdir -p "$d" && echo {device_id} > "$d/device-id" && echo ok')
+            'esac; mkdir -p "$d" && f="$d/device-id" && '
+            + (f"{{ awk -v h={host} 'NF >= 2 && $2 != h' \"$f\" 2>/dev/null; "
+               f'echo {device_id} {host}; }} > "$f.$$" && mv -f "$f.$$" "$f"' if host
+               else f'echo {device_id} > "$f"')
+            + ' && echo ok')

@@ -57,9 +57,15 @@ emit host.machine_id "$machine_id"
 # The id fleet gave this machine when it found it shares its machine-id with another --
 # a clone of the same image. Written by the center (or by `fleet join`) into fleet's
 # config folder here, and read by fleet on this machine too, so all agree which it is.
+# A line may name the host it is for: clones that share a home share the file, one line
+# each. One that names none is for whoever reads it, as before.
 device_id=""
 for f in "$HOME/.config/fleet/device-id" "$HOME/Library/Application Support/fleet/device-id"; do
-  if [ -r "$f" ]; then device_id=$(head -n 1 "$f" 2>/dev/null | clean); break; fi
+  if [ -r "$f" ]; then
+    device_id=$(awk -v h="$hostname_v" '$2 == h { print $1; f = 1; exit }
+      NF == 1 && u == "" { u = $1 } END { if (!f && u != "") print u }' "$f" 2>/dev/null | clean)
+    break
+  fi
 done
 emit host.device_id "$device_id"
 

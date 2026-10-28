@@ -46,10 +46,21 @@ def assigned_id(base: str) -> str:
     machine-id -- counts. A file carried over into an image whose machine-id was then
     regenerated describes the machine it was copied from, not this one.
     """
+    import socket
+
     try:
-        text = device_id_file().read_text(encoding="utf-8").strip()
+        lines = device_id_file().read_text(encoding="utf-8").splitlines()
     except OSError:
         return ""
+    # Lines that name a host are for that host (clones sharing a home share the file);
+    # one that names none is for whoever reads it.
+    here, text = socket.gethostname(), ""
+    for words in (line.split() for line in lines):
+        if len(words) >= 2 and words[1] == here:
+            text = words[0]
+            break
+        if len(words) == 1 and not text:
+            text = words[0]
     return text if base and text.startswith(base + ":") else ""
 
 
