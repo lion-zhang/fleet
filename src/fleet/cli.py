@@ -1458,6 +1458,7 @@ def cmd_top(name: str = typer.Argument(None, help="one device, instead of the wh
         raise typer.Exit(2)
     _first_run("top")
     cfg = load_config()
+    seen = inv.stamp()
     devices = inv.live(inv.load())
     if name:
         one = inv.find(devices, name)
@@ -1513,12 +1514,37 @@ def cmd_top(name: str = typer.Argument(None, help="one device, instead of the wh
                     break
                 if key in ("r", "R"):
                     probes.again()
+                # Another terminal or an agent may add, rename or remove a machine
+                # while this is open: the window went on showing a removed one online,
+                # and costing, until it was restarted.
+                fresh, seen = _list_now(devices, seen, one=devices[0].id if name else None)
+                if fresh is not devices:
+                    devices = fresh
+                    probes.follow(devices)
                 live.update(frame(probe=False))
     except KeyboardInterrupt:
         pass
     finally:
         probes.stop()
         conn.close()
+
+
+def _list_now(devices: list, seen, *, one: str | None = None):
+    """The machine list again if any `fleet` wrote it since `seen`, else `devices`.
+
+    `one` follows a single machine by id, so a rename shows; a list that cannot be read
+    just now, or no longer has that machine, leaves what is on screen as it is.
+    """
+    now = inv.stamp()
+    if now == seen:
+        return devices, seen
+    try:
+        fresh = inv.live(inv.load())
+    except inv.InventoryError:
+        return devices, now
+    if one is not None:
+        fresh = [d for d in fresh if d.id == one] or devices
+    return fresh, now
 
 
 @contextmanager
