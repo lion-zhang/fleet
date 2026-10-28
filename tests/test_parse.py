@@ -229,3 +229,41 @@ def test_a_quote_in_a_windows_disk_path_cannot_end_the_string(monkeypatch):
                            disk_paths=["C:\\Users\\O'Brien'; Remove-Item x; '"])
     line = next(ln for ln in sent["payload"].splitlines() if "FLEET_DISK_PATHS" in ln)
     assert line == "$env:FLEET_DISK_PATHS='C:\\Users\\O''Brien''; Remove-Item x; '''"
+
+
+def test_one_vllm_serve_is_one_model_server_not_seven():
+    """`vllm serve` on :8080 starts engine processes (`VLLM::EngineCore`, truncated by
+    the kernel to 15 characters) that listen on ports of their own. `fleet models` listed
+    each as a model server, "local only, none listed"."""
+    from fleet.models import Device, Kind
+    from fleet.render.view import model_servers
+
+    engine = [41000 + i for i in range(6)]
+    body = load("gpu-box").replace(
+        "#LISTEN proto|addr|port|pid|comm\n",
+        "#LISTEN proto|addr|port|pid|comm\ntcp|0.0.0.0|8080|900|vllm\n"
+        + "".join(f"tcp|127.0.0.1|{p}|901|VLLM::EngineCor\n" for p in engine))
+    body = body.replace("#END", "#LLMMODEL port|status|ms|model\n8080|ok|12|qwen\n"
+                        + "".join(f"{p}|down|0|\n" for p in engine) + "#END", 1)
+    snap = parse_payload(body)
+    servers = model_servers(Device(id="id:g", name="g", kind=Kind.PERMANENT),
+                            snap.to_dict())
+    assert [s["port"] for s in servers] == [8080], servers
+
+
+def test_the_probe_does_not_ask_vllm_engine_ports_for_models():
+    """Eight ports are asked at most; six engine sockets left room for two others."""
+    import re
+    import subprocess
+    import shutil
+
+    if not shutil.which("awk"):
+        pytest.skip("no awk")
+    script = (pathlib.Path(__file__).parents[1] / "src/fleet/probe/payload.sh").read_text()
+    prog = re.search(r"printf '%s\\n' \"\$listen\" \| awk -F'\|' '(.*?)'\n", script, re.S)
+    assert prog, "the listening-port filter moved; update this test"
+    rows = "tcp|0.0.0.0|8080|900|vllm\ntcp|127.0.0.1|41000|901|VLLM::EngineCor\n" \
+           "tcp|127.0.0.1|41001|902|VLLM::APIServer\n"
+    out = subprocess.run(["awk", "-F|", prog.group(1)], input=rows, capture_output=True,
+                         text=True, check=True).stdout
+    assert [ln.split("|")[1] for ln in out.split()] == ["8080", "41001"], out

@@ -262,3 +262,73 @@ def test_a_known_box_added_again_reports_the_name_it_keeps(tmp_path, monkeypatch
 
     r = CliRunner().invoke(cli.app, ["add", "ssh me@localhost", "--name", "loop"])
     assert "fleet edit box --name loop" in r.output, r.output
+
+
+def _readd(monkeypatch, snapshot=None):
+    """`fleet add` reaching a machine whose id is already recorded."""
+    from fleet.models import ProbeResult, Snapshot, Status
+    from fleet.onboard import classify_kind, rental_provider
+    from fleet.ssh.cmd import Endpoint
+
+    snap = snapshot or Snapshot(ts=2, hostname="box")
+
+    def onboard(cmd, **k):
+        dev = Device(id="linux:machine-id:box", name=k.get("name") or "box",
+                     kind=classify_kind(snap, Endpoint(target="10.0.0.5"),
+                                        override=k.get("kind")),
+                     endpoints=[{"target": "10.0.0.5", "user": "root", "port": 22}],
+                     provider=rental_provider(snap))
+        return dev, ProbeResult(status=Status.OK, snapshot=snap)
+
+    monkeypatch.setattr(cli, "onboard", onboard)
+    monkeypatch.setattr(cli, "_run_script", lambda *a, **k: (True, "ok"))
+
+
+def test_re_adding_a_removed_machine_stores_the_kind_it_was_given(tmp_path, monkeypatch):
+    """`fleet rm box --yes; fleet add ... --kind rental` said "added box (rental, ok)"
+    and kept `kind: permanent`: the restored record won, and the message described the
+    one that was thrown away. Found recording the launch demo."""
+    import json
+
+    runner = _cli(tmp_path, monkeypatch, [
+        Device(id="linux:machine-id:box", name="box", kind=Kind.PERMANENT,
+               endpoints=[{"target": "10.0.0.5", "user": "root", "port": 22}])])
+    _readd(monkeypatch)
+    assert runner.invoke(cli.app, ["rm", "box", "--yes"]).exit_code == 0
+    r = runner.invoke(cli.app, ["add", "ssh root@10.0.0.5", "--name", "box",
+                                "--kind", "rental", "--json"])
+    assert r.exit_code == 0, r.output
+    assert json.loads(r.stdout)["kind"] == "rental"
+    assert inv.find_exact(inv.load(), "box").kind is Kind.RENTAL
+
+    # and unsaid, the record keeps what it was: a re-add is no way to forget a kind
+    r = runner.invoke(cli.app, ["add", "ssh root@10.0.0.5"])
+    assert "(rental, ok)" in r.output, r.output
+    assert inv.find_exact(inv.load(), "box").kind is Kind.RENTAL
+
+
+def test_a_machine_that_answers_as_a_vast_instance_is_a_rental(tmp_path, monkeypatch):
+    """A vast.ai box recorded as permanent once (removed, a reused machine-id) stayed
+    permanent on every later add, though the probe knew where it ran: no idle-rental
+    alert, no burn rate."""
+    from fleet.models import Snapshot
+
+    runner = _cli(tmp_path, monkeypatch, [
+        Device(id="linux:machine-id:box", name="box", kind=Kind.PERMANENT,
+               endpoints=[{"target": "10.0.0.5", "user": "root", "port": 22}],
+               deleted_at=1)])
+    _readd(monkeypatch, Snapshot(ts=2, hostname="box", vast_label="C.12345678"))
+    r = runner.invoke(cli.app, ["add", "ssh root@10.0.0.5"])
+    assert r.exit_code == 0, r.output
+    box = inv.find_exact(inv.load(), "box")
+    assert (box.kind, box.provider) == (Kind.RENTAL, "vastai")
+    assert "(rental, ok)" in r.output, r.output
+
+
+def test_runpod_and_autodl_are_known_providers_too():
+    from fleet.models import Snapshot
+    from fleet.onboard import rental_provider
+
+    assert rental_provider(Snapshot(ts=1, runpod_id="abc")) == "runpod"
+    assert rental_provider(Snapshot(ts=1, autodl=True)) == "autodl"
+    assert rental_provider(Snapshot(ts=1)) == ""

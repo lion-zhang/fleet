@@ -108,3 +108,52 @@ def test_a_relay_does_not_evict_our_own_history(tmp_path):
     mine = conn.execute("SELECT COUNT(*) FROM snapshot WHERE device_id='box' AND source='self'")
     assert mine.fetchone()[0] == 1
     conn.close()
+
+
+def test_a_cache_fleet_cannot_write_is_read_and_not_crashed_on(tmp_path, monkeypatch, capsys):
+    """Codex's workspace-write sandbox lets fleet read its state dir but not write it,
+    and `tar ... && fleet ssh box` died with "OperationalError: unable to open database
+    file". The cache is disposable: read what is there, keep nothing, say so once."""
+    import os
+
+    from fleet.models import ProbeResult, Snapshot, Status
+    from fleet.state import store
+
+    db = tmp_path / "cache.db"
+    conn = store.connect(db)
+    store.record(conn, "id:box", ProbeResult(status=Status.OK,
+                                             snapshot=Snapshot(ts=1, hostname="box")))
+    conn.close()
+    monkeypatch.setattr(store, "_warned", False)
+    real = os.access
+    monkeypatch.setattr(os, "access", lambda p, mode, **k: False if mode == os.W_OK
+                        else real(p, mode, **k))
+    for _ in range(2):
+        conn = store.connect(db)
+        assert store.latest(conn, "id:box")[1]["hostname"] == "box", "what is there is read"
+        store.record(conn, "id:new", ProbeResult(status=Status.TIMEOUT))
+        conn.close()
+    assert capsys.readouterr().err.count("cannot write its cache") == 1
+    monkeypatch.setattr(os, "access", real)
+    conn = store.connect(db)
+    assert store.latest(conn, "id:new") == (None, None), "and nothing is written"
+    conn.close()
+
+
+def test_a_state_dir_that_cannot_exist_still_lets_fleet_run(tmp_path, monkeypatch):
+    from typer.testing import CliRunner
+
+    from fleet import cli, config
+    from fleet.models import Device, Kind
+    from fleet.state import inventory as inv
+    from fleet.state import store
+
+    inv.save([Device(id="id:phone", name="phone", kind=Kind.MOBILE, probe_policy="never")])
+    blocked = tmp_path / "a-file"
+    blocked.write_text("")
+    monkeypatch.setattr(store, "DB_PATH", blocked / "state" / "cache.db")
+    monkeypatch.setattr(config, "STATE_DIR", blocked / "state")
+    monkeypatch.setattr(store, "_warned", False)
+    for args in (["ls"], ["ls", "--json"], ["show", "phone"], ["doctor"]):
+        r = CliRunner().invoke(cli.app, args)
+        assert r.exception is None or isinstance(r.exception, SystemExit), (args, r.output)

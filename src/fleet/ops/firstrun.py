@@ -66,7 +66,10 @@ def maybe(command: str, say) -> bool:
 
     if os.environ.get(OPT_OUT) or _marker().exists():
         return False
-    ensure_dirs()
+    try:
+        ensure_dirs()
+    except OSError:
+        return False        # nowhere to write it (a sandbox): next time, not this command
     # Two agents' first commands at the same moment: the second waits for the first,
     # then finds it done.
     with turn(_marker()):

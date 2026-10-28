@@ -121,6 +121,13 @@ def classify(comm: str, vram_mib: int) -> ProcClass:
 
 def _classify_service(comm: str, port: int) -> tuple[str, str]:
     low = (comm or "").lower()
+    # vLLM and SGLang name their helper processes `VLLM::EngineCore`, `VLLM::Worker_TP0`
+    # and so on. Their ports are the engine's own sockets, not an API: one `vllm serve`
+    # was listed as seven model servers. Only the API server (`vllm`, or `VLLM::APIServer`
+    # when it runs several) serves models.
+    for engine in ("vllm", "sglang"):
+        if low.startswith(engine + "::") and not low[len(engine) + 2:].startswith(("api", "http")):
+            return "internal", engine
     for needle, kind, framework in _SERVICE_SIGNATURES:
         if needle in low:
             return kind, framework

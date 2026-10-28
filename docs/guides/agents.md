@@ -202,6 +202,32 @@ args = ["agents-fleet", "mcp"]
 servers; both can still run `fleet` as a shell command. Roo Code has shut down; its
 successor is Kilo Code, above.
 
+## Codex's sandbox
+
+In Codex's default `workspace-write` sandbox every fleet command needs your approval:
+fleet's whole job is to reach other machines over the network, and its state folder is
+outside the workspace. Approve it once instead, in either or both of these ways.
+
+A rule that lets Codex run `fleet` without asking, in `~/.codex/rules/fleet.rules`:
+
+```python
+prefix_rule(pattern=["fleet"], decision="allow")
+```
+
+A rule matches a command that *starts* with `fleet`. One that only contains it --
+`tar czf out.tgz src && fleet ssh box -- 'ls'` -- still runs inside the sandbox, so give
+the sandbox the network and fleet's state folder in `~/.codex/config.toml`:
+
+```toml
+[sandbox_workspace_write]
+network_access = true
+# the folders `fleet paths` prints; on Linux, ~/.config/fleet and ~/.local/state/fleet
+writable_roots = ["/Users/you/Library/Application Support/fleet"]
+```
+
+Without the folder, fleet still runs: it reads its cache, warns once that it cannot
+write it, and keeps nothing it measured in that command.
+
 ## Skills only
 
 Agents that read `SKILL.md` files can get fleet's skill without any MCP server:

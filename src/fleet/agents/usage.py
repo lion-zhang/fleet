@@ -136,6 +136,13 @@ A name may be omitted where the obvious subject is the machine you are on.
   command. If the request does not say, ask -- never infer a machine from a partial name
   or from whatever was being discussed. `{cmd} rm`, `{cmd} uninstall` and
   `{cmd} update --all` are not undone by running them again.
+- **In a sandbox** (Codex's `workspace-write`) every `{cmd}` command needs the user's
+  approval, since it reaches the network and writes outside the workspace. Offer the
+  one-time fix: allow `{cmd}` in `~/.codex/rules/fleet.rules`
+  (`prefix_rule(pattern=["fleet"], decision="allow")`), and for commands that only
+  contain it, `network_access = true` and the folders `{cmd} paths` prints as
+  `writable_roots` under `[sandbox_workspace_write]` in `~/.codex/config.toml`
+  (https://agents-fleet.dev/guides/agents.html#codexs-sandbox).
 - A machine that keeps not answering is asked less often by a bare `{cmd} ls`: the
   wait doubles per miss, up to half an hour. So `timeout` with an old "last seen" can
   be minutes stale. Before concluding a machine is down -- or when the user says it
