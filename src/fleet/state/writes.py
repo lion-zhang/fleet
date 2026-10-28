@@ -46,6 +46,21 @@ class QueueTimeout(RuntimeError):
     """The writes ahead of ours did not finish in time."""
 
 
+class CannotWrite(OSError):
+    """One of fleet's own files could not be saved: a read-only folder, a full disk.
+
+    An OSError still, for the callers that already step around one. `fleet main` prints
+    it in a line: it is the user's to fix, and the traceback it used to be said nothing
+    the line does not.
+    """
+
+
+def cannot_write(path: Path, exc: OSError) -> CannotWrite:
+    out = CannotWrite(f"cannot write {path} ({exc.strerror or exc})")
+    out.errno = exc.errno                  # without "[Errno 30]" in front of the words
+    return out
+
+
 # Turns this thread holds, so that code inside a turn which itself asks for the same turn
 # (a helper that saves) goes straight through instead of queueing behind itself.
 _held = threading.local()
@@ -60,8 +75,12 @@ def atomic_write(path: Path, text: str, *, mode: int = 0o600) -> None:
     before the rename, so the file is never seen half-written or briefly world-readable.
     """
     path = Path(path)
-    path.parent.mkdir(parents=True, exist_ok=True)
-    fd, tmp = tempfile.mkstemp(dir=str(path.parent), prefix=f".{path.name}.", suffix=".tmp")
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        fd, tmp = tempfile.mkstemp(dir=str(path.parent), prefix=f".{path.name}.",
+                                   suffix=".tmp")
+    except OSError as exc:
+        raise cannot_write(path, exc) from exc
     try:
         if hasattr(os, "fchmod"):          # not on Windows, where the user profile is private
             os.fchmod(fd, mode)
@@ -70,9 +89,11 @@ def atomic_write(path: Path, text: str, *, mode: int = 0o600) -> None:
             fh.flush()
             os.fsync(fh.fileno())
         _replace(tmp, path)
-    except BaseException:
+    except BaseException as exc:
         with contextlib.suppress(OSError):
             os.unlink(tmp)
+        if isinstance(exc, OSError):       # a disk that filled up while writing it
+            raise cannot_write(path, exc) from exc
         raise
 
 
@@ -209,9 +230,13 @@ def _number(name: str) -> int:
 
 
 def _take_ticket(qdir: Path) -> tuple[Path, tuple[int, str]]:
-    qdir.mkdir(parents=True, exist_ok=True)
     me = f"{os.getpid()}-{threading.get_ident() % 100000:05d}-{random.randrange(1 << 30):010d}"
-    choosing = _publish(qdir, f"choosing-{me}")
+    try:
+        qdir.mkdir(parents=True, exist_ok=True)
+        choosing = _publish(qdir, f"choosing-{me}")
+    except OSError as exc:
+        # The queue sits beside the file: a folder that takes no ticket takes no file.
+        raise cannot_write(qdir.parent / qdir.name[1:].removesuffix(".queue"), exc) from exc
     try:
         highest = max((_number(n) for n in os.listdir(qdir) if n[:1].isdigit()), default=0)
         number = highest + 1

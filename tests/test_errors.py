@@ -162,3 +162,39 @@ def test_a_folder_named_with_a_tilde_is_in_the_home_folder(tmp_path):
     assert Path(cfg).resolve() == (home / "fleet-c").resolve()
     assert Path(state).is_absolute()
     assert Path(state).resolve() == (work / "fleet-s").resolve()
+
+
+def test_a_folder_it_cannot_write_is_said_in_one_line_and_as_json(tmp_path):
+    """A read-only home, a sandbox, a full disk: `fleet add`, `rm`, `edit --local` and
+    `ls --discover --hide` ended in a traceback, and an agent got an empty stdout."""
+    import os
+
+    blocker = tmp_path / "a-file"
+    blocker.write_text("")
+    env = {**os.environ, "FLEET_CONFIG_DIR": str(blocker / "c"),
+           "FLEET_STATE_DIR": str(tmp_path / "s"), "FLEET_NO_FIRST_RUN": "1",
+           "PYTHONUTF8": "1", "NO_COLOR": "1"}
+    p = subprocess.run([sys.executable, "-m", "fleet", "add", "--self", "--json"], env=env,
+                       capture_output=True, text=True, timeout=120)
+    assert p.returncode == 2, p.stderr
+    said = json.loads(p.stdout)
+    assert said["ok"] is False and said["error"].startswith("cannot write ")
+    assert str(blocker / "c") in said["error"] and "Errno" not in said["error"]
+    assert "Traceback" not in p.stderr
+
+
+def test_a_first_run_that_cannot_write_lets_the_command_run(monkeypatch):
+    """A sandbox that lets fleet read its state folder but not write it: the first run
+    could not take its turn, and every command died there without running."""
+    from fleet.ops import firstrun
+    from fleet.state import writes
+
+    monkeypatch.delenv("FLEET_NO_FIRST_RUN", raising=False)
+    monkeypatch.setattr(firstrun, "_marker", lambda: Path("/nonexistent/first-run-done"))
+    monkeypatch.setattr("fleet.config.ensure_dirs", lambda: None)
+
+    def read_only(*a, **k):
+        raise OSError(30, "Read-only file system")
+
+    monkeypatch.setattr(writes, "_publish", read_only)
+    assert firstrun.maybe("ls", lambda *a, **k: None) is False

@@ -72,20 +72,27 @@ def maybe(command: str, say) -> bool:
         return False        # nowhere to write it (a sandbox): next time, not this command
     # Two agents' first commands at the same moment: the second waits for the first,
     # then finds it done.
-    with turn(_marker()):
-        if _marker().exists():
-            return False
-        dev = add_this_machine()
-        taught, failed = [], ""
-        if command != "setup":
-            try:
-                taught = teach_agents()
-            except Exception as exc:      # noqa: BLE001 -- see below
-                # Teaching writes into other programs' files, and anything wrong with
-                # one of them raised out of here before the marker was written: the
-                # first run then ran, and failed, again on every command after.
-                failed = f"{type(exc).__name__}: {exc}"
-        atomic_write(_marker(), "1\n", mode=0o644)
+    try:
+        with turn(_marker()):
+            if _marker().exists():
+                return False
+            dev = add_this_machine()
+            taught, failed = [], ""
+            if command != "setup":
+                try:
+                    taught = teach_agents()
+                except Exception as exc:      # noqa: BLE001 -- see below
+                    # Teaching writes into other programs' files, and anything wrong
+                    # with one of them raised out of here before the marker was
+                    # written: the first run then ran, and failed, again on every
+                    # command after.
+                    failed = f"{type(exc).__name__}: {exc}"
+            atomic_write(_marker(), "1\n", mode=0o644)
+    except OSError:
+        # The folder is there and may not be written -- a sandbox that lets fleet read
+        # its state, not keep it. Every command died here, the one that was asked for
+        # never running; it is the first run's to do next time, as with no folder.
+        return False
     if failed:
         from rich.markup import escape
 

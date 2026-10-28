@@ -2004,17 +2004,17 @@ def cmd_doctor(name: str = typer.Argument(None, help="one machine; all that are 
 def main() -> None:
     """Run the CLI. Failures a person can act on end in one line, not a traceback.
 
-    A malformed list of machines, a write that could not get its turn, or a
-    machine that never answered used to surface as a Python traceback -- and under
+    A malformed list of machines, a write that could not get its turn or a folder it
+    may not write, or a machine that never answered used to surface as a Python traceback -- and under
     `--json`, an agent got an empty stdout and no reason. Those now print what went
     wrong (as JSON too, with `--json`) and exit 2. Anything else is a bug, and keeps its
     traceback, which is what a bug report needs.
     """
     import subprocess
 
-    from .state.writes import QueueTimeout
+    from .state.writes import CannotWrite, QueueTimeout
 
-    expected = (inv.InventoryError, QueueTimeout, subprocess.TimeoutExpired)
+    expected = (inv.InventoryError, QueueTimeout, CannotWrite, subprocess.TimeoutExpired)
     try:
         app()
     except expected as exc:

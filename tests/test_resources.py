@@ -613,3 +613,52 @@ def test_the_windows_write_takes_and_lets_go_of_its_lock(tmp_path):
     assert (local / "fleet" / "machine.yaml").read_text() == "cost: 2\n"
     stale = write(b"cost: 1\n", "cost: 3\n")
     assert "CHANGED" in stale.stdout and not stale.stderr.strip(), stale.stderr
+
+
+@posix
+@pytest.mark.skipif(hasattr(os, "geteuid") and os.geteuid() == 0,
+                    reason="root writes a folder whatever its mode says")
+def test_a_folder_it_may_not_write_is_said_at_once(tmp_path, monkeypatch):
+    """A ~/.config/fleet that `sudo` made root's: the lock's mkdir failed for that reason
+    and was taken for somebody else's lock -- twenty seconds, ten times over, then "the
+    file kept changing", which sent the user looking for another writer."""
+    from fleet.ops import machinefile
+
+    monkeypatch.setenv("HOME", str(tmp_path))
+    folder = tmp_path / ".config" / "fleet"
+    folder.mkdir(parents=True)
+    (folder / "machine.yaml").write_text("cost: 1\n")
+    folder.chmod(0o500)
+    try:
+        started = time.monotonic()
+        with pytest.raises(machinefile.MachineFileError, match="cannot write"):
+            machinefile.change(None, "posix", tags_add=["gpu"])
+        assert time.monotonic() - started < 10
+    finally:
+        folder.chmod(0o700)
+    assert (folder / "machine.yaml").read_text() == "cost: 1\n"
+
+
+@pytest.mark.skipif(not PWSH, reason="needs PowerShell")
+def test_the_windows_write_says_when_it_could_not_write(tmp_path):
+    """Each step of the write was a line of its own under `-Command -`, so one that
+    failed left the next to run: the file was never written, and the last line still
+    printed done -- `fleet edit` said ✓."""
+    from fleet.ops import machinefile
+
+    local = tmp_path / "local"
+    local.mkdir()
+    (local / "fleet").write_text("a file where the folder should be")
+    env = {**os.environ, "TERM": "dumb", "LOCALAPPDATA": str(local)}
+    p = subprocess.run([PWSH, "-NoProfile", "-Command", "-"], text=True,
+                       input=machinefile._write_script("windows", b"", "cost: 1\n"),
+                       capture_output=True, timeout=120, env=env)
+    assert machinefile.DONE not in p.stdout, p.stdout
+    assert p.stderr.strip()
+    # The lock is let go of: the next write, with the folder fixed, goes through.
+    (local / "fleet").unlink()
+    p = subprocess.run([PWSH, "-NoProfile", "-Command", "-"], text=True,
+                       input=machinefile._write_script("windows", b"", "cost: 1\n"),
+                       capture_output=True, timeout=120, env=env)
+    assert machinefile.DONE in p.stdout, p.stderr
+    assert (local / "fleet" / "machine.yaml").read_text() == "cost: 1\n"
