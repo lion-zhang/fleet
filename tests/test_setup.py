@@ -787,8 +787,9 @@ def test_the_short_name_hint_fits_how_fleet_was_installed(tmp_path, monkeypatch)
     from fleet.agents.registry import UVX
     monkeypatch.setattr(Path, "home", lambda: tmp_path)
     monkeypatch.setattr(shutil, "which", lambda name: "/usr/bin/uv")
-    venv = cli._short_name_hint("/opt/work/.venv/bin/fleet")
-    assert "/opt/work/.venv/bin on PATH" in venv and "update-shell" not in venv
+    venv_bin = Path("/opt/work/.venv/bin")
+    venv = cli._short_name_hint(str(venv_bin / "fleet"))
+    assert f"{venv_bin} on PATH" in venv and "update-shell" not in venv
     assert "update-shell" in cli._short_name_hint(str(tmp_path / ".local/bin/fleet"))
     monkeypatch.setattr(shutil, "which", lambda name: None)
     assert "update-shell" not in cli._short_name_hint(str(tmp_path / ".local/bin/fleet"))
