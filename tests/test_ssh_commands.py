@@ -155,3 +155,31 @@ def test_an_ssh_uri_is_read_as_ssh_reads_it(command, user, target, port):
     destination, the user came out as `ssh://root` and the address as `host:2222`."""
     p = parse_ssh_command(command)
     assert (p.user, p.target, p.port) == (user, target, port)
+
+
+@pytest.mark.parametrize("command,user,target,port", [
+    ("root@1.2.3.4:2222", "root", "1.2.3.4", 2222),
+    ("ssh me@box.example:40001 nvidia-smi", "me", "box.example", 40001),
+    ("ssh -p 22 me@h:2222", "me", "h", 22),
+    ("me@2001:db8::7", "me", "2001:db8::7", None),
+    ("lab", None, "lab", None),
+    ("$ ssh -p 2222 root@1.2.3.4", "root", "1.2.3.4", 2222),
+    ("# ssh me@h", "me", "h", None),
+])
+def test_a_port_after_a_colon_is_the_port(command, user, target, port):
+    """The way scp and rental dashboards write it. ssh looked `1.2.3.4:2222` up as a
+    name and the machine read as "off, asleep, or not on a network". A command copied
+    with its prompt took the `$` for the machine."""
+    p = parse_ssh_command(command)
+    assert (p.user, p.target, p.port) == (user, target, port)
+
+
+@pytest.mark.parametrize("command,says", [
+    ("me@", "no address after the @"),
+    ("ssh @", "no address after the @"),
+    ("me@host:abc", "write the port as -p"),
+    ("me@host:99999", "write the port as -p"),
+])
+def test_an_address_ssh_cannot_reach_is_said_so(command, says):
+    with pytest.raises(ValueError, match=says):
+        parse_ssh_command(command)

@@ -97,6 +97,11 @@ def split_command(cmd: str, *, windows: bool = os.name == "nt") -> list[str]:
 def parse_ssh_command(cmd: str) -> ParsedSsh:
     """Parse `ssh -p 58418 -i ~/.ssh/k root@1.2.3.4 [remote cmd]` or a bare alias."""
     tokens = split_command(cmd.strip())
+    # `$ ssh root@1.2.3.4`, copied with the prompt from a guide or a dashboard: `$` was
+    # taken for the machine, and fleet said nothing answered at that address.
+    if len(tokens) > 1 and tokens[0] in ("$", "%", "#", ">") and \
+            os.path.basename(tokens[1]) in ("ssh", "ssh.exe"):
+        tokens = tokens[1:]
     if tokens and os.path.basename(tokens[0]) in ("ssh", "ssh.exe"):
         tokens = tokens[1:]
 
@@ -165,11 +170,29 @@ def parse_ssh_command(cmd: str) -> ParsedSsh:
             raise ValueError(f"not an address: {value!r}")
     if out.target.lower().startswith("ssh://"):
         _uri(out)
-    elif "@" in out.target:
-        user, _, host = out.target.rpartition("@")
-        out.user = out.user or user
-        out.target = host
+    else:
+        if "@" in out.target:
+            user, _, host = out.target.rpartition("@")
+            out.user = out.user or user
+            out.target = host
+        _host_port(out, cmd.strip())
     return out
+
+
+def _host_port(out: ParsedSsh, cmd: str) -> None:
+    """`root@1.2.3.4:2222`, the way scp and most dashboards write it. ssh looks that up
+    as a name, and the machine read as "off, asleep, or not on a network" when it was on.
+    `me@` with no host read the same way."""
+    if not out.target:
+        raise ValueError(f"no address after the @ in {cmd!r}")
+    if out.target.count(":") != 1:                  # a name, or an IPv6 address
+        return
+    host, _, port = out.target.partition(":")
+    if not host or not port.isdigit() or not 0 < int(port) < 65536:
+        raise ValueError(f"{out.target!r} is not an address ssh can reach: write the "
+                         f"port as -p, as in  ssh -p 2222 user@host")
+    out.port = out.port or int(port)
+    out.target = host
 
 
 def _uri(out: ParsedSsh) -> None:
