@@ -639,7 +639,7 @@ def cmd_add(ssh_command: str = typer.Argument(None, help='e.g. "ssh -p 58418 roo
     if res.status in _DID_NOT_ANSWER or res.status is Status.AUTH_FAILED:
         from .ops import doctor
 
-        verdict = doctor.diagnose_result(dev, res)
+        verdict = doctor.diagnose_result(dev, res, adding=True)
         if not _emit({"ok": False, "name": dev.name, "status": res.status.value,
                       "error": res.error_detail, "why": verdict.why, "fix": verdict.fix},
                      json_out):

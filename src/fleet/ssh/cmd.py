@@ -160,6 +160,16 @@ def parse_ssh_command(cmd: str) -> ParsedSsh:
 
 def resolve(parsed: ParsedSsh, *, timeout: float = 10.0) -> Endpoint:
     """Ask ssh itself what this command actually resolves to."""
+    for opt in parsed.options:
+        key = opt.replace("=", " ", 1).split(" ", 1)[0].strip().lower()
+        if key == "proxycommand":
+            # What is recorded is an address, a user, a port, a key and a jump host. A
+            # ProxyCommand was dropped without a word, and the machine `ssh` reached
+            # through it read as "DNS lookup failed" or "off, asleep".
+            raise ValueError(
+                "fleet records an ssh command's address, user, port, key (-i) and jump "
+                "host (-J), not -o ProxyCommand: put it in a Host block in ~/.ssh/config "
+                "and give that Host's name instead")
     argv = ["ssh", "-G"]
     if parsed.port:
         argv += ["-p", str(parsed.port)]

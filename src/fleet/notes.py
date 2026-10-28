@@ -63,8 +63,14 @@ def decode(b64: str) -> str:
     return raw.decode("utf-8", errors="replace")
 
 
+def _printable(text: str) -> str:
+    # The file is the machine's, a rental's written by its provider: an escape sequence
+    # in a note would reach the terminal of whoever runs fleet show, and redraw it.
+    return "".join(c if c.isprintable() else " " for c in text)
+
+
 def _str(v, limit: int) -> str:
-    return " ".join(str(v).split())[:limit] if v is not None else ""
+    return " ".join(_printable(str(v)).split())[:limit] if v is not None else ""
 
 
 def check(data) -> dict:
@@ -97,8 +103,8 @@ def check(data) -> dict:
             if not _KIND.match(kind):
                 continue
             items = value if isinstance(value, list) else [value]
-            items = [str(p).strip()[:MAX_PATH] for p in items
-                     if isinstance(p, (str, int)) and str(p).strip()][:MAX_PATHS]
+            items = [_printable(str(p)).strip()[:MAX_PATH] for p in items
+                     if isinstance(p, (str, int)) and _printable(str(p)).strip()][:MAX_PATHS]
             if items:
                 kept[kind] = items
             if len(kept) >= MAX_KINDS:
