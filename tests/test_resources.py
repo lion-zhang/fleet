@@ -109,6 +109,52 @@ def test_folder_sizes_are_worked_out_in_the_background_and_reported_next_time(tm
     assert second.storage[0].sized_at
 
 
+def _probe_on_a_full_disk(home: Path, tmp_path: Path, **env) -> tuple[str, str]:
+    """Probe with ~/.cache/fleet a tiny filesystem, already holding what it held, and
+    full; after the background `du` is done, returns the probe's output and the sizes
+    file as left. Needs a mount, so it runs in a user namespace where that is allowed."""
+    if not shutil.which("unshare") or subprocess.run(
+            ["unshare", "-rm", "true"], capture_output=True).returncode:
+        pytest.skip("cannot mount a small filesystem here")
+    cache = home / ".cache" / "fleet"
+    saved = tmp_path / "saved"
+    shutil.copytree(cache, saved)
+    script = (f'c="{cache}"; mount -t tmpfs -o size=64k tmpfs "$c" && cp "{saved}"/* "$c"/'
+              ' && { dd if=/dev/zero of="$c/fill" bs=512 2>/dev/null; true; }'
+              f' && sh "{PAYLOAD}"; n=0; while [ -d "$c/du.lock" ] && [ $n -lt 100 ]; do'
+              ' sleep 0.1; n=$((n+1)); done; echo "#SIZES"; cat "$c/sizes"')
+    e = {"PATH": os.environ["PATH"], "HOME": str(home), **env}
+    p = subprocess.run(["unshare", "-rm", "sh", "-c", script], env=e, capture_output=True,
+                       text=True, timeout=60)
+    out, _, sizes = p.stdout.rpartition("#SIZES\n")
+    assert "#END" in out, p.stderr
+    return out, sizes
+
+
+@posix
+@pytest.mark.skipif(sys.platform != "linux", reason="mounts a tmpfs")
+def test_a_disk_that_fills_up_keeps_the_folder_sizes_it_had(tmp_path):
+    """A full disk swapped the sizes for an empty file -- gone just when you look for
+    what filled the disk."""
+    home = make_home(tmp_path, "paths:\n  models: ~/models\n")
+    venv(home, "a", "3.11", "torch-2.0.0")
+    (home / "models").mkdir()
+    (home / "models" / "w.bin").write_bytes(b"x" * 300_000)
+    probe(home)
+    sizes = home / ".cache" / "fleet" / "sizes"
+    for _ in range(100):
+        if sizes.exists():
+            break
+        threading.Event().wait(0.05)
+    before = sizes.read_text()
+    assert "/models|" in before
+    out, after = _probe_on_a_full_disk(home, tmp_path, FLEET_REFRESH="1")
+    assert after == before
+    snap = parse_payload(out)
+    assert snap.storage[0].size_kb and snap.storage[0].size_kb >= 290
+    assert any(p.package == "torch" for p in snap.pyenvs)
+
+
 # ---------------------------------------------------------------- software
 @posix
 def test_python_packages_are_read_from_their_folders_not_imported(tmp_path):
@@ -655,6 +701,33 @@ def test_a_folder_it_may_not_write_is_said_at_once(tmp_path, monkeypatch):
         assert time.monotonic() - started < 10
     finally:
         folder.chmod(0o700)
+    assert (folder / "machine.yaml").read_text() == "cost: 1\n"
+
+
+@posix
+def test_a_write_that_runs_out_of_space_says_so_and_leaves_nothing(tmp_path, monkeypatch):
+    """On a full disk the decode failed, the macOS spelling was tried next, and the user
+    read "base64: invalid option -- 'D'" beside a half-written machine.yaml.1234."""
+    from fleet.ops import machinefile
+
+    monkeypatch.setenv("HOME", str(tmp_path))
+    folder = tmp_path / ".config" / "fleet"
+    folder.mkdir(parents=True)
+    (folder / "machine.yaml").write_text("cost: 1\n")
+    stubs = tmp_path / "bin"
+    stubs.mkdir()
+    # GNU base64 on a full disk: it writes what fits, then says so and fails.
+    (stubs / "base64").write_text(
+        f'#!/bin/sh\n[ "$1" = -d ] || [ "$1" = -D ] || exec {shutil.which("base64")} "$@"\n'
+        '[ "$1" = -D ] && { echo "base64: invalid option -- \'D\'" >&2; exit 1; }\n'
+        'head -c 3; [ -n "$(cat)" ] || exit 0\n'
+        'echo "base64: write error: No space left on device" >&2; exit 1\n')
+    (stubs / "base64").chmod(0o755)
+    monkeypatch.setenv("PATH", f"{stubs}{os.pathsep}{os.environ['PATH']}")
+    with pytest.raises(machinefile.MachineFileError, match="No space left") as e:
+        machinefile.change(None, "posix", tags_add=["gpu"])
+    assert "invalid option" not in str(e.value)
+    assert sorted(p.name for p in folder.iterdir()) == ["machine.yaml"]
     assert (folder / "machine.yaml").read_text() == "cost: 1\n"
 
 

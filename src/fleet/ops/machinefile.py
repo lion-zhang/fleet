@@ -95,9 +95,12 @@ def _write_script(platform: str, old: bytes, new: str) -> str:
             'h=$( { [ -f "$f" ] && cat "$f"; } | { sha256sum 2>/dev/null || shasum -a 256; } '
             '| cut -d" " -f1); '
             f'[ "$h" = "{old_sha}" ] || {{ echo CHANGED; exit 0; }}; '
-            't="$f.$$" && '
-            f'printf %s {b64} | {{ base64 -d 2>/dev/null || base64 -D; }} > "$t" && '
-            f'mv -f "$t" "$f" && echo {DONE}')
+            # The decoder is picked before it is used: falling back to -D after a -d
+            # that failed for want of space blamed "invalid option -- 'D'" and left
+            # the half-written copy behind, on a disk already full.
+            't="$f.$$"; b=-d; base64 -d </dev/null >/dev/null 2>&1 || b=-D; '
+            f'if printf %s {b64} | base64 $b > "$t" && mv -f "$t" "$f"; then echo {DONE}; '
+            'else rm -f "$t"; exit 1; fi')
 
 
 def _run(ep: Endpoint | None, script: str, platform: str) -> str:

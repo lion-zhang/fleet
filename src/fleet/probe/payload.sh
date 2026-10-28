@@ -600,13 +600,15 @@ if [ -n "$paths" ] && [ -n "$CACHE" ] && [ "${FLEET_LIGHT:-}" != "1" ]; then
       (
         trap 'rmdir "$lock" 2>/dev/null' EXIT
         tmp="$sizes.$$"
-        echo "#v1 $NOW $want" > "$tmp"
-        printf '%s' "$want" | tr '|' '\n' | while IFS= read -r p; do
+        got=$(printf '%s' "$want" | tr '|' '\n' | while IFS= read -r p; do
           [ -n "$p" ] && [ -e "$p" ] || continue
           kb=$($T du -sk "$p" 2>/dev/null | tail -1 | cut -f1)
-          [ -n "$kb" ] && printf '%s|%s\n' "$p" "$kb" >> "$tmp"
-        done
-        mv -f "$tmp" "$sizes"
+          [ -n "$kb" ] && printf '%s|%s\n' "$p" "$kb"
+        done)
+        # Kept only when all of it was written: on a disk that filled up, the sizes it
+        # had were swapped for an empty file -- gone just when you look for what filled it.
+        if { echo "#v1 $NOW $want"; [ -n "$got" ] && printf '%s\n' "$got"; } | cat > "$tmp" \
+             && mv -f "$tmp" "$sizes"; then :; else rm -f "$tmp"; fi
       ) </dev/null >/dev/null 2>&1 &
     fi
   fi
@@ -703,13 +705,16 @@ if [ -n "$CACHE" ] && [ "${FLEET_REFRESH:-}" != "1" ] && age_ok "$sw" 21600 \
   tail -n +2 "$sw"
 elif [ "${FLEET_LIGHT:-}" = "1" ]; then
   [ -n "$CACHE" ] && [ -r "$sw" ] && tail -n +2 "$sw"   # stale beats slow in `fleet top`
-elif [ -n "$CACHE" ] && { echo "#v1 $NOW $gpu_driver"; software_scan; } > "$sw.$$" 2>/dev/null \
-     && mv -f "$sw.$$" "$sw"; then
-  tail -n +2 "$sw"
 else
-  # Not kept (a disk that filled up): read now, as with no cache at all.
-  [ -n "$CACHE" ] && rm -f "$sw.$$" 2>/dev/null
-  software_scan
+  scan=$(software_scan)
+  [ -n "$scan" ] && printf '%s\n' "$scan"
+  # Kept only when all of it was written (`cat` fails on a full disk where the scan does
+  # not), so a copy cut short is never read back as all the machine has.
+  if [ -n "$CACHE" ]; then
+    if { echo "#v1 $NOW $gpu_driver"; [ -n "$scan" ] && printf '%s\n' "$scan"; } \
+         | cat 2>/dev/null > "$sw.$$" && mv -f "$sw.$$" "$sw" 2>/dev/null; then :
+    else rm -f "$sw.$$" 2>/dev/null; fi
+  fi
 fi
 
 # ---------------------------------------------------------------- containers
