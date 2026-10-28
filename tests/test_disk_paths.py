@@ -11,6 +11,7 @@ from __future__ import annotations
 import os
 import subprocess
 import sys
+from pathlib import Path
 
 import pytest
 
@@ -204,24 +205,69 @@ def test_the_cpuproc_wire_format_is_unchanged():
 
 # --------------------------------------------------------------- read-only volumes
 
+def _a_read_only_mount() -> str | None:
+    """A read-only mount this machine already has (a snap, a squashfs, a container's
+    tool volume), since mounting one needs root."""
+    try:
+        lines = Path("/proc/mounts").read_text().splitlines()
+    except OSError:
+        return None
+    for line in lines:
+        f = line.split()
+        if len(f) < 4 or "ro" not in f[3].split(","):
+            continue
+        m = f[1].replace("\\040", " ")
+        if m.startswith(("/proc", "/sys", "/dev")) or not os.access(m, os.R_OK | os.X_OK):
+            continue
+        if subprocess.run(["df", "-P", m], capture_output=True).returncode == 0:
+            return m
+    return None
+
+
 @pytest.mark.skipif(sys.platform == "win32", reason="payload is POSIX sh")
-@pytest.mark.skipif(getattr(os, "geteuid", lambda: 1)() == 0,
-                    reason="root writes through chmod; only a read-only mount would do")
-def test_the_probe_reports_whether_a_disk_can_be_written_to(tmp_path):
+def test_a_directory_you_cannot_write_to_on_a_writable_disk_is_writable(tmp_path):
+    """Whether a disk can fill is the mount's read-only flag, not whether this user may
+    write the directory: `test -w` said no for any root-owned disk, so a full /home
+    never alerted."""
+    locked = tmp_path / "locked"
+    locked.mkdir()
+    locked.chmod(0o500)
+    try:
+        rows = _disk_rows(_run_payload(FLEET_DISK_PATHS=f"{tmp_path}|{locked}"))
+    finally:
+        locked.chmod(0o755)
+    by_mount = {r.split("|")[0]: r.split("|") for r in rows}
+    assert by_mount[str(locked)][4] == "1"
+    assert by_mount[str(tmp_path)][4] == "1"
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="payload is POSIX sh")
+def test_the_probe_reports_a_read_only_volume_as_read_only(tmp_path):
     """A mounted DMG is 100% full by definition and read-only, so it alerted forever.
     Knowing it is read-only is what lets the alert skip it while `fleet show` still
     lists it honestly.
 
-    The fixture stands in for a read-only volume with a mode-500 directory, which is the
-    same answer from `test -w` for everyone except root. Root is what a container runs
-    tests as, so there the probe truthfully reports the directory writable and the test
-    is skipped rather than asserting something false of the machine it is on."""
-    ro = tmp_path / "readonly"
-    ro.mkdir()
-    ro.chmod(0o500)
-    rows = _disk_rows(_run_payload(FLEET_DISK_PATHS=f"{tmp_path} {ro}"))
+    On Linux the probe reads /proc/mounts, so this uses a read-only mount the machine
+    already has. Elsewhere it reads `mount`, which is stood in for here."""
+    if Path("/proc/mounts").exists():
+        ro = _a_read_only_mount()
+        if ro is None:
+            pytest.skip("no read-only mount on this machine to read")
+        env = {}
+    else:
+        ro = str(tmp_path / "Volumes" / "Installer")
+        Path(ro).mkdir(parents=True)
+        bin_ = tmp_path / "bin"
+        bin_.mkdir()
+        (bin_ / "mount").write_text(
+            "#!/bin/sh\n"
+            "echo '/dev/disk1s1 on / (apfs, local, journaled)'\n"
+            f"echo '/dev/disk4s1 on {ro} (hfs, local, nodev, nosuid, read-only)'\n")
+        (bin_ / "mount").chmod(0o755)
+        env = {"PATH": f"{bin_}:/usr/bin:/bin:/usr/sbin:/sbin"}
+    rows = _disk_rows(_run_payload(FLEET_DISK_PATHS=f"{tmp_path}|{ro}", **env))
     by_mount = {r.split("|")[0]: r.split("|") for r in rows}
-    assert by_mount[str(ro)][4] == "0", "read-only volume should report rw=0"
+    assert by_mount[ro][4] == "0", "read-only volume should report rw=0"
     assert by_mount[str(tmp_path)][4] == "1", "writable volume should report rw=1"
 
 

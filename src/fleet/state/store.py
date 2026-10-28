@@ -325,6 +325,18 @@ def rename_device(conn: sqlite3.Connection, old_id: str, new_id: str) -> None:
     conn.commit()
 
 
+def expire(conn: sqlite3.Connection, device_id: str) -> None:
+    """Make the next read probe this machine again rather than trust what is stored.
+
+    For a change made on the machine itself -- its machine.yaml, by `fleet edit` --
+    which the reading cached a minute ago knows nothing of: `fleet ls` straight after
+    an edit showed the old cost and the old alert.
+    """
+    with conn:
+        conn.execute("UPDATE device_state SET last_probe_at=0 WHERE device_id=?",
+                     (device_id,))
+
+
 def latest(conn: sqlite3.Connection, device_id: str) -> tuple[dict | None, dict | None]:
     """Return (state_row, snapshot_dict) -- either may be None."""
     st = conn.execute("SELECT * FROM device_state WHERE device_id=? AND source='self'",

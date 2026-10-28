@@ -213,7 +213,9 @@ def disk_cell(row: dict[str, Any]) -> str:
     Rows built at Detail.COMPACT (`fleet ls`) carry no per-mount list, only the single
     reduced figure, and fall back to it.
     """
-    disks = row.get("disks")
+    # A read-only mount -- a disk image, a tool volume -- is "0G" for ever and cannot
+    # fill; listed, it read as a full disk.
+    disks = [d for d in row.get("disks") or [] if d.get("writable", True)]
     if not disks:
         free = row.get("disk_free_gb")
         if not free:
@@ -230,7 +232,8 @@ def disk_cell(row: dict[str, Any]) -> str:
 
 def device_lines(row: dict[str, Any]) -> int:
     """How many lines this device's tallest column needs."""
-    return max(len(row.get("gpus") or []), len(row.get("disks") or []), 1)
+    disks = [d for d in row.get("disks") or [] if d.get("writable", True)]
+    return max(len(row.get("gpus") or []), len(disks), 1)
 
 
 def name_cell(row: dict[str, Any]) -> str:
@@ -284,13 +287,50 @@ def jobs_cell(row: dict[str, Any]) -> str:
     return "\n".join(lines) if lines else "[dim]-[/dim]"
 
 
+_TOP_FIT = ("disk_paths", "note_short", "jobs_short", "note", "disk_paths_short")
+
+
 def render_fleet(rows: list[dict[str, Any]], summary: dict[str, Any],
-                 live_within: int = 10) -> Table:
+                 live_within: int = 10, width: int | None = None) -> Table:
+    """`fleet top`'s table. With `width`, fitted to it as `fleet ls` is (render_ls)."""
+    return _fit(lambda gave_up: _fleet_table(rows, live_within, gave_up), width, _TOP_FIT)
+
+
+def _fit(build, width: int | None, steps: tuple[str, ...]) -> Table:
+    """The table `build` makes, giving up `steps` one at a time until it fits `width`.
+
+    Left to Rich, a table too wide for the terminal lost an equal share of every
+    column: at 100 columns the GPU read "…" and CPU and RAM vanished, while a mount
+    path stayed whole.
+    """
+    if width is None:
+        return build(set())
+    from rich.console import Console
+
+    measure = Console(width=10_000)
+    gave_up: set[str] = set()
+    for step in (None, *steps):
+        if step:
+            gave_up.add(step)
+        t = build(gave_up)
+        if measure.measure(t).maximum <= width:
+            break
+    return t
+
+
+def _disk_width(gave_up: set[str]) -> dict:
+    if "disk_paths" not in gave_up:
+        return {}
+    return {"max_width": 16 if "disk_paths_short" in gave_up else 24}
+
+
+def _fleet_table(rows: list[dict[str, Any]], live_within: int, gave_up: set[str]) -> Table:
     t = Table(box=None, pad_edge=False, header_style="bold", expand=False)
     # A right-justified DISK FREE pads the short lines of a multi-mount cell from the
     # left and comes out ragged, so the column flips left only once some device really
     # has more than one card or mount. A fleet of plain boxes renders as it always did.
     tall = any(device_lines(r) > 1 for r in rows)
+    show_note = "note" not in gave_up
     for col, kw in (("", {}), ("NAME", {"no_wrap": True}),
                     # "RTX PRO 6000 Blackwell Workstation Edition" is 41 characters of
                     # column; stripping the vendor prefix is not enough to stop a name
@@ -301,18 +341,22 @@ def render_fleet(rows: list[dict[str, Any]], summary: dict[str, Any],
                     ("CPU", {"justify": "right", "no_wrap": True}),
                     ("RAM FREE", {"justify": "right", "no_wrap": True}),
                     ("DISK FREE", {"justify": "left" if tall else "right",
-                                   "no_wrap": True}),
-                    ("JOBS", {"no_wrap": True, "overflow": "ellipsis", "max_width": 24}),
+                                   "no_wrap": True, "overflow": "ellipsis",
+                                   **_disk_width(gave_up)}),
+                    ("JOBS", {"no_wrap": True, "overflow": "ellipsis",
+                              "max_width": 12 if "jobs_short" in gave_up else 24}),
                     ("AGE", {"justify": "right", "no_wrap": True}),
-                    ("NOTE", {"no_wrap": True, "overflow": "ellipsis", "max_width": 34})):
-        t.add_column(col, **kw)
+                    ("NOTE", {"no_wrap": True, "overflow": "ellipsis",
+                              "max_width": 20 if "note_short" in gave_up else 34})):
+        if col != "NOTE" or show_note:
+            t.add_column(col, **kw)
     for row in rows:
         gpu, util, vram = gpu_cells(row)
         pct = cpu_pct(row)
         stale = staleness(row, live_within)
         note = escape((row.get("error", {}).get("detail", "") if row["status"] != "ok"
                        else (row["alerts"][0] if row.get("alerts") else "")) or "")
-        t.add_row(
+        cells = [
             _DOT.get(row["status"], "?"),
             name_cell(row),
             gpu,
@@ -327,8 +371,8 @@ def render_fleet(rows: list[dict[str, Any]], summary: dict[str, Any],
             # contradiction in the one view meant to be watched.
             (f"[dim]{stale}[/dim]" if stale else "[green]live[/green]")
             if row["status"] == "ok" else "[dim]-[/dim]",
-            note,
-        )
+        ]
+        t.add_row(*cells, *([note] if show_note else []))
     return t
 
 
@@ -387,9 +431,22 @@ def render_device(row: dict[str, Any], live_within: int = 10) -> Table:
     return t
 
 
-def render_ls(rows: list[dict[str, Any]]) -> Table:
+# What `fleet ls` gives up, in order, to fit a narrower terminal.
+_LS_FIT = ("disk_paths", "age", "price_if_none", "kind", "note_short", "price", "note",
+           "disk_paths_short")
+
+
+def render_ls(rows: list[dict[str, Any]], width: int | None = None) -> Table:
     """The `fleet ls` table. Here rather than in the command so the README's
-    screenshots are drawn by the same code a user sees, not a copy of it."""
+    screenshots are drawn by the same code a user sees, not a copy of it.
+
+    With `width`, the terminal's, it is fitted to that width by dropping what matters
+    least first (see _LS_FIT) rather than cutting every column a little.
+    """
+    return _fit(lambda gave_up: _ls_table(rows, gave_up), width, _LS_FIT)
+
+
+def _ls_table(rows: list[dict[str, Any]], gave_up: set[str]) -> Table:
     from ..ui import DOT
 
     t = Table(box=None, pad_edge=False, header_style="bold")
@@ -397,31 +454,36 @@ def render_ls(rows: list[dict[str, Any]]) -> Table:
     # out ragged, so these two flip left only when some device really has more than one
     # card. A fleet of single-GPU boxes renders exactly as it always did.
     tall = any(device_lines(r) > 1 for r in rows)
-    for col, kw in (("", {}), ("NAME", {"no_wrap": True}), ("KIND", {"no_wrap": True}),
-                    ("GPU", {"no_wrap": True, "overflow": "ellipsis",
-                             "max_width": 24}),
-                    ("VRAM FREE", {"justify": "left" if tall else "right",
-                                   "no_wrap": True}),
-                    ("CPU", {"justify": "right", "no_wrap": True}),
-                    ("RAM FREE", {"justify": "right", "no_wrap": True}),
-                    ("DISK FREE", {"justify": "left" if tall else "right",
-                                   "no_wrap": True}),
-                    ("$/HR", {"justify": "right", "no_wrap": True}),
-                    ("AGE", {"justify": "right", "no_wrap": True}),
-                    ("NOTE", {"no_wrap": True, "overflow": "ellipsis", "max_width": 42})):
-        t.add_column(col, **kw)
+    priced = any(r["usd_per_hour"] for r in rows)
+    shown = {"KIND": "kind" not in gave_up, "AGE": "age" not in gave_up,
+             "$/HR": "price" not in gave_up and (priced or "price_if_none" not in gave_up),
+             "NOTE": "note" not in gave_up}
+    columns = (("", {}), ("NAME", {"no_wrap": True}), ("KIND", {"no_wrap": True}),
+               ("GPU", {"no_wrap": True, "overflow": "ellipsis", "max_width": 24}),
+               ("VRAM FREE", {"justify": "left" if tall else "right", "no_wrap": True}),
+               ("CPU", {"justify": "right", "no_wrap": True}),
+               ("RAM FREE", {"justify": "right", "no_wrap": True}),
+               ("DISK FREE", {"justify": "left" if tall else "right", "no_wrap": True,
+                              "overflow": "ellipsis", **_disk_width(gave_up)}),
+               ("$/HR", {"justify": "right", "no_wrap": True}),
+               ("AGE", {"justify": "right", "no_wrap": True}),
+               ("NOTE", {"no_wrap": True, "overflow": "ellipsis",
+                         "max_width": 24 if "note_short" in gave_up else 42}))
+    for col, kw in columns:
+        if shown.get(col, True):
+            t.add_column(col, **kw)
     for r in rows:
         gpu, vram = gpu_cells_compact(r)
         note = escape((r.get("error", {}).get("detail", "") if r["status"] != "ok" else (
             r["alerts"][0] if r["alerts"] else "")) or "")
         age = f"{r['telemetry_age_s']}s" if r["telemetry_age_s"] is not None else "-"
-        t.add_row(DOT.get(r["status"], "?"), name_cell(r),
-                  escape(r["kind"]), gpu, vram,
-                  str(r["cpu_cores"] or "-"),
-                  f"{r['ram_free_gb']:.0f}G" if r["ram_free_gb"] is not None else "-",
-                  disk_cell(r),
-                  f"${r['usd_per_hour']:.2f}" if r["usd_per_hour"] else "-",
-                  age, note)
+        cells = {"": DOT.get(r["status"], "?"), "NAME": name_cell(r), "KIND": escape(r["kind"]),
+                 "GPU": gpu, "VRAM FREE": vram, "CPU": str(r["cpu_cores"] or "-"),
+                 "RAM FREE": f"{r['ram_free_gb']:.0f}G" if r["ram_free_gb"] is not None else "-",
+                 "DISK FREE": disk_cell(r),
+                 "$/HR": f"${r['usd_per_hour']:.2f}" if r["usd_per_hour"] else "-",
+                 "AGE": age, "NOTE": note}
+        t.add_row(*(cells[col] for col, _ in columns if shown.get(col, True)))
     return t
 
 

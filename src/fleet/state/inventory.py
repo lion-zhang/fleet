@@ -241,6 +241,12 @@ def find(devices: list[Device], token: str) -> Device | None:
         return None                        # "" is a prefix of every name
     if exact := find_exact(devices, token):
         return exact
+    # The name it was added by: `fleet add lab` for a machine fleet already knew as `vm`
+    # adds lab as another way in, and `fleet ssh lab` then said there was no such device.
+    reached = [d for d in live(devices)
+               if any(str(e.get("target", "")) == token for e in d.endpoints)]
+    if len(reached) == 1:
+        return reached[0]
     matches = [d for d in live(devices) if d.name.startswith(token)]
     return matches[0] if len(matches) == 1 else None
 

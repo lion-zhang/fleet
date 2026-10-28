@@ -472,8 +472,10 @@ def device_view(dev: Device, state: dict | None, snap: dict | None,
         # rental's nearly full / behind its big /workspace -- and the mount that ends a
         # long job is precisely the hidden one. Trimmed to mount+free at COMPACT, the
         # way `gpus` is, so `fleet ls --json` stays small for the agents reading it.
-        "disks": ([{"mount": d["mount"], "free_gb": d["free_gb"]} for d in disks]
-                  if detail is Detail.COMPACT else disks),
+        # A read-only mount (a disk image, a tool volume) is always "0G free" and can
+        # never fill, so the short list leaves it out: it read as a full disk.
+        "disks": ([{"mount": d["mount"], "free_gb": d["free_gb"]} for d in disks
+                   if d["writable"]] if detail is Detail.COMPACT else disks),
         "usd_per_hour": cost.get("usd_per_hour"),
         "services": [{"name": s.get("name"), "kind": s.get("kind"), "port": s.get("port"),
                       "healthy": s.get("healthy")}

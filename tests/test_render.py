@@ -66,7 +66,7 @@ def test_show_reports_disk_space_in_gb(seeded):
 
     out = seeded.invoke(app, ["show", "gpu-box"]).output
     assert "/workspace" in out
-    assert "1647" in out or "1648" in out, out
+    assert "1.6T free" in out, out          # in `fleet ls`'s units, 1647 GB
 
 
 def test_ls_renders_the_whole_fleet(seeded):

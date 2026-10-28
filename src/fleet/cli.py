@@ -47,7 +47,7 @@ from .probe.runner import PAYLOAD, probe_env, probe_many, run_probe, run_probe_l
 from .render import view as view_mod
 from .render.top import (Schedule, device_lines, disk_cell, gpu_cells_compact, render_models,
                          render_ps, runtime as runtime_text, size as size_text,
-                         name_cell, render_device, render_fleet, render_ls)
+                         name_cell, render_device, render_fleet, render_ls, _gb as gb_text)
 from .render.view import Detail, auth_of, device_view, fleet_view, matches_tag
 from .ssh.cmd import (WINDOWS, build_argv, local_platform, local_shell_argv, remote_command,
                       run as sshrun,
@@ -183,7 +183,7 @@ def cmd_ls(names: list[str] = typer.Argument(None, help="only these devices"),
                   "[bold]fleet add \"ssh user@host\"[/bold]")
         raise typer.Exit(0)
 
-    t = render_ls(rows)
+    t = render_ls(rows, width=console.width)
     console.print(t)
     if note := _skills_note():
         console.print(f"[yellow]![/yellow] [dim]{note}[/dim]")
@@ -358,8 +358,11 @@ def _print_show(r: dict) -> None:
         if g["unattributed_mib"]:
             console.print(f"        [yellow]{g['unattributed_mib']} MiB unattributed[/yellow]")
     for d in r.get("disks", []):
-        console.print(f"  disk  {escape(str(d['mount'])):<12} {d['free_gb']:.0f} GB free"
-                      f"  [dim]{d['use_pct']}% used[/dim]")
+        # "1048576 GB free" for a 1 PiB volume: the same units as `fleet ls`. And a
+        # read-only mount says so, or its "0 GB free" reads as a full disk.
+        console.print(f"  disk  {escape(str(d['mount'])):<12} {gb_text(d['free_gb'])} free"
+                      + (f"  [dim]{d['use_pct']}% used[/dim]" if d.get("writable", True)
+                         else "  [dim]read-only[/dim]"))
     if r.get("processes"):
         console.print("  [bold]gpu compute[/bold]")
         for p in r["processes"]:
@@ -489,6 +492,12 @@ def _edit_machine_file(dev, json_out: bool, *, paths: list[str], endpoints: list
                 err.print("  [dim]to keep tags or cost here instead: add --local[/dim]")
         raise typer.Exit(1)
     result = notes_mod.parse(after)
+    if before != after:
+        conn = store.connect()
+        try:
+            store.expire(conn, dev.id)
+        finally:
+            conn.close()
     doc = {"ok": True, "name": dev.name, "changed": before != after, **result}
     if json_out:
         if emit:
@@ -514,7 +523,7 @@ def _edit_machine_file(dev, json_out: bool, *, paths: list[str], endpoints: list
     if note is not None:
         console.print(f"[green]✓[/green] {dev.name} note: " + escape(result.get("notes") or "cleared"))
     console.print("  [dim]kept in machine.yaml on the machine itself, so everyone who looks "
-                  "at it reads the same; it shows from the next probe[/dim]")
+                  "at it reads the same[/dim]")
     return doc
 
 
@@ -1257,7 +1266,11 @@ def cmd_update(name: str = typer.Argument(None, help="defaults to this machine")
             console.print(f"[dim]·[/dim] {dev.name}: {escape(kept)}")
             skipped += 1
         elif code == 0:
-            console.print(f"[green]✓[/green] {dev.name}")
+            # Which version it is on now: a bare tick did not say whether anything
+            # changed, and that is the one thing an update is asked.
+            found = re.findall(r"\bfleet (\d+\.\d+[\w.+-]*)", output)
+            console.print(f"[green]✓[/green] {dev.name}"
+                          + (f"  [dim]fleet {escape(found[-1])}[/dim]" if found else ""))
             ok += 1
         elif code == NOTHING_TO_UPDATE:
             # Not a failure, and not something to fix: most of a fleet is meant to have
@@ -1380,7 +1393,7 @@ def cmd_top(name: str = typer.Argument(None, help="one device, instead of the wh
         if name:
             return render_device(rows[0], live_within)
         view = fleet_view(rows)
-        table = render_fleet(rows, view["summary"], live_within)
+        table = render_fleet(rows, view["summary"], live_within, width=console.width)
         s = view["summary"]
         return Group(table, Text.from_markup(
             f"\n[dim]{s['online']}/{s['total']} online · {s['gpus_free']} free GPU(s)"
