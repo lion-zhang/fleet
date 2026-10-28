@@ -153,6 +153,11 @@ def _classify_service(comm: str, port: int) -> tuple[str, str]:
     return "unknown", ""
 
 
+# What other users run on a shared host -- a process's args, a container's name, a model
+# a server lists -- reaches fleet's terminal: an escape sequence in it must not.
+_CONTROL = re.compile(r"[\x00-\x08\x0b-\x1f\x7f-\x9f]")
+
+
 def parse_payload(stdout: str) -> Snapshot:
     """Parse payload.sh output. Raises MissingSentinel if the probe did not complete."""
     lines = stdout.splitlines()
@@ -164,7 +169,7 @@ def parse_payload(stdout: str) -> Snapshot:
     rows: dict[str, list[str]] = {}
 
     for raw in lines:
-        ln = raw.rstrip()
+        ln = _CONTROL.sub("", raw).rstrip()
         if not ln:
             continue
         if ln.startswith("#"):

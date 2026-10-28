@@ -41,6 +41,7 @@ _NO_POSIX_SHELL = ("is not recognized as an internal or external command",
 # classification runs first and would otherwise replace the only signal the retry has --
 # which it did, silently, the first time this was wired up.
 WINDOWS_DETAIL = "host is Windows: no POSIX shell for the probe payload"
+BANNER_DETAIL = "the port answers, but never speaks ssh"
 
 # stderr signature -> status. Order matters: the first match wins.
 _ERROR_SIGNATURES: tuple[tuple[str, Status, str], ...] = (
@@ -52,6 +53,10 @@ _ERROR_SIGNATURES: tuple[tuple[str, Status, str], ...] = (
     ("Connection refused", Status.REFUSED, "nothing listening on that port"),
     ("Connection closed by", Status.CLOSED, "peer closed the connection"),
     ("Connection reset by", Status.CLOSED, "peer reset the connection"),
+    # Before the plain timeouts it contains: the port took the connection, so the
+    # machine is there -- "nothing answered at that address" sent people to check it was
+    # switched on, when something else holds the port or its sshd is wedged.
+    ("timed out during banner exchange", Status.TIMEOUT, BANNER_DETAIL),
     ("Operation timed out", Status.TIMEOUT, "network timeout"),
     ("Connection timed out", Status.TIMEOUT, "network timeout"),
     ("Could not resolve hostname", Status.UNREACHABLE, "DNS lookup failed"),

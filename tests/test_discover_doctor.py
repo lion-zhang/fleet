@@ -251,6 +251,43 @@ def test_the_first_run_records_this_machine_once_and_starts_no_fleet(monkeypatch
     assert firstrun.maybe("ls", said.append) is False          # once
 
 
+def test_the_first_run_says_fleet_0_5s_list_is_not_read(home, monkeypatch):
+    """0.6 starts a new list, by design; saying nothing about the old one left people
+    finding out from the troubleshooting page that their machines were "gone"."""
+    from fleet import config
+    from fleet.ops import firstrun, identity
+
+    monkeypatch.delenv("FLEET_NO_FIRST_RUN", raising=False)
+    monkeypatch.setattr(firstrun, "teach_agents", lambda: [])
+    monkeypatch.setattr(identity, "local_device_id", lambda: "id:me")
+    import fleet.onboard as onboard
+
+    monkeypatch.setattr(onboard, "onboard_self", lambda **k: (
+        Device(id="id:me", name="laptop"), ProbeResult(status=Status.OK)))
+    config.CONFIG_DIR.mkdir(parents=True, exist_ok=True)
+    (config.CONFIG_DIR / "inventory.yaml").write_text(
+        "version: 1\ndevices:\n- {id: 'net:10.0.0.5:22', name: gpu}\n"
+        "- {id: 'net:10.0.0.6:22', name: cpu}\n- {id: 'id:me', name: laptop, role: center}\n")
+    said = []
+    assert firstrun.maybe("ls", lambda text, *a: said.append(text))
+    assert any("inventory.yaml" in s and "2 other machine" in s for s in said)
+
+
+def test_the_first_run_says_nothing_of_a_0_5_list_that_is_not_there(home, monkeypatch):
+    from fleet.ops import firstrun, identity
+
+    monkeypatch.delenv("FLEET_NO_FIRST_RUN", raising=False)
+    monkeypatch.setattr(firstrun, "teach_agents", lambda: [])
+    monkeypatch.setattr(identity, "local_device_id", lambda: "id:me")
+    import fleet.onboard as onboard
+
+    monkeypatch.setattr(onboard, "onboard_self", lambda **k: (
+        Device(id="id:me", name="laptop"), ProbeResult(status=Status.OK)))
+    said = []
+    firstrun.maybe("ls", lambda text, *a: said.append(text))
+    assert not any("inventory.yaml" in s for s in said)
+
+
 # ---------------------------------------------------------------- hiding candidates
 def test_a_hidden_candidate_is_not_offered_until_unhidden(home, monkeypatch):
     (home / ".ssh" / "config").write_text("Host lab\nHost old-box\n")
@@ -335,3 +372,29 @@ def test_fields_keeps_only_what_was_asked(monkeypatch):
     r = CliRunner().invoke(cli.app, ["ls", "--json", "--fields", "usd_per_hour"])
     assert r.exit_code == 0, r.output
     assert json.loads(r.stdout)["devices"] == [{"name": "a", "usd_per_hour": 1}]
+
+
+def test_a_port_that_takes_the_connection_but_never_speaks_ssh_is_not_called_off():
+    """ssh's "Connection timed out during banner exchange" matched the plain timeout:
+    "nothing answered at that address: it is off, asleep..." for a machine that took the
+    connection -- another program on the port, or a wedged sshd."""
+    from fleet.probe.runner import classify_stderr
+
+    status, detail = classify_stderr("Connection timed out during banner exchange\n"
+                                     "Connection to 1.2.3.4 port 40001 timed out\n")
+    assert status is Status.TIMEOUT
+    dev = Device(id="id:a", name="a100", kind=Kind.RENTAL,
+                 endpoints=[{"target": "1.2.3.4", "user": "root", "port": 40001}])
+    v = doctor.advise(dev, status.value, detail)
+    assert "never speaks ssh" in v.why and "off, asleep" not in v.why
+    assert any("port" in line for line in v.fix)
+
+
+def test_a_failed_add_points_at_fleet_add_not_at_a_machine_it_did_not_record():
+    """Under "nothing recorded", the fix said `fleet edit gpu --ssh ...`: no such machine."""
+    dev = Device(id="id:a", name="gpu", endpoints=[{"target": "10.0.0.5", "user": "me"}])
+    for status, detail in (("timeout", "network timeout"), ("unreachable", "no route"),
+                           ("auth_failed", "too many authentication failures")):
+        fix = " ".join(doctor.advise(dev, status, detail, adding=True).fix)
+        assert "fleet edit" not in fix and 'fleet add "' in fix, status
+    assert "fleet edit gpu" in " ".join(doctor.advise(dev, "timeout", "network timeout").fix)

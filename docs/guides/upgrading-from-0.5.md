@@ -33,7 +33,8 @@ fleet as for `ssh`.
 [installer](install.md#upgrading), or `fleet update` — and carry on.
 
 - **Your machines list starts empty.** 0.6 does not read 0.5's `inventory.yaml`. The
-  first command records this machine; add the others again with `fleet add "ssh ..."`,
+  first command records this machine and says how many others 0.5's list held; add
+  them again with `fleet add "ssh ..."`,
   or pick them from `fleet ls --discover`, which lists the hosts in your
   `~/.ssh/config` and on your tailnet. `inventory.yaml` is left where it was, so you can
   read the addresses from it.

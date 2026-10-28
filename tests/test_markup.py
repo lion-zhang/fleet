@@ -127,3 +127,25 @@ def test_doctor_prints_a_machine_s_error_as_written(monkeypatch):
     r = CliRunner().invoke(cli.app, ["doctor", "box"])
     assert "[/]x[bold]y" in r.output
     assert r.exception is None or isinstance(r.exception, SystemExit), r.output
+
+
+ESC = "\x1b[2J\x1b]0;owned\x07\x1b[31m"
+
+
+def test_an_escape_sequence_in_a_machines_own_notes_never_reaches_the_terminal():
+    from fleet import notes
+    got = notes.check({"notes": "rent me" + ESC, "tags": ["a" + ESC + "b"],
+                       "paths": {"models": "/data/" + ESC + "m"}})
+    flat = repr(got)
+    assert "\\x1b" not in flat and "\\x07" not in flat
+    assert got["notes"].startswith("rent me")
+    assert got["tags"][0].startswith("a") and got["tags"][0].endswith("b")
+
+
+def test_an_escape_sequence_in_what_another_user_runs_never_reaches_the_terminal():
+    text = (FIX / "gpu-box.txt").read_text(encoding="utf-8").replace(
+        "|msedge", "|msedge" + ESC, 1)
+    snap = parse_payload(text).to_dict()
+    flat = repr(snap)
+    assert "\\x1b" not in flat and "\\x07" not in flat
+    assert "msedge" in flat

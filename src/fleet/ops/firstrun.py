@@ -96,4 +96,31 @@ def maybe(command: str, say) -> bool:
     if bits:
         say("fleet is ready here: " + "; ".join(bits)
             + "  (add machines with fleet add \"ssh user@host\", or see fleet ls --discover)")
+    if left := _left_by_0_5(dev):
+        # 0.6 does not read 0.5's list, by design -- but saying nothing sent people to
+        # the troubleshooting page with "my machines are gone".
+        say(f"fleet 0.5's list (inventory.yaml) has {left} other machine(s), which 0.6 "
+            "does not read: add them again -- its addresses are still in that file, and "
+            "fleet ls --discover lists your ssh hosts", "warn")
     return True
+
+
+def _left_by_0_5(me) -> int:
+    """How many machines, besides this one, fleet 0.5's inventory.yaml held."""
+    from ..config import CONFIG_DIR
+
+    try:
+        import yaml
+
+        raw = yaml.safe_load((CONFIG_DIR / "inventory.yaml").read_text(encoding="utf-8"))
+    except Exception:                      # noqa: BLE001 -- absent or unreadable: say nothing
+        return 0
+    devices = raw.get("devices") if isinstance(raw, dict) else None
+    if not isinstance(devices, list):
+        return 0
+    mine = getattr(me, "id", None)
+    from . import identity
+
+    mine = mine or identity.local_device_id()
+    return sum(1 for d in devices if isinstance(d, dict) and d.get("id") != mine
+               and d.get("role") != "center")

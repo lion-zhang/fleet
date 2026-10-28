@@ -127,3 +127,17 @@ def test_install_forwards_the_agent_only_for_an_ssh_clone(monkeypatch):
     CliRunner().invoke(cli.app, ["install", "box", "--repo", "https://example.com/f.git",
                                  "--forward-agent"])
     assert seen == [False, True, True]
+
+
+@pytest.mark.parametrize("command", [
+    "ssh -o ProxyCommand='cloudflared access ssh --hostname %h' me@box.example.com",
+    "ssh -oproxycommand=nc\\ %h\\ %p box",
+])
+def test_a_proxycommand_is_refused_rather_than_dropped(command, monkeypatch):
+    """Only the address, user, port, key and jump host are recorded. A ProxyCommand was
+    dropped without a word, and the machine read as "DNS lookup failed"."""
+    from fleet.ssh import cmd
+
+    monkeypatch.setattr(cmd.subprocess, "run", lambda *a, **k: pytest.fail("ssh was run"))
+    with pytest.raises(ValueError, match="ProxyCommand.*~/.ssh/config"):
+        cmd.resolve(parse_ssh_command(command))

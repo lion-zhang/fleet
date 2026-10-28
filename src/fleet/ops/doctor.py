@@ -100,9 +100,18 @@ def _route(dev: Device, used: str = ""):
 
 
 def advise(dev: Device, status: str, detail: str, *, snap: dict | None = None,
-           server: str = "", verbose: str = "", used: str = "") -> Verdict:
-    """The verdict for one failed attempt, from what it said."""
+           server: str = "", verbose: str = "", used: str = "",
+           adding: bool = False) -> Verdict:
+    """The verdict for one failed attempt, from what it said.
+
+    `adding`: the machine is not recorded -- `fleet add` failed -- so a new address goes
+    to `fleet add` again. "fleet edit NAME --ssh" there named a machine that did not
+    exist, under "nothing recorded"."""
     ep = _route(dev, used)
+
+    def readdress(cmd: str) -> str:
+        return (f'fleet add "{cmd}"' if adding
+                else f'fleet edit {dev.name} --ssh "{cmd}"')
     v = Verdict(name=dev.name, status=status, why="", server=server,
                 route=ep.ssh_command() if ep else "")
     text = f"{detail}\n{verbose}".lower()
@@ -114,7 +123,7 @@ def advise(dev: Device, status: str, detail: str, *, snap: dict | None = None,
         return v
     if ep is None:
         v.why = "there is no address recorded for it"
-        v.fix = [f'fleet edit {dev.name} --ssh "ssh user@host"']
+        v.fix = [readdress("ssh user@host")]
         return v
     if status == Status.HOST_KEY_MISMATCH.value:
         v.why = ("its host key changed. A rental's port given to someone else does this, "
@@ -123,11 +132,20 @@ def advise(dev: Device, status: str, detail: str, *, snap: dict | None = None,
         v.fix = [f"if you know why it changed:  ssh-keygen -R {ep.address}"
                  + (f" && ssh-keygen -R '[{ep.address}]:{ep.port}'" if ep.port != 22 else "")]
         return v
+    if status == Status.TIMEOUT.value and "never speaks ssh" in text:
+        v.why = ("something takes the connection on that port, but never speaks ssh: "
+                 "another program holds the port, or the ssh server there is stuck")
+        v.fix = [f"check the port:  {ep.ssh_command()} -v",
+                 f"if it moved:  {readdress('ssh -p PORT user@host')}"]
+        if dev.kind is Kind.RENTAL:
+            v.fix.insert(0, "a rental's port given to another instance does this; check "
+                            "the provider's dashboard for its current port")
+        return v
     if status in (Status.TIMEOUT.value, Status.UNREACHABLE.value):
         v.why = ("nothing answered at that address: it is off, asleep, or not on a network "
                  "this machine can reach")
         v.fix = ["check it is on; on a VPN or tailnet, that both ends are connected",
-                 f"if it moved:  fleet edit {dev.name} --ssh \"ssh user@new-address\""]
+                 f"if it moved:  {readdress('ssh user@new-address')}"]
         return v
     if status in (Status.REFUSED.value, Status.CLOSED.value):
         v.why = "the machine is there, but no ssh server is listening on that port"
@@ -156,8 +174,8 @@ def advise(dev: Device, status: str, detail: str, *, snap: dict | None = None,
             v.fix = ["in the Tailscale admin console → Access controls, add an ssh rule, e.g.",
                      '{"action": "accept", "src": ["autogroup:member"], '
                      f'"dst": ["autogroup:self"], "users": ["{ep.user or "autogroup:nonroot"}"]}}',
-                     f"or connect as a user the policy allows:  fleet edit {dev.name} "
-                     f"--ssh \"ssh USER@{ep.target}\""]
+                     "or connect as a user the policy allows:  "
+                     + readdress(f"ssh USER@{ep.target}")]
         return v
     provider = _provider(dev, snap)
     if provider in _PROVIDERS:
@@ -167,8 +185,8 @@ def advise(dev: Device, status: str, detail: str, *, snap: dict | None = None,
         return v
     if "too many authentication failures" in text:
         v.why = "ssh offered too many keys before the right one, and the server gave up"
-        v.fix = [f"name the key to use:  fleet edit {dev.name} --ssh \"{ep.ssh_command()} "
-                 "-i ~/.ssh/THE_KEY\""]
+        v.fix = ["name the key to use:  "
+                 + readdress(f"{ep.ssh_command()} -i ~/.ssh/THE_KEY")]
         return v
     v.why = "it is up, but does not accept your key" + (
         " -- it would take a password, which fleet never uses" if "password" in text else "")
@@ -176,11 +194,11 @@ def advise(dev: Device, status: str, detail: str, *, snap: dict | None = None,
     return v
 
 
-def diagnose_result(dev: Device, res: ProbeResult) -> Verdict:
+def diagnose_result(dev: Device, res: ProbeResult, *, adding: bool = False) -> Verdict:
     """The verdict for a probe that just failed, without dialling again."""
     snap = res.snapshot.to_dict() if res.snapshot is not None else None
     return advise(dev, res.status.value, res.error_detail or res.stderr_tail or "", snap=snap,
-                  used=res.endpoint_used)
+                  used=res.endpoint_used, adding=adding)
 
 
 def diagnose(dev: Device, *, state: dict | None, snap: dict | None) -> Verdict:
