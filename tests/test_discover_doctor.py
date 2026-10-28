@@ -459,3 +459,28 @@ def test_a_failed_add_points_at_fleet_add_not_at_a_machine_it_did_not_record():
         fix = " ".join(doctor.advise(dev, status, detail, adding=True).fix)
         assert "fleet edit" not in fix and 'fleet add "' in fix, status
     assert "fleet edit gpu" in " ".join(doctor.advise(dev, "timeout", "network timeout").fix)
+
+
+def test_a_name_that_does_not_resolve_is_not_called_off():
+    """ssh's "Could not resolve hostname" read as "it is off, asleep": a typo sent you
+    to check a machine that was on."""
+    from fleet.models import Device, Kind
+    from fleet.ops import doctor
+    dev = Device(id="x", name="lab", kind=Kind.PERMANENT,
+                 endpoints=[{"target": "lab.exmaple.com", "user": "me", "port": 22}])
+    v = doctor.advise(dev, "unreachable", "DNS lookup failed")
+    assert "lab.exmaple.com" in v.why and "misspelt" in v.why and "off" not in v.why
+    assert "off, asleep" in doctor.advise(dev, "unreachable", "no route to host").why
+
+
+def test_doctor_on_an_address_not_in_the_list_says_add_not_edit(monkeypatch):
+    from fleet.models import Device, Kind, ProbeResult, Status
+    from fleet.ops import doctor
+    from fleet.probe import runner
+    monkeypatch.setattr(runner, "probe_endpoints", lambda eps, **kw: ProbeResult(
+        status=Status.UNREACHABLE, error_detail="DNS lookup failed"))
+    dev = Device(id="", name="newbox", kind=Kind.PERMANENT,
+                 endpoints=[{"target": "newbox", "user": "me", "port": 22}])
+    v = doctor.diagnose(dev, state=None, snap=None)
+    assert any("fleet add" in f for f in v.fix)
+    assert not any("fleet edit" in f for f in v.fix)

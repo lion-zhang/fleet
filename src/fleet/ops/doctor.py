@@ -144,6 +144,13 @@ def advise(dev: Device, status: str, detail: str, *, snap: dict | None = None,
             v.fix.insert(0, "a rental's port given to another instance does this; check "
                             "the provider's dashboard for its current port")
         return v
+    if status == Status.UNREACHABLE.value and "dns lookup failed" in text:
+        # "it is off, asleep" sent people to check a machine whose name was mistyped.
+        v.why = (f"no machine goes by the name {ep.address}: it is misspelt, or only a "
+                 "VPN's or tailnet's own DNS knows it")
+        v.fix = ["check the spelling; on a VPN or tailnet, that this machine is connected",
+                 f"if it moved:  {readdress('ssh user@new-address')}"]
+        return v
     if status in (Status.TIMEOUT.value, Status.UNREACHABLE.value):
         v.why = ("nothing answered at that address: it is off, asleep, or not on a network "
                  "this machine can reach")
@@ -215,9 +222,12 @@ def diagnose(dev: Device, *, state: dict | None, snap: dict | None) -> Verdict:
     hear what the server says it is."""
     from ..probe.runner import probe_endpoints
 
+    # An address that is not in the list yet (no id) is fixed with `fleet add`: "if it
+    # moved:  fleet edit x --ssh ..." named a machine fleet has never heard of.
+    adding = not dev.id
     eps = inv.endpoints_of(dev)
     if not eps:
-        return advise(dev, "unreachable", "", snap=snap)
+        return advise(dev, "unreachable", "", snap=snap, adding=adding)
     # A fresh connection, not a multiplexed one: an open master from a minute ago would
     # answer for a machine that has since stopped letting us in.
     res = probe_endpoints(eps, mode=dev.probe_mode, timeout=20, multiplex=False)
@@ -225,10 +235,11 @@ def diagnose(dev: Device, *, state: dict | None, snap: dict | None) -> Verdict:
     from .rows import same_machine
     res = same_machine(dev.id, dev.name, res)
     if res.ok:
-        return advise(dev, Status.OK.value, "", snap=snap, used=res.endpoint_used)
+        return advise(dev, Status.OK.value, "", snap=snap, used=res.endpoint_used,
+                      adding=adding)
     server, verbose = ("", "")
     if res.status is Status.AUTH_FAILED and (best := _route(dev, res.endpoint_used)):
         server, verbose = server_banner(best)
     return advise(dev, res.status.value, res.error_detail or "", snap=snap or (
         res.snapshot.to_dict() if res.snapshot else None), server=server, verbose=verbose,
-        used=res.endpoint_used)
+        used=res.endpoint_used, adding=adding)

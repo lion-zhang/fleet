@@ -1616,6 +1616,11 @@ def cmd_rm(name: str = typer.Argument(..., help="the exact name; a prefix is nev
         if near := inv.near_matches(devices, name):
             err.print(f"  [dim]did you mean: {', '.join(near)}[/dim]")
         raise typer.Exit(1)
+    if not yes and not sys.stdin.isatty():
+        # The prompt read nothing and said only "Aborted.", as `fleet uninstall` once did.
+        err.print(f"[red]Removing {dev.name} needs a yes: run it in a terminal, or "
+                  "pass --yes.[/red]")
+        raise typer.Exit(2)
     if not yes and not typer.confirm(f"Remove {dev.name} ({dev.kind.value}) from the list?"):
         raise typer.Exit(1)
 
