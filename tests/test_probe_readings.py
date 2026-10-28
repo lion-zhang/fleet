@@ -44,6 +44,15 @@ def _probe(tmp_path: Path, **env) -> str:
     return p.stdout
 
 
+def _seconds(tmp_path: Path, **env) -> tuple[float, str]:
+    """How long one probe took, and what it said. The hang tests measure against a probe
+    of the same machine, since a slow CI runner takes seconds over even when nothing hangs."""
+    import time
+    started = time.monotonic()
+    out = _probe(tmp_path, **env)
+    return time.monotonic() - started, out
+
+
 @pytest.fixture
 def bin_(tmp_path):
     d = tmp_path / "bin"
@@ -83,11 +92,11 @@ def test_a_broken_gpu_driver_is_reported_as_broken(tmp_path, bin_):
 def test_a_gpu_tool_that_hangs_does_not_make_the_machine_look_off(tmp_path, bin_):
     """A card that fell off the bus leaves nvidia-smi hanging. The probe waited on it
     until fleet gave up on the machine: "nothing answered at that address"."""
-    import time
+    usual, _ = _seconds(tmp_path)
     _stub(bin_, "nvidia-smi", "exec sleep 60\n")
-    started = time.monotonic()
-    snap = parse_payload(_probe(tmp_path))
-    assert time.monotonic() - started < 15
+    took, out = _seconds(tmp_path)
+    snap = parse_payload(out)
+    assert took < usual + 12
     assert snap.gpu_present == "err" and "did not answer" in snap.gpu_error
     assert snap.mem_total_kb and snap.hostname
 
@@ -215,6 +224,26 @@ def test_a_folder_with_a_space_in_its_name_is_measured(tmp_path):
     assert store.size_kb and store.size_kb >= 290
 
 
+def test_a_folder_that_is_a_link_is_measured_by_what_it_holds(tmp_path):
+    """~/models -> /mnt/nvme/models: du measured the link, and the folder read as 0."""
+    import time
+
+    home = tmp_path / "home"
+    (home / ".config" / "fleet").mkdir(parents=True)
+    (home / ".config" / "fleet" / "machine.yaml").write_text("paths:\n  models: ~/models\n")
+    (tmp_path / "nvme").mkdir()
+    (tmp_path / "nvme" / "w.bin").write_bytes(b"x" * 300_000)
+    (home / "models").symlink_to(tmp_path / "nvme")
+    (tmp_path / "bin").mkdir()
+    _probe(tmp_path)
+    for _ in range(100):
+        if any((home / ".cache" / "fleet").glob("*/sizes")):
+            break
+        time.sleep(0.05)
+    [store] = parse_payload(_probe(tmp_path)).storage
+    assert store.size_kb and store.size_kb >= 290
+
+
 # ------------------------------------------------------------------ redaction
 @pytest.mark.parametrize("line, secret", [
     ("python run.py --key=abc123", "abc123"),
@@ -325,7 +354,7 @@ def test_the_models_table_says_what_it_left_out():
 def test_servers_that_never_answer_do_not_hold_the_probe_past_its_limit(tmp_path, bin_):
     """Each was asked twice, two seconds each time, and eight of them held the probe for
     32 seconds: past the 20 fleet waits, so a healthy machine read as unreachable."""
-    import time
+    usual, _ = _seconds(tmp_path)
     socks = []
     for _ in range(8):
         s = socket.socket()
@@ -337,9 +366,34 @@ def test_servers_that_never_answer_do_not_hold_the_probe_past_its_limit(tmp_path
     _stub(bin_, "ss", lines)
     _stub(bin_, "lsof", "exit 1\n")
     try:
-        t = time.monotonic()
-        _probe(tmp_path)
-        assert time.monotonic() - t < 18
+        took, _ = _seconds(tmp_path)
+        assert took < usual + 15
     finally:
         for s in socks:
             s.close()
+
+
+def test_a_machine_with_many_containers_says_how_many(tmp_path, bin_):
+    """Twenty are listed; a box running 25 showed twenty and nothing of the rest."""
+    _stub(bin_, "docker", 'case "$1" in ps) i=0; while [ $i -lt 25 ]; do '
+                          'echo "img:$i|c$i|Up 2 hours|"; i=$((i+1)); done ;; '
+                          '--version) echo "Docker version 27.0.1, build x" ;; esac\n')
+    snap = parse_payload(_probe(tmp_path))
+    assert len(snap.containers) == 20 and snap.containers_total == 25
+    _stub(bin_, "docker", 'case "$1" in --version) echo "Docker version 27.0.1" ;; esac\n')
+    snap = parse_payload(_probe(tmp_path))
+    assert snap.containers == [] and snap.containers_total == 0
+
+
+@linux
+def test_a_network_share_that_hangs_does_not_hold_the_probe(tmp_path, bin_):
+    """A stale NFS mount makes `df` wait for ever: the probe ran past its limit and the
+    machine read as unreachable. Local disks are still listed."""
+    real = shutil.which("df")
+    usual, _ = _seconds(tmp_path)
+    # Every filesystem at once waits on the share; one named local disk does not.
+    _stub(bin_, "df", f'[ "$*" = "-Pk" ] && exec sleep 120\nexec {real} "$@"\n')
+    took, out = _seconds(tmp_path)
+    snap = parse_payload(out)
+    assert took < usual + 10
+    assert any(d.mount == "/" for d in snap.disks)

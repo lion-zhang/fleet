@@ -85,7 +85,7 @@ A declared server is asked on every probe, listed by `fleet models` with `"sourc
   sglang, mlx, mlx-lm, omlx, jax, tensorflow, flash-attn, xformers, triton, bitsandbytes,
   peft, trl, unsloth, llama-cpp-python, onnxruntime, tensorrt and ray.
 - **Containers:** the running Docker containers and their images, when Docker answers
-  without `sudo`.
+  without `sudo`: the first 20, and `containers_total` in `--json` says how many run.
 
 Environments are looked for in the usual places: the system Python, conda, miniforge and
 mamba installs and their `envs/`, `~/.venvs/*`, `~/venv*`, `~/.venv`, `.venv` and `venv`
@@ -95,7 +95,7 @@ Up to 40 environments are read on each machine, the ones named there first.
 
 **Packages are read from the names of their install folders, never by importing them.**
 Importing torch takes seconds and can start a CUDA context on a GPU somebody else is
-using. Because of that, a package installed in a way that leaves no `.dist-info` folder
+using. Because of that, a package installed in a way that leaves no `.dist-info`, `.egg-info` or `.egg`
 (an editable install, for example) may not be listed.
 
 The software list is worked out on the machine and kept there for six hours, so reading

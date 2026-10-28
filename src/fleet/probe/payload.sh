@@ -423,13 +423,18 @@ declared=$(declared_endpoints)
 # Read from the mount's own flags, not from whether we can write there: a user's -w is
 # false on /home, /mnt/data and every other disk owned by root, and a full one of those
 # never alerted. -w is the fallback where the flags cannot be read.
+# A network share that stopped answering (a stale NFS mount) makes df wait for ever: the
+# probe ran out its time and the machine read as unreachable. Five seconds, then local
+# disks alone (`-l`). Where there is no `timeout` (macOS), as before.
+TD=; timeout -s KILL 5 true >/dev/null 2>&1 && TD="timeout -s KILL 5"
+dfk() { $TD df "$@"; }
 writable() {
   [ "$1" = "/" ] && { echo 1; return; }
   # The mount holding the path, as df finds it. Matching the path's text against mount
   # points goes wrong on a Mac, where /Users and /private/var reach the data volume by
   # firmlinks: the longest text match was the sealed, read-only system volume at "/",
   # so every folder there read as read-only and never alerted.
-  mp=$(df -P "$1" 2>/dev/null | awk 'NR == 2 { m = $0; sub(/^.* [0-9]+% +/, "", m); print m }')
+  mp=$(dfk -P "$1" 2>/dev/null | awk 'NR == 2 { m = $0; sub(/^.* [0-9]+% +/, "", m); print m }')
   [ "$mp" = "/" ] && { echo 1; return; }
   set -- "${mp:-$1}"
   ro=""
@@ -463,7 +468,7 @@ if have df; then
     printf '%s\n' "$FLEET_DISK_PATHS" | tr '|' '\n' | while IFS= read -r p; do
       [ -n "$p" ] && [ -e "$p" ] || continue
       rw=$(writable "$p")
-      df -Pk "$p" 2>/dev/null | awk -v p="$p" -v rw="$rw" 'NR>1 && $2+0>0 {
+      dfk -Pk "$p" 2>/dev/null | awk -v p="$p" -v rw="$rw" 'NR>1 && $2+0>0 {
         printf "%s|%s|%s|%s|%s\n", p, $2, $3, $4, rw
       }'
     done | head -20
@@ -475,7 +480,8 @@ if have df; then
     # "/Volumes/My Passport" to "/Volumes/My", which df then could not find again.
     # Twenty are kept: / and then the biggest. Cut by name, twenty shares under /mnt
     # left out /workspace -- the 8 TB volume a rental is for, and its storage facts.
-    df -Pk 2>/dev/null | awk 'NR>1 && $2+0>0 {
+    { all=$(dfk -Pk 2>/dev/null); [ $? -ge 124 ] && all=$(dfk -Pkl 2>/dev/null); printf '%s\n' "$all"; } \
+      | awk 'NR>1 && $2+0>0 {
       m=$0; sub(/^.* [0-9]+% +/, "", m)
       if (m=="/" || m ~ /^\/(workspace|data|mnt|home|srv|opt|Volumes|scratch)/)
         printf "%s|%s|%s|%s\n", m, $2, $3, $4
@@ -685,7 +691,9 @@ if [ -n "$paths" ] && [ -n "$CACHE" ] && [ "${FLEET_LIGHT:-}" != "1" ]; then
         tmp="$sizes.$$"
         got=$(printf '%s' "$want" | tr '|' '\n' | while IFS= read -r p; do
           [ -n "$p" ] && [ -e "$p" ] || continue
-          kb=$($T du -sk "$p" 2>/dev/null | tail -1 | cut -f1)
+          # -H: a folder that is a link (~/models -> /mnt/nvme/models) measured as 0,
+          # the size of the link. Links inside it are still not followed.
+          kb=$({ $T du -H -sk "$p" 2>/dev/null || $T du -sk "$p" 2>/dev/null; } | tail -1 | cut -f1)
           [ -n "$kb" ] && printf '%s|%s\n' "$p" "$kb"
         done)
         # Kept only when all of it was written: on a disk that filled up, the sizes it
@@ -704,7 +712,7 @@ if [ -n "$paths" ]; then
   printf '%s\n' "$paths" | while IFS='|' read -r k p; do
     if [ -e "$p" ]; then
       ex=1
-      av=$(df -Pk "$p" 2>/dev/null | awk 'NR==2{print $4}')
+      av=$(dfk -Pk "$p" 2>/dev/null | awk 'NR==2{print $4}')
       kb=$(printf '%s\n' "$known" | awk -F'|' -v p="$p" 'NR>1 && $1==p {print $2; exit}')
     else ex=0; av=""; kb=""
     fi
@@ -724,6 +732,14 @@ scan_site() {  # env-label python-version site-packages-dir
       s = $0; sub(/\.dist-info$/, "", s)
       if (!match(s, /-[^-]*$/)) next
       name = tolower(substr(s, 1, RSTART - 1)); ver = substr(s, RSTART + 1)
+      gsub(/[-.]/, "_", name)
+      if (index(pk, " " name " ")) printf "%s|%s|%s|%s\n", env, py, name, ver
+    }
+    # What `setup.py install` leaves -- the pytorch conda channel, flash-attn or apex
+    # built from source: torch-2.1.0-py3.10.egg-info, or an .egg. Its name never holds a
+    # "-", so the second part is the version.
+    /\.egg(-info)?$/ && split($0, f, "-") >= 2 {
+      name = tolower(f[1]); ver = f[2]; sub(/\.egg(-info)?$/, "", ver)
       gsub(/[-.]/, "_", name)
       if (index(pk, " " name " ")) printf "%s|%s|%s|%s\n", env, py, name, ver
     }'
@@ -782,8 +798,8 @@ software_scan() {
         scan_site "$(short "$root")" "$py" "$sp"
       done
     done
-  } | awk '!seen[$0]++' | head -200
-}
+  } | awk '!seen[$0]++' | head -1300   # 40 environments and the system's, ~30 names each:
+}                                      # at 200 the last of the 40 were never listed
 sw="$CACHE/software"
 if [ -n "$CACHE" ] && [ "${FLEET_REFRESH:-}" != "1" ] && age_ok "$sw" 21600 \
      && [ "$(sed -n '1s/^#v1 [0-9]* //p' "$sw")" = "$gpu_driver" ]; then
@@ -805,9 +821,13 @@ fi
 # ---------------------------------------------------------------- containers
 if [ "${FLEET_LIGHT:-}" != "1" ] && have docker; then
   T=; timeout -s KILL 5 true >/dev/null 2>&1 && T="timeout -s KILL 3"
+  running=$($T docker ps --format '{{.Image}}|{{.Names}}|{{.Status}}|{{.Ports}}' 2>/dev/null \
+    | tr -d '\r' | cut -c1-300)
   echo "#CONTAINER image|name|status|ports"
-  $T docker ps --format '{{.Image}}|{{.Names}}|{{.Status}}|{{.Ports}}' 2>/dev/null \
-    | tr -d '\r' | cut -c1-300 | head -20
+  [ -n "$running" ] && printf '%s\n' "$running" | head -20
+  # Twenty are listed; how many there are, so the rest are not taken for none.
+  echo "#COUNT what|total"
+  printf 'containers|%s\n' "$(printf '%s' "$running" | grep -c .)"
 fi
 
 # ---------------------------------------------------------------- LLM servers

@@ -435,6 +435,8 @@ def _print_show(r: dict) -> None:
     for c in sw.get("containers") or []:
         console.print(f"        [dim]container[/dim] {escape(c['name'])} "
                       f"[dim]{escape(c['image'])} · {escape(c['status'])}[/dim]")
+    if (more := (sw.get("containers_total") or 0) - len(sw.get("containers") or [])) > 0:
+        console.print(f"        [dim]and {more} more containers running[/dim]")
     for kind, items in (r.get("storage") or {}).items():
         for st in items:
             if not st["exists"]:

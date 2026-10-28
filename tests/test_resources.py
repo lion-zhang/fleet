@@ -182,6 +182,33 @@ def test_an_environment_named_in_machine_yaml_is_read_on_a_machine_with_many(tmp
 
 
 @posix
+def test_all_forty_environments_are_listed(tmp_path):
+    """Forty are read, but at most 200 packages were sent: with six each, the last
+    few environments were missing from `fleet show` without a word."""
+    home = make_home(tmp_path)
+    for i in range(40):
+        venv(home, f"e{i:02d}", "3.11", "torch-2.4.0", "transformers-4.44.0",
+             "accelerate-0.33.0", "peft-0.12.0", "triton-3.0.0", "vllm-0.6.0")
+    envs = {p.env for p in parse_payload(probe(home)).pyenvs}
+    assert {f"~/.venvs/e{i:02d}" for i in range(40)} <= envs
+
+
+@posix
+def test_packages_installed_by_setup_py_are_read(tmp_path):
+    """The pytorch conda channel, and flash-attn or apex built from source, leave an
+    .egg-info or an .egg, not a .dist-info: torch was missing from those environments."""
+    home = make_home(tmp_path)
+    site = home / ".venvs" / "a" / "lib" / "python3.10" / "site-packages"
+    (site / "torch-2.1.0-py3.10.egg-info").mkdir(parents=True)
+    (site / "flash_attn-2.5.0-py3.10-linux-x86_64.egg").mkdir()
+    (site / "triton-2.1.0-py3.10.egg-info").write_text("")
+    (site / "numpy-1.26.0-py3.10.egg-info").mkdir()
+    got = {(p.package, p.version) for p in parse_payload(probe(home)).pyenvs
+           if p.env == "~/.venvs/a"}
+    assert got == {("torch", "2.1.0"), ("flash_attn", "2.5.0"), ("triton", "2.1.0")}
+
+
+@posix
 def test_the_software_scan_is_cached_and_a_light_probe_never_rebuilds_it(tmp_path):
     home = make_home(tmp_path)
     venv(home, "a", "3.11", "torch-2.0.0")
