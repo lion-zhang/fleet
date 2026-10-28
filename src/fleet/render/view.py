@@ -25,6 +25,14 @@ class Detail(StrEnum):
     FULL = "full"           # single-device views
 
 
+# Memory held by processes nvidia-smi does not show -- a job in a container, another
+# user's -- past what a desktop's own windows ever take (a few hundred MiB, a GiB or two
+# on Windows). Below it the card read "idle" and counted as free beside the alert saying
+# not to treat it as free, and a rental training in a container was "idle -- this is
+# costing money" each time its utilisation dipped.
+HIDDEN_BUSY_MIB = 4096
+
+
 def _gpu_view(g: dict) -> dict:
     used, compute, display = g["vram_used_mib"], g["compute_used_mib"], g["display_used_mib"]
     unattributed = max(0, used - compute - display)
@@ -38,7 +46,8 @@ def _gpu_view(g: dict) -> dict:
         "unattributed_mib": unattributed,
         "util_pct": g["util_pct"],
         "temp_c": g.get("temp_c"),
-        "busy": g["util_pct"] >= 10 or compute >= 1024,
+        "busy": g["util_pct"] >= 10 or compute >= 1024 or unattributed >= HIDDEN_BUSY_MIB,
+        "shared_memory": bool(g.get("shared_memory")),
     }
 
 
@@ -501,7 +510,8 @@ def device_view(dev: Device, state: dict | None, snap: dict | None,
         "telemetry_age_s": age_s(state),
         "gpus": [{"name": g["name"], "vram_total_mib": g["vram_total_mib"],
                   "vram_free_mib": g["vram_free_mib"], "util_pct": g["util_pct"],
-                  "busy": g["busy"]} for g in gpus] if detail is Detail.COMPACT else gpus,
+                  "busy": g["busy"], "shared_memory": g["shared_memory"]}
+                 for g in gpus] if detail is Detail.COMPACT else gpus,
         "gpu_count": len(gpus),
         "free_vram_mib": max((g["vram_free_mib"] for g in gpus), default=0),
         "ssh_auth": auth_of(dev, state),
@@ -662,7 +672,8 @@ def jobs_view(rows: list[dict]) -> dict:
                 jobs.append({"machine": r["name"], "gpu": g["idx"], "gpu_name": g["name"], **j})
             if not g.get("jobs") and not g.get("busy"):
                 idle.append({"machine": r["name"], "gpu": g["idx"], "gpu_name": g["name"],
-                             "vram_free_mib": g["vram_free_mib"]})
+                             "vram_free_mib": g["vram_free_mib"],
+                             "shared_memory": bool(g.get("shared_memory"))})
     return {"jobs": jobs, "idle": idle,
             "not_read": [r["name"] for r in rows if r["status"] != "ok" and r["gpu_count"]]}
 

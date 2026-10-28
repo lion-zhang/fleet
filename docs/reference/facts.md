@@ -16,7 +16,7 @@ never stored, so they cannot go stale. `fleet ls --tag WORD` matches facts and
 | `rocm` | `amd-smi` or `rocm-smi` lists at least one AMD GPU |
 | `multi-gpu` | more than one GPU is listed |
 | `metal` | macOS on Apple silicon (no VRAM figure: its memory is shared) |
-| `vram-Ng` | its **largest single card** has at least N GiB (see the steps below) |
+| `vram-Ng` | its **largest single card** has at least N GiB (see the steps below). A card that shares the machine's memory, like DGX Spark's GB10, has no VRAM figure: it shows `shared`, and `RAM FREE` is what it can use |
 | `cores-N` | at least N logical CPUs (a 16-core CPU with hyperthreading has 32) |
 | `ram-Ng` | at least N GiB of memory |
 | `storage-Nt` | its largest writable volume holds at least N TiB in total |
@@ -84,8 +84,9 @@ NOTE column. In order:
 | *shared multi-user host -- not claimable* | always, for a `shared` machine |
 | *RENTAL is idle -- this is costing money* | a `rental` with at least one GPU, none of them busy |
 
-A GPU counts as **busy** at 10% utilisation or more, or with 1 GiB or more of compute
-memory in use.
+A GPU counts as **busy** at 10% utilisation or more, with 1 GiB or more of compute
+memory in use, or with 4 GiB or more held by processes fleet cannot see (a job in a
+container, another user's).
 
 `fleet ls` (not `--json`) can also print a line when an agent on this machine reads an
 older description of fleet.

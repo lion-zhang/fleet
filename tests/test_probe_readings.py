@@ -80,6 +80,29 @@ def test_a_broken_gpu_driver_is_reported_as_broken(tmp_path, bin_):
     assert snap.gpus == [] and snap.gpu_driver == ""
 
 
+def test_a_gpu_tool_that_hangs_does_not_make_the_machine_look_off(tmp_path, bin_):
+    """A card that fell off the bus leaves nvidia-smi hanging. The probe waited on it
+    until fleet gave up on the machine: "nothing answered at that address"."""
+    import time
+    _stub(bin_, "nvidia-smi", "exec sleep 60\n")
+    started = time.monotonic()
+    snap = parse_payload(_probe(tmp_path))
+    assert time.monotonic() - started < 15
+    assert snap.gpu_present == "err" and "did not answer" in snap.gpu_error
+    assert snap.mem_total_kb and snap.hostname
+
+
+def test_a_gpu_tool_that_answers_is_read_as_before(tmp_path, bin_):
+    _stub(bin_, "nvidia-smi", """case "$*" in
+  *driver_version*) echo 550.54.15 ;;
+  *index,uuid*) echo "0, GPU-1, NVIDIA A100, 81920, 1024, 80896, 3, 30, 60.0" ;;
+esac
+""")
+    snap = parse_payload(_probe(tmp_path))
+    assert snap.gpu_present == "1" and snap.gpu_driver == "550.54.15"
+    assert [(g.name, g.vram_free_mib) for g in snap.gpus] == [("NVIDIA A100", 80896)]
+
+
 def test_a_disk_with_a_space_in_its_name_is_reported_by_its_name(tmp_path, bin_):
     _stub(bin_, "df", """echo "Filesystem 1024-blocks Used Available Capacity Mounted on"
 echo "/dev/disk4s1 976000000 900000000 76000000 93% /Volumes/My Passport"

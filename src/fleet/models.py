@@ -50,6 +50,10 @@ class Gpu:
     power_w: float | None = None
     compute_used_mib: int = 0
     display_used_mib: int = 0
+    # The card has no memory of its own to report: it shares the machine's (DGX Spark's
+    # GB10), and nvidia-smi says [N/A]. Read as 0, it was "0.0G idle", a card nothing
+    # fits on, on a machine with 100G free to give it.
+    shared_memory: bool = False
 
     @property
     def unattributed_mib(self) -> int:
@@ -59,7 +63,8 @@ class Gpu:
 
     @property
     def busy(self) -> bool:
-        return self.util_pct >= 10 or self.compute_used_mib >= 1024
+        return (self.util_pct >= 10 or self.compute_used_mib >= 1024
+                or self.unattributed_mib >= 4096)    # render.view.HIDDEN_BUSY_MIB
 
 
 @dataclass(slots=True)

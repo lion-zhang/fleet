@@ -372,7 +372,8 @@ def _print_show(r: dict) -> None:
     for g in r["gpus"]:
         bar = "█" * (g["util_pct"] // 10) + "░" * (10 - g["util_pct"] // 10)
         console.print(f"  gpu{g['idx']}  {escape(g['name'])}  {bar} {g['util_pct']}%   "
-                      f"{g['vram_free_mib']/1024:.1f}/{g['vram_total_mib']/1024:.1f} GB free")
+                      + ("memory shared with the cpu: ram above" if g.get("shared_memory") else
+                         f"{g['vram_free_mib']/1024:.1f}/{g['vram_total_mib']/1024:.1f} GB free"))
         if g["display_used_mib"]:
             console.print(f"        [dim]{g['display_used_mib']} MiB desktop overhead (not a job)[/dim]")
         if g["unattributed_mib"]:
