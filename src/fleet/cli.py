@@ -43,6 +43,7 @@ from .onboard import derive_id, onboard, onboard_self
 from .ops import FleetError, identity
 from .ops.names import canonical as _canonical
 from .ops.remote import run_script as _run_script
+from .ops import rows as rows_mod
 from .ops.rows import snapshot as _rows, tick as _live_tick
 from .probe.runner import PAYLOAD, probe_env, probe_many, run_probe, run_probe_local
 from .render import view as view_mod
@@ -164,7 +165,14 @@ def cmd_ls(names: list[str] = typer.Argument(None, help="only these devices"),
         # `fleet ls koa04 --tag gpu` probes and answers differently.
         # A machine with tags of its own but no reading is just as blind to `--tag cuda`:
         # counting only the untagged ones left it out of the count as well as the list.
-        blind = [r["name"] for r in rows if not r["facts"]
+        # So is one whose only fact is its kind -- `rental`, `shared`, `appliance` come
+        # from the list, not a reading: a fleet of rentals never reached went uncounted.
+        # Those facts, asked for, are judged all the same: `--tag rental` needs no reading,
+        # and a machine that is not a rental fails `--tag rental --tag cuda` on that alone.
+        listed = [t for t in tag if view_mod.normalise_tag(t) in view_mod.LISTED_FACTS]
+        blind = [r["name"] for r in rows
+                 if not (r.get("observed_at") or {}).get("probe")
+                 and all(matches_tag(r, t) for t in listed)
                  and not all(matches_tag(r, t) for t in tag)]
         rows = [r for r in rows if all(matches_tag(r, t) for t in tag)]
         if blind:
@@ -1461,8 +1469,9 @@ def cmd_top(name: str = typer.Argument(None, help="one device, instead of the wh
     detail = Detail.FULL
     live_within = max(int(interval * 3), 5)
 
-    def frame(keys: bool = True):
-        rows = _live_tick(conn, devices, schedule, cfg, detail, named=bool(name))
+    def frame(keys: bool = True, probe: bool = True):
+        rows = (_live_tick(conn, devices, schedule, cfg, detail, named=bool(name)) if probe
+                else rows_mod.render(conn, devices, detail))
         if name:
             return render_device(rows[0], live_within)
         view = fleet_view(rows)
@@ -1487,20 +1496,26 @@ def cmd_top(name: str = typer.Argument(None, help="one device, instead of the wh
         conn.close()
         return
 
+    # The window draws what the store has while the machines are asked in the
+    # background, so it is there at once and `q` always answers.
+    probes = rows_mod.Background(devices, lambda: Schedule(
+        interval=interval, shared_interval=float(cfg.shared_min_interval_s)),
+        cfg, named=bool(name)).start()
     try:
-        with _raw_stdin(), Live(frame(), console=console, screen=True,
+        with _raw_stdin(), Live(frame(probe=False), console=console, screen=True,
                                 refresh_per_second=8) as live:
             while True:
-                key = _key_pressed(interval)
+                # At least once a second, so a machine that just answered shows up.
+                key = _key_pressed(min(interval, 1.0))
                 if key in ("q", "Q", "\x03", "\x04"):
                     break
                 if key in ("r", "R"):
-                    schedule = Schedule(interval=interval,      # everything due at once
-                                        shared_interval=float(cfg.shared_min_interval_s))
-                live.update(frame())
+                    probes.again()
+                live.update(frame(probe=False))
     except KeyboardInterrupt:
         pass
     finally:
+        probes.stop()
         conn.close()
 
 
@@ -1977,20 +1992,34 @@ def cmd_doctor(name: str = typer.Argument(None, help="one machine; all that are 
                        not in (None, Status.OK.value)]
         finally:
             conn.close()
-    verdicts = []
-    for dev in targets:
-        conn = store.connect()
-        try:
-            state, snap = store.latest(conn, dev.id)
-        finally:
-            conn.close()
-        verdicts.append(doctor.diagnose(dev, state=state, snap=snap))
-    if _emit({"machines": [v.to_dict() for v in verdicts]}, json_out):
-        return
-    if not verdicts:
-        console.print("[green]✓[/green] every machine fleet watches answered its last probe"
-                      " [dim](fleet doctor NAME looks at one now)[/dim]")
-        return
+    conn = store.connect()
+    try:
+        last = [store.latest(conn, dev.id) for dev in targets]
+    finally:
+        conn.close()
+    # Side by side, as `ls` probes, and each said as soon as it and those before it are
+    # done: one after another, twenty machines that were switched off kept `fleet doctor`
+    # silent for minutes, and two hundred for longer than anyone waits.
+    import concurrent.futures
+
+    pool = concurrent.futures.ThreadPoolExecutor(
+        max_workers=max(1, min(int(load_config().max_workers), len(targets) or 1)))
+    try:
+        found = pool.map(lambda job: doctor.diagnose(job[0], state=job[1][0], snap=job[1][1]),
+                         zip(targets, last))
+        if json_out:
+            _emit({"machines": [v.to_dict() for v in found]}, True)
+            return
+        if not targets:
+            console.print("[green]✓[/green] every machine fleet watches answered its last "
+                          "probe [dim](fleet doctor NAME looks at one now)[/dim]")
+            return
+        _print_verdicts(found)
+    finally:
+        pool.shutdown(wait=False, cancel_futures=True)
+
+
+def _print_verdicts(verdicts) -> None:
     for v in verdicts:
         mark = "[green]✓[/green]" if v.status == Status.OK.value else "[red]✗[/red]"
         console.print(f"{mark} [bold]{v.name}[/bold]  [dim]{v.status}"

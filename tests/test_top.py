@@ -429,3 +429,51 @@ def test_a_failing_machine_is_never_asked_more_often_than_a_healthy_one():
     shared = _dev("koa04", Kind.SHARED)
     s.record(shared.id, ok=False, now=0)
     assert s.due([shared], now=120) == []
+
+
+def test_a_machine_that_never_answers_holds_up_neither_the_others_nor_quitting(monkeypatch):
+    """Probed inside each frame, the frame waited for every machine due: dozens switched
+    off left `fleet top` a blank screen for a minute that `q` could not end."""
+    import threading
+    import time
+    from types import SimpleNamespace
+
+    from fleet.ops import rows
+
+    done, release = [], threading.Event()
+
+    def probe(conn, due, cfg, **k):
+        if due[0].name == "dead":
+            release.wait(30)          # a host that never speaks ssh
+        done.append(due[0].name)
+
+    monkeypatch.setattr(rows, "_probe", probe)
+    monkeypatch.setattr(rows.store, "connect", lambda: SimpleNamespace(close=lambda: None))
+    devices = [_dev("dead"), _dev("a"), _dev("b")]
+    bg = rows.Background(devices, lambda: Schedule(interval=60),
+                         SimpleNamespace(max_workers=8)).start()
+    try:
+        deadline = time.monotonic() + 5
+        while len(done) < 2 and time.monotonic() < deadline:
+            time.sleep(0.01)
+        assert sorted(done) == ["a", "b"]
+        started = time.monotonic()
+        bg.stop()
+        assert time.monotonic() - started < 0.5
+    finally:
+        release.set()
+
+
+def test_one_machine_is_probed_on_the_thread_that_asked(monkeypatch):
+    """A pool's worker is joined when Python exits, so a probe of a host that never
+    answers, run in one for `fleet top`, kept `q` waiting until it gave up."""
+    import threading
+
+    from fleet.probe import runner
+
+    seen = []
+    monkeypatch.setattr(runner, "probe_endpoints",
+                        lambda eps, **k: seen.append(threading.current_thread()) or "r")
+    assert runner.probe_many({"a": []}) == {"a": "r"}
+    assert seen == [threading.current_thread()]
+    assert runner.probe_many({"a": [], "b": []}) == {"a": "r", "b": "r"}

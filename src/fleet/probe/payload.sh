@@ -440,11 +440,15 @@ if have df; then
     # usual case, and it alerted forever.
     # The mount point is everything after the capacity column: $6 alone cut
     # "/Volumes/My Passport" to "/Volumes/My", which df then could not find again.
+    # Twenty are kept: / and then the biggest. Cut by name, twenty shares under /mnt
+    # left out /workspace -- the 8 TB volume a rental is for, and its storage facts.
     df -Pk 2>/dev/null | awk 'NR>1 && $2+0>0 {
       m=$0; sub(/^.* [0-9]+% +/, "", m)
       if (m=="/" || m ~ /^\/(workspace|data|mnt|home|srv|opt|Volumes|scratch)/)
         printf "%s|%s|%s|%s\n", m, $2, $3, $4
-    }' | sort -u | head -20 | while IFS='|' read -r m tot used avail; do
+    }' | sort -u \
+      | awk -F'|' '{ print ($1 == "/" ? 0 : 1) "|" $0 }' | sort -t'|' -k1,1n -k3,3nr \
+      | head -20 | cut -d'|' -f2- | sort | while IFS='|' read -r m tot used avail; do
       rw=$(writable "$m")
       printf '%s|%s|%s|%s|%s\n' "$m" "$tot" "$used" "$avail" "$rw"
     done
@@ -516,6 +520,9 @@ if [ "$FLEET_MODE" != "shared" ]; then
 fi
 
 # ---------------------------------------------------------------- listening services
+# What a model server is called, and the ports one usually takes.
+LLM_NAMES='vllm|sglang|ollama|mlx|llama|lmstudio|lms|text-gen|omlx|kobold|tabby|aphrodite|litellm|local-ai|exllama'
+LLM_PORTS='8000 8001 8010 8080 11434 1234 5000 30000'
 listen=$( {
 if [ "$OS" = "Darwin" ] && have lsof; then
   # macOS: netstat exists but has no -tlnp; lsof is the only reliable source.
@@ -553,7 +560,13 @@ fi; } 2>/dev/null | awk '
     if (match($0, /pid=[0-9]+/)) pid=substr($0, RSTART+4, RLENGTH-4)
     if (match($0, /\(\("[^"]+"/)) comm=substr($0, RSTART+3, RLENGTH-4)
     printf "tcp|%s|%s|%s|%s\n", addr, port, pid, comm
-  }' | sort -u -t'|' -k3,3n | head -40 )
+  }' | sort -u -t'|' -k3,3n \
+  | awk -F'|' -v re="$LLM_NAMES" -v ports="$LLM_PORTS" '
+      # What looks like a model server first, then by port, then cut: by port alone, a
+      # node with 40 services below 8000 lost its vLLM server from `fleet models`.
+      BEGIN { n = split(ports, h, " "); for (i = 1; i <= n; i++) hint[h[i]] = 1 }
+      { print ((tolower($5) ~ re || ($3 in hint)) ? 0 : 1) "|" $0 }' \
+  | sort -t'|' -k1,1n -k4,4n | head -40 | cut -d'|' -f2- | sort -t'|' -k3,3n )
 echo "#LISTEN proto|addr|port|pid|comm"
 [ -n "$listen" ] && printf '%s\n' "$listen"
 
@@ -646,6 +659,9 @@ scan_site() {  # env-label python-version site-packages-dir
     }'
 }
 env_roots() {
+  # Named ones first: the list is cut at 40, and those came last, so on a machine with
+  # that many of its own the very environment you named to be found never was.
+  printf '%s\n' "$paths" | awk -F'|' '$1=="envs"{print $2}'
   for d in "$HOME/miniconda3" "$HOME/anaconda3" "$HOME/miniforge3" "$HOME/mambaforge" \
            "$HOME/micromamba" "$HOME/.conda" /opt/conda /opt/miniconda3; do
     [ -d "$d" ] || continue
@@ -656,7 +672,6 @@ env_roots() {
            "$HOME"/.pyenv/versions/* /workspace/.venv /workspace/*/.venv; do
     [ -d "$d/lib" ] && echo "$d"
   done
-  printf '%s\n' "$paths" | awk -F'|' '$1=="envs"{print $2}'
 }
 software_scan() {
   echo "#SOFTWARE key|value"
@@ -766,11 +781,11 @@ PY
   { printf '%s\n' "$declared" | FLEET_LISTEN="$listen" awk -F'|' '
       BEGIN { n = split(ENVIRON["FLEET_LISTEN"], rows, "\n"); for (i = 1; i <= n; i++) { split(rows[i], f, "|"); at[f[3]] = f[2] } }
       $1 != "" { print (($1 in at) ? at[$1] : "127.0.0.1") "|" $1 "|" $2 }'
-    printf '%s\n' "$listen" | awk -F'|' '
-      BEGIN { split("8000 8001 8010 8080 11434 1234 5000 30000", h, " "); for (i in h) hint[h[i]] = 1 }
+    printf '%s\n' "$listen" | awk -F'|' -v re="$LLM_NAMES" -v ports="$LLM_PORTS" '
+      BEGIN { n = split(ports, h, " "); for (i = 1; i <= n; i++) hint[h[i]] = 1 }
       tolower($5) ~ /^(vllm|sglang)::/ && tolower($5) !~ /::(api|http)/ { next }   # engine workers
       tolower($5) ~ /^(controlce|ctrlcenter|airplay)/ { next }                 # macOS AirPlay on :5000
-      tolower($5) ~ /vllm|sglang|ollama|mlx|llama|lmstudio|lms|text-gen|omlx|kobold|tabby|aphrodite|litellm|local-ai|exllama/ || ($3 in hint) { print $2 "|" $3 "|" }'
+      tolower($5) ~ re || ($3 in hint) { print $2 "|" $3 "|" }'
   } | awk -F'|' '$2 != "" && !seen[$2]++' | head -8 | while IFS='|' read -r addr port base; do
     case "$addr" in
       ""|"*"|0.0.0.0|"::"|"[::]"|127.*) host=127.0.0.1 ;;
