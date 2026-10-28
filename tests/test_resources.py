@@ -308,7 +308,7 @@ def test_software_compact_is_one_line_and_full_is_per_environment():
                         "version": "2.5.0"}],
             "containers": [{"image": "vllm/vllm-openai", "name": "v", "status": "Up"}]}
     compact = software_view(snap, full=False)
-    assert compact == {"cuda": "12.4", "python": "3.11.9", "torch": "2.4.1"}
+    assert compact == {"cuda": "12.4", "python": "3.11.9", "torch": "2.5.0"}   # the newest
     full = software_view(snap, full=True)
     assert [e["env"] for e in full["envs"]] == ["~/.venvs/a", "~/.venvs/b"]
     assert full["containers"][0]["image"] == "vllm/vllm-openai"

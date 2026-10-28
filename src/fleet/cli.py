@@ -150,8 +150,10 @@ def cmd_ls(names: list[str] = typer.Argument(None, help="only these devices"),
         raise typer.Exit(1)
     rows = _rescanned(list(names) if names else None, refresh=refresh, rescan=rescan,
                       wait=wait, detail=Detail.COMPACT)
+    known_rows = bool(rows)
     if online:
         rows = [r for r in rows if r["status"] == "ok"]
+    tag = view_mod.split_tags(tag)
     if tag:
         # Say what could not be judged rather than dropping it silently. A machine with no
         # telemetry has no facts, so it fails every filter -- and the fleet is factless
@@ -159,7 +161,10 @@ def cmd_ls(names: list[str] = typer.Argument(None, help="only these devices"),
         # probes `probeable`, and SHARED is forced to on_demand at onboarding because one
         # cluster hangs ~75s, so a bare `fleet ls --tag gpu` judges it on nothing while
         # `fleet ls koa04 --tag gpu` probes and answers differently.
-        blind = [r["name"] for r in rows if not r["facts"] and not r["tags"]]
+        # A machine with tags of its own but no reading is just as blind to `--tag cuda`:
+        # counting only the untagged ones left it out of the count as well as the list.
+        blind = [r["name"] for r in rows if not r["facts"]
+                 and not all(matches_tag(r, t) for t in tag)]
         rows = [r for r in rows if all(matches_tag(r, t) for t in tag)]
         if blind:
             err.print(f"[dim]! {len(blind)} with no telemetry were not considered: "
@@ -178,6 +183,12 @@ def cmd_ls(names: list[str] = typer.Argument(None, help="only these devices"),
         err.print("[dim]· --fields applies to --json[/dim]")
     if _emit(view, json_out):
         return
+    if not rows and known_rows:
+        # "No devices yet" with machines in the list sent people to add one they had.
+        asked = [f"--tag {t}" for t in tag] + (["--online"] if online else [])
+        err.print(f"[yellow]No machine matches {escape(' '.join(asked))}.[/yellow]  "
+                  "[dim]`fleet ls` lists them all[/dim]")
+        raise typer.Exit(0)
     if not rows:
         err.print("[yellow]No devices yet.[/yellow]  Add one:  "
                   "[bold]fleet add \"ssh user@host\"[/bold]")
@@ -535,7 +546,7 @@ def _no_such(devices, name: str):
     raise typer.Exit(1)
 
 
-def _tags(values) -> list[str] | None:
+def _tags(values, *, untag: bool = False) -> list[str] | None:
     """Normalise a repeatable --tag/--untag into a clean list, or None if unmentioned.
 
     Lowercased because the request that prompted tags said "GPU", "NAS" and "IP" while
@@ -544,7 +555,11 @@ def _tags(values) -> list[str] | None:
     """
     if not values:
         return None
-    return [t for t in (view_mod.normalise_tag(v) for v in values) if t] or None
+    tags = view_mod.split_tags(values)
+    if untag:
+        # A tag stored whole before tags were split -- "training,big" -- can still go.
+        tags += [w for w in map(view_mod.normalise_tag, values) if w and w not in tags]
+    return tags or None
 
 
 
@@ -931,7 +946,7 @@ def cmd_edit(name: str = typer.Argument(None, help="defaults to this machine"),
             here_tag = None
             # `fleet add --tag` keeps its tags in this list, so removing one has to
             # reach here as well: otherwise it said "tags: -" and `ls` still showed it.
-            here_untag = [t for t in (_tags(untag) or []) if t in dev.tags] or None
+            here_untag = [t for t in (_tags(untag, untag=True) or []) if t in dev.tags] or None
             # The same for a cost kept here with --local: `--cost 0` said "cleared" and
             # the machine went on costing that much in `ls`.
             here_cost = 0 if cost == 0 and (dev.cost or {}).get("usd_per_hour") else None
@@ -945,7 +960,7 @@ def cmd_edit(name: str = typer.Argument(None, help="defaults to this machine"),
         on_machine_doc = _edit_machine_file(
             dev, json_out, paths=path or [], endpoints=endpoint or [], note=note,
             tags_add=[] if local else (_tags(tag) or []),
-            tags_remove=[] if local else (_tags(untag) or []),
+            tags_remove=[] if local else (_tags(untag, untag=True) or []),
             cost=None if local else cost, emit=not more)
         if not more:
             return
@@ -961,7 +976,7 @@ def cmd_edit(name: str = typer.Argument(None, help="defaults to this machine"),
 
     def _edit(target, current):
         return apply_edits(target, name=new_name, alias=new_alias,
-                           add_tags=_tags(tag), drop_tags=_tags(untag),
+                           add_tags=_tags(tag), drop_tags=_tags(untag, untag=True),
                            taken=inv.handles(current, excluding=target.id),
                            endpoint=endpoint, disk_paths=paths, usd_per_hour=cost)
 
@@ -1707,6 +1722,14 @@ def cmd_setup(
     else:
         targets = [target] if target in TARGETS else []
         clients = [target] if target in mcp_names else []
+        if clients and project and target != "cursor":
+            # It wrote .config/Claude/claude_desktop_config.json into the repo, where no
+            # desktop app looks, and said "created". Cursor alone reads the same path,
+            # .cursor/mcp.json, in a project as in your home.
+            err.print(f"[red]{target} keeps one config for you, not one per project[/red]  "
+                      f"[dim]-- run [bold]fleet setup --target {target}[/bold] without "
+                      "--project[/dim]")
+            raise typer.Exit(2)
 
     if unknown := [t for t in [target] if t not in (*TARGETS, *mcp_names, "all", "auto")]:
         err.print(f"[red]Unknown target {unknown[0]!r}[/red]  "
@@ -1848,6 +1871,22 @@ def cmd_paths():
                       f"({_cfg.CONFIG_DIR}).[/dim]")
 
 
+def _not_added(name: str) -> Device | None:
+    """A machine `fleet add` refused, as `fleet doctor` is told to look at it.
+
+    `fleet add` records nothing when it cannot get in, and the guides send people to
+    `fleet doctor NAME` for the fix -- which answered "No machine named" for exactly the
+    machines it is for.
+    """
+    import dataclasses
+
+    try:
+        ep = resolve_command(name if name.lstrip().startswith("ssh ") else f"ssh {name}")
+    except Exception:  # noqa: BLE001 - anything ssh will not read is simply not a machine
+        return None
+    return Device(id="", name=name, endpoints=[dataclasses.asdict(ep)])
+
+
 @app.command("doctor")
 def cmd_doctor(name: str = typer.Argument(None, help="one machine; all that are failing if omitted"),
                json_out: bool = typer.Option(False, "--json", help="print JSON instead of a table, for scripts and agents")):
@@ -1864,10 +1903,13 @@ def cmd_doctor(name: str = typer.Argument(None, help="one machine; all that are 
 
     devices = inv.live(inv.load())
     if name:
-        dev = inv.find(devices, name)
+        dev = inv.find(devices, name) or _not_added(name)
         if dev is None:
             err.print(f"[red]No machine named {name!r}[/red]")
             raise typer.Exit(1)
+        if not dev.id and not json_out:
+            err.print(f"[dim]{escape(name)} is not in your list: looking at it as an ssh "
+                      "address, as `fleet add` would[/dim]")
         targets = [dev]
     else:
         conn = store.connect()

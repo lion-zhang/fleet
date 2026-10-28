@@ -153,7 +153,11 @@ def _alive(owner: dict) -> bool:
     if pid <= 0:
         return False
     if pid == os.getpid():
-        return True
+        # Our own pid on a ticket is ours only if it was taken since we started: in a
+        # container every run can be pid 1, and a ticket a killed run left behind made
+        # the next one wait on itself until the ticket went stale.
+        started = float(owner.get("started") or 0)
+        return not started or abs(_start_time(pid) - started) < 1.0
     try:
         import psutil
 

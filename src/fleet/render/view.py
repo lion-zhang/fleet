@@ -8,6 +8,8 @@ rather than a bug you find at 2am.
 
 from __future__ import annotations
 
+import re
+
 import time
 from enum import StrEnum
 from typing import Any
@@ -219,6 +221,21 @@ def normalise_tag(tag: str) -> str:
     return (tag or "").strip().lower()
 
 
+def split_tags(values) -> list[str]:
+    """Each tag in `--tag a,b` or `--tag "a b"`, normalised, once each.
+
+    Tags are shown space-separated and written comma-separated by habit, so `--tag
+    training,big` was stored as the one tag "training,big", which no `--tag training`
+    ever found.
+    """
+    out: list[str] = []
+    for v in values or []:
+        for t in re.split(r"[,\s]+", str(v)):
+            if (t := normalise_tag(t)) and t not in out:
+                out.append(t)
+    return out
+
+
 def _disk_view(d: dict) -> dict:
     """One mount, in the units a human and an agent both read.
 
@@ -337,6 +354,11 @@ def _one_per_ollama(rows: list[dict]) -> list[dict]:
             or id(r) in chosen]
 
 
+def _version_key(v: str) -> tuple[int, ...]:
+    """"2.10.0" after "2.9.1", as numbers; good enough for picking the newest of a few."""
+    return tuple(int(n) for n in re.findall(r"\d+", str(v).split("+")[0])[:4])
+
+
 def software_view(snap: dict | None, *, full: bool) -> dict:
     """The stack: system versions, then each Python environment and what is in it."""
     snap = snap or {}
@@ -350,7 +372,10 @@ def software_view(snap: dict | None, *, full: bool) -> dict:
         best: dict[str, str] = {}
         for e in envs.values():
             for k, v in e["packages"].items():
-                best.setdefault(k, v)
+                # The newest, as the comment says: the first environment read won, so a
+                # stale venv's torch 2.1 was the answer on a box that also had 2.5.
+                if k not in best or _version_key(v) > _version_key(best[k]):
+                    best[k] = v
         keep = ("cuda", "nvcc", "rocm", "metal", "python", "docker")
         return {**{k: v for k, v in snap.get("software", {}).items() if k in keep}, **best}
     out = {"system": dict(snap.get("software", {})), "envs": list(envs.values())}
@@ -543,7 +568,7 @@ def device_view(dev: Device, state: dict | None, snap: dict | None,
             "services_detail": (snap or {}).get("services", []),
             "endpoints": [{k: v for k, v in e.items() if k != "identity"}
                           for e in dev.endpoints],
-            "connect": connect_view(dev, state),
+            "connect": connect_view(dev, state, here=bool(self_id and dev.id == self_id)),
             "probe_policy": dev.probe_policy,
             "provider": dev.provider,
             "cost": cost,
@@ -551,7 +576,7 @@ def device_view(dev: Device, state: dict | None, snap: dict | None,
     return out
 
 
-def connect_view(dev: Device, state: dict | None = None) -> dict[str, Any]:
+def connect_view(dev: Device, state: dict | None = None, *, here: bool = False) -> dict[str, Any]:
     """How to reach this device -- NEVER a secret.
 
     Anything returned here can land in an agent transcript, be persisted to disk, and be
@@ -561,7 +586,10 @@ def connect_view(dev: Device, state: dict | None = None) -> dict[str, Any]:
     from ..state.inventory import endpoints_of
     eps = sorted(endpoints_of(dev), key=lambda e: e.preference)
     if not eps:
-        return {"ssh_command": None, "hint": "no endpoint recorded"}
+        # The machine fleet runs on needs none, and "no endpoint recorded" under the
+        # very first `fleet show` read as something to fix.
+        return {"ssh_command": None,
+                "hint": "this machine: run commands here" if here else "no endpoint recorded"}
     best = eps[0]
     if auth_of(dev, state) == "refused":
         return {"ssh_command": best.ssh_command(), "user": best.user, "port": best.port,

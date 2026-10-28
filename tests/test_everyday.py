@@ -152,7 +152,7 @@ def test_show_says_a_mount_is_read_only_and_uses_the_same_units_as_ls(monkeypatc
     vendor = next(ln for ln in r.output.splitlines() if "/opt/vendor-tools" in ln)
     assert "read-only" in vendor
     data = next(ln for ln in r.output.splitlines() if "/data" in ln)
-    assert re.search(r"\b1024\.0T free", data), data
+    assert re.search(r"\b1\.0P free", data), data
 
 
 # ------------------------------------------------------------------ update
