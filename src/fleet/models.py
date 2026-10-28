@@ -199,6 +199,7 @@ class Snapshot:
     pyenvs: list[PyPackage] = field(default_factory=list)
     # None when the probe did not look (a light probe, or no docker), not "none running".
     containers: list[Container] | None = None
+    containers_total: int | None = None   # how many run; `containers` lists the first 20
     # A quick re-read for `fleet top`: whatever the light probe skips is carried over
     # from the reading before it (store.record).
     light: bool = False

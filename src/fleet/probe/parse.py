@@ -341,6 +341,8 @@ def _parse_resources(snap: Snapshot, kv: dict[str, str], rows: dict[str, list[st
                 snap.containers.append(Container(
                     image=f[0].strip(), name=f[1].strip(), status=f[2].strip(),
                     ports="|".join(f[3:]).strip()))
+        counts = dict(ln.split("|", 1) for ln in rows.get("COUNT", []) if "|" in ln)
+        snap.containers_total = max(_int(counts.get("containers")) or 0, len(snap.containers))
 
     # Servers the machine's notes declare: marked as such, and listed even when no
     # listening port was seen for them (it may be down -- the answer below says so).

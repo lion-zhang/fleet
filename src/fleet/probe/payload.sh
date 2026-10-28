@@ -726,6 +726,14 @@ scan_site() {  # env-label python-version site-packages-dir
       name = tolower(substr(s, 1, RSTART - 1)); ver = substr(s, RSTART + 1)
       gsub(/[-.]/, "_", name)
       if (index(pk, " " name " ")) printf "%s|%s|%s|%s\n", env, py, name, ver
+    }
+    # What `setup.py install` leaves -- the pytorch conda channel, flash-attn or apex
+    # built from source: torch-2.1.0-py3.10.egg-info, or an .egg. Its name never holds a
+    # "-", so the second part is the version.
+    /\.egg(-info)?$/ && split($0, f, "-") >= 2 {
+      name = tolower(f[1]); ver = f[2]; sub(/\.egg(-info)?$/, "", ver)
+      gsub(/[-.]/, "_", name)
+      if (index(pk, " " name " ")) printf "%s|%s|%s|%s\n", env, py, name, ver
     }'
 }
 env_roots() {
@@ -782,8 +790,8 @@ software_scan() {
         scan_site "$(short "$root")" "$py" "$sp"
       done
     done
-  } | awk '!seen[$0]++' | head -200
-}
+  } | awk '!seen[$0]++' | head -1300   # 40 environments and the system's, ~30 names each:
+}                                      # at 200 the last of the 40 were never listed
 sw="$CACHE/software"
 if [ -n "$CACHE" ] && [ "${FLEET_REFRESH:-}" != "1" ] && age_ok "$sw" 21600 \
      && [ "$(sed -n '1s/^#v1 [0-9]* //p' "$sw")" = "$gpu_driver" ]; then
@@ -805,9 +813,13 @@ fi
 # ---------------------------------------------------------------- containers
 if [ "${FLEET_LIGHT:-}" != "1" ] && have docker; then
   T=; timeout -s KILL 5 true >/dev/null 2>&1 && T="timeout -s KILL 3"
+  running=$($T docker ps --format '{{.Image}}|{{.Names}}|{{.Status}}|{{.Ports}}' 2>/dev/null \
+    | tr -d '\r' | cut -c1-300)
   echo "#CONTAINER image|name|status|ports"
-  $T docker ps --format '{{.Image}}|{{.Names}}|{{.Status}}|{{.Ports}}' 2>/dev/null \
-    | tr -d '\r' | cut -c1-300 | head -20
+  [ -n "$running" ] && printf '%s\n' "$running" | head -20
+  # Twenty are listed; how many there are, so the rest are not taken for none.
+  echo "#COUNT what|total"
+  printf 'containers|%s\n' "$(printf '%s' "$running" | grep -c .)"
 fi
 
 # ---------------------------------------------------------------- LLM servers

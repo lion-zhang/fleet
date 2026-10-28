@@ -403,6 +403,8 @@ def software_view(snap: dict | None, *, full: bool) -> dict:
     out = {"system": dict(snap.get("software", {})), "envs": list(envs.values())}
     if snap.get("containers") is not None:
         out["containers"] = snap["containers"]
+        # `containers` lists at most 20 of them
+        out["containers_total"] = max(snap.get("containers_total") or 0, len(snap["containers"]))
     return out
 
 

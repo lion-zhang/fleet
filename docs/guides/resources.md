@@ -95,7 +95,7 @@ Up to 40 environments are read on each machine, the ones named there first.
 
 **Packages are read from the names of their install folders, never by importing them.**
 Importing torch takes seconds and can start a CUDA context on a GPU somebody else is
-using. Because of that, a package installed in a way that leaves no `.dist-info` folder
+using. Because of that, a package installed in a way that leaves no `.dist-info`, `.egg-info` or `.egg`
 (an editable install, for example) may not be listed.
 
 The software list is worked out on the machine and kept there for six hours, so reading

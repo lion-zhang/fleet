@@ -343,3 +343,15 @@ def test_servers_that_never_answer_do_not_hold_the_probe_past_its_limit(tmp_path
     finally:
         for s in socks:
             s.close()
+
+
+def test_a_machine_with_many_containers_says_how_many(tmp_path, bin_):
+    """Twenty are listed; a box running 25 showed twenty and nothing of the rest."""
+    _stub(bin_, "docker", 'case "$1" in ps) i=0; while [ $i -lt 25 ]; do '
+                          'echo "img:$i|c$i|Up 2 hours|"; i=$((i+1)); done ;; '
+                          '--version) echo "Docker version 27.0.1, build x" ;; esac\n')
+    snap = parse_payload(_probe(tmp_path))
+    assert len(snap.containers) == 20 and snap.containers_total == 25
+    _stub(bin_, "docker", 'case "$1" in --version) echo "Docker version 27.0.1" ;; esac\n')
+    snap = parse_payload(_probe(tmp_path))
+    assert snap.containers == [] and snap.containers_total == 0
