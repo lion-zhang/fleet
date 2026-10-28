@@ -40,9 +40,12 @@ def test_purge_deletes_fleets_files_and_nothing_else(home):
     inv.save([Device(id="id:box", name="box", kind=Kind.PERMANENT)])
     mine = config.CONFIG_DIR / "notes-of-someone-else.txt"
     mine.write_text("not fleet's")
+    hidden = config.CONFIG_DIR / "discover-hidden.txt"       # `fleet discover --hide`
+    hidden.write_text("nas\n")
     r = CliRunner().invoke(cli.app, ["uninstall", "--yes", "--purge", "--json"])
     assert r.exit_code == 0, r.output
     assert not inv.INVENTORY_PATH.exists()
+    assert not hidden.exists(), "a file fleet wrote, left behind by --purge"
     assert mine.exists(), "never by globbing a directory"
 
 

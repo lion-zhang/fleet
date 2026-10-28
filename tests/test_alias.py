@@ -378,6 +378,42 @@ def test_untag_removes_a_tag_that_add_kept_here(tmp_path, monkeypatch):
     assert inv.find_exact(inv.load(), "box").tags == []
 
 
+def test_an_edit_that_changes_both_places_prints_one_json_document(tmp_path, monkeypatch):
+    """A note goes to the machine's file and a new name to this list. Each half printed
+    its own document, and two back to back are not JSON: the MCP server's edit_machine
+    handed the agent raw text. `--untag` of a tag kept here did the same."""
+    import json
+
+    from fleet.ops import machinefile
+
+    runner = _cli(tmp_path, monkeypatch, [
+        Device(id="id:box", name="box", kind=Kind.PERMANENT, tags=["web"],
+               endpoints=[{"target": "10.0.0.5", "user": "root", "port": 22}])])
+    monkeypatch.setattr(machinefile, "change", lambda *a, **k: ("", "notes: hi\n"))
+    for args in (["--note", "hi", "--name", "box2"], ["--untag", "web"]):
+        name = inv.load()[0].name
+        r = runner.invoke(cli.app, ["edit", name, *args, "--json"])
+        assert r.exit_code == 0, r.output
+        doc = json.loads(r.stdout)
+        assert doc["ok"] and doc["changes"], doc
+    assert doc["name"] == "box2" and doc["notes"] == "hi"
+    assert inv.find_exact(inv.load(), "box2").tags == []
+
+
+def test_cost_0_also_clears_a_cost_kept_here(tmp_path, monkeypatch):
+    """`--cost 0` cleared the machine's file and said "cleared", while a cost set with
+    --local stayed, and `ls` went on showing the machine costing that much."""
+    from fleet.ops import machinefile
+
+    runner = _cli(tmp_path, monkeypatch, [
+        Device(id="id:box", name="box", kind=Kind.RENTAL, cost={"usd_per_hour": 2.0},
+               endpoints=[{"target": "10.0.0.5", "user": "root", "port": 22}])])
+    monkeypatch.setattr(machinefile, "change", lambda *a, **k: ("cost: 1.5\n", ""))
+    r = runner.invoke(cli.app, ["edit", "box", "--cost", "0"])
+    assert r.exit_code == 0, r.output
+    assert not (inv.find_exact(inv.load(), "box").cost or {}).get("usd_per_hour")
+
+
 def test_a_prefix_that_fits_several_machines_says_which(tmp_path, monkeypatch):
     runner = _cli(tmp_path, monkeypatch, [
         Device(id="id:1", name="cloud-1", kind=Kind.PERMANENT),

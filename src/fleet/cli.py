@@ -404,12 +404,15 @@ def _print_show(r: dict) -> None:
 
 def _edit_machine_file(dev, json_out: bool, *, paths: list[str], endpoints: list[str],
                        note: str | None, tags_add: list[str], tags_remove: list[str],
-                       cost: float | None) -> None:
+                       cost: float | None, emit: bool = True) -> dict | None:
     """Change the machine's own machine.yaml: folders, declared servers, tags, cost, note.
 
     Never falls back to this machine's list when the machine cannot be reached: a change
     that silently landed somewhere else would read back as done, and be invisible to
     everyone else who looks at that machine. `--local` is how to ask for that.
+
+    With `emit=False` and --json, the document is returned instead of printed, for the
+    caller to fold into its own: `--json` prints one document, whatever else changed.
     """
     from .ops import machinefile
 
@@ -473,11 +476,14 @@ def _edit_machine_file(dev, json_out: bool, *, paths: list[str], endpoints: list
                 err.print("  [dim]to keep tags or cost here instead: add --local[/dim]")
         raise typer.Exit(1)
     result = notes_mod.parse(after)
-    if _emit({"ok": True, "name": dev.name, "changed": before != after, **result}, json_out):
-        return
+    doc = {"ok": True, "name": dev.name, "changed": before != after, **result}
+    if json_out:
+        if emit:
+            _emit(doc, True)
+        return doc
     if before == after:
         console.print(f"[dim]· {dev.name}'s machine.yaml already says that.[/dim]")
-        return
+        return doc
     for kind in wanted:
         items = result.get("paths", {}).get(kind)
         console.print(f"[green]✓[/green] {dev.name} {kind}: "
@@ -495,6 +501,7 @@ def _edit_machine_file(dev, json_out: bool, *, paths: list[str], endpoints: list
         console.print(f"[green]✓[/green] {dev.name} note: " + (result.get("notes") or "cleared"))
     console.print("  [dim]kept in machine.yaml on the machine itself, so everyone who looks "
                   "at it reads the same; it shows from the next probe[/dim]")
+    return doc
 
 
 def _no_such(devices, name: str):
@@ -880,21 +887,32 @@ def cmd_edit(name: str = typer.Argument(None, help="defaults to this machine"),
 
     on_machine = bool(path or endpoint or note is not None
                       or (not local and (tag or untag or cost is not None)))
+    on_machine_doc: dict | None = None
     if on_machine:
-        _edit_machine_file(dev, json_out, paths=path or [], endpoints=endpoint or [],
-                           note=note,
-                           tags_add=[] if local else (_tags(tag) or []),
-                           tags_remove=[] if local else (_tags(untag) or []),
-                           cost=None if local else cost)
+        here_tag, here_untag, here_cost = tag, untag, cost
         if not local:
-            tag = cost = None
+            here_tag = None
             # `fleet add --tag` keeps its tags in this list, so removing one has to
             # reach here as well: otherwise it said "tags: -" and `ls` still showed it.
-            untag = [t for t in (_tags(untag) or []) if t in dev.tags] or None
-        if not any(v not in (None, False, []) for v in (
-                ssh_command, disk_path, clear_disk_paths, new_name, new_alias, tag, untag,
-                cost)):
+            here_untag = [t for t in (_tags(untag) or []) if t in dev.tags] or None
+            # The same for a cost kept here with --local: `--cost 0` said "cleared" and
+            # the machine went on costing that much in `ls`.
+            here_cost = 0 if cost == 0 and (dev.cost or {}).get("usd_per_hour") else None
+        # `here_cost` by itself: 0 is the one cost that asks for something, and
+        # `0 in (None, False)` is true.
+        more = here_cost is not None or any(v not in (None, False, []) for v in (
+            ssh_command, disk_path, clear_disk_paths, new_name, new_alias, here_tag,
+            here_untag))
+        # One --json document for the whole edit: two, back to back, are not JSON, and
+        # the MCP server handed an agent the raw text instead of the result.
+        on_machine_doc = _edit_machine_file(
+            dev, json_out, paths=path or [], endpoints=endpoint or [], note=note,
+            tags_add=[] if local else (_tags(tag) or []),
+            tags_remove=[] if local else (_tags(untag) or []),
+            cost=None if local else cost, emit=not more)
+        if not more:
             return
+        tag, untag, cost = here_tag, here_untag, here_cost
 
     endpoint = resolve_command(ssh_command) if ssh_command else None
     paths = [] if clear_disk_paths else (list(disk_path) if disk_path else None)
@@ -916,7 +934,7 @@ def cmd_edit(name: str = typer.Argument(None, help="defaults to this machine"),
         err.print(f"[red]{exc}[/red]")
         raise typer.Exit(2)
     if not result.changes:
-        if _emit({"name": dev.name, "changes": []}, json_out):
+        if _emit({**(on_machine_doc or {}), "name": dev.name, "changes": []}, json_out):
             return
         console.print(f"[dim]· nothing to change on {dev.name}.[/dim]")
         return
@@ -940,7 +958,8 @@ def cmd_edit(name: str = typer.Argument(None, help="defaults to this machine"),
         store.rename_device(conn, result.previous_id, dev.id)
         conn.close()
 
-    if _emit({"name": dev.name, "id": dev.id, "changes": result.changes}, json_out):
+    if _emit({**(on_machine_doc or {}), "name": dev.name, "id": dev.id,
+              "changes": result.changes}, json_out):
         return
     console.print(f"[green]✓[/green] {dev.name}")
     for line in result.changes:
@@ -1086,6 +1105,20 @@ def _before_any_command(
     """
 
 
+def _kept(output: str) -> str:
+    """What the installer said when it left fleet as it was, or "".
+
+    It keeps a source checkout, or a fleet installed some other way, and says so -- and
+    exits 0, since nothing failed. That line was dropped and a "✓" printed in its place,
+    which reads as updated: the one thing that had not happened.
+    """
+    for line in output.splitlines():
+        if line.startswith("fleet here ") and ("kept as it is" in line
+                                               or "NOT updated" in line):
+            return line.strip()
+    return ""
+
+
 @app.command("update")
 def cmd_update(name: str = typer.Argument(None, help="defaults to this machine"),
                everywhere: bool = typer.Option(False, "--all",
@@ -1137,7 +1170,10 @@ def cmd_update(name: str = typer.Argument(None, help="defaults to this machine")
     # exited: a running fleet holds the very files the update replaces.
     here_later = here and local_platform() == WINDOWS
     if here and not here_later:
-        console.print(f"[dim]updating this machine from {url} ({ref})[/dim]")
+        # The URL only when git was asked for: a PyPI install is upgraded from PyPI,
+        # and "from https://github.com/... (main)" said otherwise.
+        console.print("[dim]updating this machine"
+                      + (f" from {url} ({ref})" if from_git else "") + "[/dim]")
         # local_platform, not `sh -c`: on Windows that shell is git's, and the
         # POSIX script half-runs under it. This is the machine running the command, so
         # it certainly has fleet -- update_only would be true either way, and saying so
@@ -1147,7 +1183,10 @@ def cmd_update(name: str = typer.Argument(None, help="defaults to this machine")
         p = subprocess.run(local_install_argv(),
                            input=payload_for(local_script, local_platform()),
                            capture_output=True)
-        if p.returncode == 0:
+        if p.returncode == 0 and (kept := _kept(p.stdout.decode(errors="replace"))):
+            console.print(f"[dim]·[/dim] this machine: {escape(kept)}")
+            skipped += 1
+        elif p.returncode == 0:
             console.print("[green]✓[/green] this machine")
             ok += 1
         elif p.returncode == NOTHING_TO_UPDATE:
@@ -1175,7 +1214,10 @@ def cmd_update(name: str = typer.Argument(None, help="defaults to this machine")
                                      install_script(url, ref=ref, platform=platform,
                                                     update_only=True, from_git=from_git),
                                      platform=platform)
-        if code == 0:
+        if code == 0 and (kept := _kept(output)):
+            console.print(f"[dim]·[/dim] {dev.name}: {escape(kept)}")
+            skipped += 1
+        elif code == 0:
             console.print(f"[green]✓[/green] {dev.name}")
             ok += 1
         elif code == NOTHING_TO_UPDATE:

@@ -45,7 +45,7 @@ def fleet_of(tmp_path, monkeypatch):
                         lambda ep, script, **kw: remote.append(ep.target) or (0, "ok"))
     monkeypatch.setattr(subprocess, "run",
                         lambda argv, **kw: local.append(argv) or
-                        subprocess.CompletedProcess(argv, 0, "fleet 0.4.0", ""))
+                        subprocess.CompletedProcess(argv, 0, b"fleet 0.4.0", b""))
     return CliRunner(), remote, local
 
 
@@ -219,3 +219,26 @@ def test_a_background_update_that_never_started_is_a_failure(fleet_of, monkeypat
                         lambda script: (Path("C:/f/update.log"), False))
     r = runner.invoke(cli.app, ["update"])
     assert r.exit_code == 1 and "did not start" in r.output, r.output
+
+
+def test_an_install_the_installer_kept_is_named_not_ticked(fleet_of, monkeypatch):
+    """The installer keeps a source checkout, or a fleet installed some other way, and
+    exits 0 saying so. That line was dropped for a "✓", which reads as updated."""
+    runner, _, _ = fleet_of
+    said = b"fleet here is installed from a source checkout; kept as it is\n"
+    monkeypatch.setattr(subprocess, "run",
+                        lambda argv, **kw: subprocess.CompletedProcess(argv, 0, said, b""))
+    r = runner.invoke(cli.app, ["update"])
+    assert r.exit_code == 0, r.output
+    assert "kept as it is" in r.output
+    assert "✓ this machine" not in r.output
+
+
+def test_an_update_names_a_git_source_only_when_it_uses_one(fleet_of):
+    """Without --repo or --ref an install is upgraded where it came from, PyPI for most,
+    and "updating this machine from https://github.com/... (main)" said otherwise."""
+    runner, _, _ = fleet_of
+    r = runner.invoke(cli.app, ["update"])
+    assert "updating this machine" in r.output and "example.com" not in r.output
+    r = runner.invoke(cli.app, ["update", "--repo", "git@example.com:me/fork.git"])
+    assert "from git@example.com:me/fork.git (main)" in r.output
