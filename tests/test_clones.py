@@ -160,7 +160,9 @@ def test_clones_that_share_a_home_each_read_their_own_id(tmp_path, monkeypatch):
         p = subprocess.run(["sh", "-c", remote_device_id_command(f"{BASE}:{host}", host=host)],
                            capture_output=True, text=True, env=env)
         assert p.stdout.strip() == "ok", p.stderr
-    assert len((home / ".config" / "fleet" / "device-id").read_text().splitlines()) == 2
+    folder = home / ("Library/Application Support/fleet" if sys.platform == "darwin"
+                     else ".config/fleet")
+    assert len((folder / "device-id").read_text().splitlines()) == 2
 
     def probed_as(host: str) -> str:
         bin_ = tmp_path / host
@@ -177,7 +179,7 @@ def test_clones_that_share_a_home_each_read_their_own_id(tmp_path, monkeypatch):
     assert probed_as("node9") == f"{BASE}:node9"
     assert probed_as("node7") == "", "the clone it was copied from is the machine-id's own"
 
-    monkeypatch.setattr(config, "CONFIG_DIR", home / ".config" / "fleet")
+    monkeypatch.setattr(config, "CONFIG_DIR", folder)
     monkeypatch.setattr(identity, "_machine_id", lambda: BASE)
     import socket
     for host, want in (("node9", f"{BASE}:node9"), ("node7", BASE)):
