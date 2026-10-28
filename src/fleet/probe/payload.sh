@@ -600,7 +600,6 @@ CACHE="${XDG_CACHE_HOME:-$HOME/.cache}/fleet"
 # cluster -- shares this folder too, and one node reported another's CUDA, Python and
 # Docker, and its folder sizes, for six hours.
 if [ -n "$CACHE" ]; then
-  rm -f "$CACHE/software" "$CACHE/sizes" 2>/dev/null   # kept here, shared, until 0.6.1
   mine=$(printf '%s' "${machine_id:-$hostname_v}" | tr -c 'A-Za-z0-9._-' '_' | cut -c1-64)
   CACHE="$CACHE/${mine:-this}"
   { mkdir -p "$CACHE" && [ -w "$CACHE" ]; } 2>/dev/null || CACHE=""
