@@ -18,7 +18,7 @@ from pathlib import Path
 
 from ..state.writes import replace_file
 from .registry import AGENTS, BY_NAME, TARGETS, Change
-from .usage import agents_block, hermes_skill_text, skill_text
+from .usage import agents_block, hermes_skill_text, skill_text, written_by_newer
 
 
 BEGIN = "<!-- BEGIN fleet (managed by `fleet setup`) -->"
@@ -146,7 +146,8 @@ def stale_targets(root: Path, cmd: str, *, project: bool = False) -> list[str]:
     for target in installed_targets(root, project=project):
         path = paths[target]
         current = _read(path)
-        if current is not None and current != _desired(target, path, cmd):
+        if current is not None and current != _desired(target, path, cmd) \
+                and not written_by_newer(current):
             out.append(target)
     return out
 

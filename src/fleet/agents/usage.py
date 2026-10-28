@@ -186,6 +186,25 @@ def stamp(cmd: str) -> str:
             "`fleet setup --refresh` rewrites it -->")
 
 
+def _version_key(v: str) -> tuple[int, ...]:
+    import re
+    return tuple(int(n) for n in re.findall(r"\d+", v.split("+")[0])[:3])
+
+
+def written_by_newer(text: str) -> bool:
+    """Whether a newer fleet than this one wrote this text, by the version in its stamp.
+
+    Then it is not "an older description": `fleet ls` from a second, older fleet on the
+    machine (a dev checkout beside the uv install, or one just downgraded) said so of the
+    copy the newer one wrote, and `--refresh` would have put the older words back."""
+    import re
+    m = re.search(r"<!-- fleet (\S+) #[0-9a-f]+ --", text)
+    if not m:
+        return False
+    theirs, ours = _version_key(m.group(1)), _version_key(package_version())
+    return bool(theirs and ours) and theirs > ours
+
+
 def skill_text(cmd: str) -> str:
     """A Claude Code skill file. fleet owns this file entirely."""
     return (f"---\nname: fleet\ndescription: {_DESCRIPTION}\n---\n\n{stamp(cmd)}\n\n"
