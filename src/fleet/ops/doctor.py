@@ -159,6 +159,12 @@ def advise(dev: Device, status: str, detail: str, *, snap: dict | None = None,
             v.fix.insert(0, "a rental that stopped answering on its port has usually "
                             "been destroyed or moved; check the provider's dashboard")
         return v
+    if "another machine answers" in text:
+        v.why = (f"{detail[:160]} -- it was given another machine's address, or a "
+                 "machine cloned from the same image took its address")
+        v.fix = [f"if it moved:  {readdress('ssh user@new-address')}",
+                 f"if that one is new:  fleet add \"{ep.ssh_command()}\""]
+        return v
     if status != Status.AUTH_FAILED.value:
         v.why = f"it answered, but the probe failed: {detail[:160]}"
         v.fix = [f"fleet ssh {dev.name} -- 'echo ok'   to see what the shell says"]
@@ -215,6 +221,9 @@ def diagnose(dev: Device, *, state: dict | None, snap: dict | None) -> Verdict:
     # A fresh connection, not a multiplexed one: an open master from a minute ago would
     # answer for a machine that has since stopped letting us in.
     res = probe_endpoints(eps, mode=dev.probe_mode, timeout=20, multiplex=False)
+    # "it answers, and lets us in" was said of a clone that took its address.
+    from .rows import same_machine
+    res = same_machine(dev.id, dev.name, res)
     if res.ok:
         return advise(dev, Status.OK.value, "", snap=snap, used=res.endpoint_used)
     server, verbose = ("", "")

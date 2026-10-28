@@ -21,7 +21,7 @@ import time
 from ..state import inventory as inv
 from ..state import store
 from ..config import load_config
-from ..models import Kind
+from ..models import Kind, ProbeResult, Status
 from ..probe.runner import probe_many, run_probe_local
 from ..render.view import Detail, device_view
 from . import identity
@@ -47,6 +47,7 @@ def _probe(conn, due: list, cfg, *, me: str, schedule=None, tolerant: bool = Fal
                 schedule.record(d.id, ok=res.ok, now=now)
             continue
         groups.setdefault((d.probe_mode, tuple(d.disk_paths)), {})[d.id] = inv.endpoints_of(d)
+    names = {d.id: d.name for d in due}
 
     for (mode, paths), subset in groups.items():
         try:
@@ -65,9 +66,34 @@ def _probe(conn, due: list, cfg, *, me: str, schedule=None, tolerant: bool = Fal
                     schedule.record(dev_id, ok=False, now=now)
             continue
         for dev_id, res in results.items():
+            res = same_machine(dev_id, names.get(dev_id, ""), res)
             store.record(conn, dev_id, res)
             if schedule is not None:
                 schedule.record(dev_id, ok=res.ok, now=now)
+
+
+def same_machine(dev_id: str, name: str, res: ProbeResult) -> ProbeResult:
+    """A reading of another machine is not this one's.
+
+    An address handed to another box -- a DHCP lease, VMs cloned from one template, so
+    the host key matched too -- was recorded as this machine: `fleet ls` showed its GPUs
+    and jobs under this name. `edit --ssh` already checks; this is the same check for an
+    address that changed under fleet. By the machine-id alone, so a clone whose own id
+    file went missing is still itself. Only ids fleet stamped from a machine-id: a
+    `net:` one, or one written by hand, says nothing about which machine it is.
+    """
+    snap = res.snapshot
+    parts = dev_id.split(":")
+    stamped = len(parts) >= 3 and f"{parts[0]}:{parts[1]}" in ("linux:machine-id", "darwin:hwuuid")
+    if not (res.ok and snap and snap.machine_id and stamped):
+        return res
+    if parts[2].lower() == snap.machine_id.lower():
+        return res
+    who = snap.hostname or snap.machine_id
+    where = f"{name}'s address" if name else "its address"
+    return ProbeResult(status=Status.PROBE_ERROR, error_class="another_machine",
+                       error_detail=f"another machine answers at {where}: it calls itself {who!r}",
+                       endpoint_used=res.endpoint_used, latency_ms=res.latency_ms)
 
 
 def _render(conn, devices: list, detail: Detail, me: str) -> list[dict]:

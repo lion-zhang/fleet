@@ -294,6 +294,12 @@ def parse_payload(stdout: str) -> Snapshot:
         snap.slurm_info.setdefault(k.strip(), []).append(v.strip())
 
     _parse_resources(snap, kv, rows)
+    # Its clock, read as the probe started: a rental or a VM whose clock is hours out
+    # said its software was read hours from now. Within two minutes it is the probe's
+    # own run time, not the clock.
+    remote_now = _int(kv.get("probe.now"))
+    if remote_now and abs(snap.ts - remote_now) > 120:
+        snap.clock_offset_s = snap.ts - remote_now
     return snap
 
 
