@@ -255,15 +255,22 @@ def test_the_probe_reports_a_read_only_volume_as_read_only(tmp_path):
             pytest.skip("no read-only mount on this machine to read")
         env = {}
     else:
+        # A Mac: a disk image stands in for `df` and `mount`; the folder beside it goes
+        # to the real ones, where "/" is the sealed, read-only system volume.
         ro = str(tmp_path / "Volumes" / "Installer")
         Path(ro).mkdir(parents=True)
         bin_ = tmp_path / "bin"
         bin_.mkdir()
-        (bin_ / "mount").write_text(
+        (bin_ / "df").write_text(
             "#!/bin/sh\n"
-            "echo '/dev/disk1s1 on / (apfs, local, journaled)'\n"
+            f'case "$*" in *Installer*) echo "Filesystem 1024-blocks Used Available '
+            f'Capacity Mounted on"; echo "/dev/disk4s1 1000 1000 0 100% {ro}" ;;\n'
+            '*) exec /bin/df "$@" ;; esac\n')
+        (bin_ / "mount").write_text(
+            "#!/bin/sh\n/sbin/mount\n"
             f"echo '/dev/disk4s1 on {ro} (hfs, local, nodev, nosuid, read-only)'\n")
-        (bin_ / "mount").chmod(0o755)
+        for f in ("df", "mount"):
+            (bin_ / f).chmod(0o755)
         env = {"PATH": f"{bin_}:/usr/bin:/bin:/usr/sbin:/sbin"}
     rows = _disk_rows(_run_payload(FLEET_DISK_PATHS=f"{tmp_path}|{ro}", **env))
     by_mount = {r.split("|")[0]: r.split("|") for r in rows}

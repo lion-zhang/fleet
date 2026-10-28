@@ -368,6 +368,13 @@ declared=$(declared_endpoints)
 # never alerted. -w is the fallback where the flags cannot be read.
 writable() {
   [ "$1" = "/" ] && { echo 1; return; }
+  # The mount holding the path, as df finds it. Matching the path's text against mount
+  # points goes wrong on a Mac, where /Users and /private/var reach the data volume by
+  # firmlinks: the longest text match was the sealed, read-only system volume at "/",
+  # so every folder there read as read-only and never alerted.
+  mp=$(df -P "$1" 2>/dev/null | awk 'NR == 2 { m = $0; sub(/^.* [0-9]+% +/, "", m); print m }')
+  [ "$mp" = "/" ] && { echo 1; return; }
+  set -- "${mp:-$1}"
   ro=""
   if [ -r /proc/mounts ]; then
     # The longest mount point holding the path; spaces in /proc/mounts are \040.
