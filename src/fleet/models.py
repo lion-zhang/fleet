@@ -187,6 +187,9 @@ class Snapshot:
     software: dict[str, str] = field(default_factory=dict)
     # When the software list was read on the machine (it is cached there for hours).
     software_at: int | None = None
+    # How far this machine's clock is behind ours, in seconds: software_at and a folder's
+    # sized_at are its clock's, and the view shows them on ours. 0 within two minutes.
+    clock_offset_s: int = 0
     pyenvs: list[PyPackage] = field(default_factory=list)
     # None when the probe did not look (a light probe, or no docker), not "none running".
     containers: list[Container] | None = None

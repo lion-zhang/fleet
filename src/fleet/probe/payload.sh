@@ -33,6 +33,7 @@ clean() { tr -d '\n\r|' 2>/dev/null | cut -c1-300; }
 echo "#FLEET v1"
 emit probe.mode "$FLEET_MODE"
 emit probe.light "${FLEET_LIGHT:-0}"
+emit probe.now "$(date +%s 2>/dev/null)"
 
 # ---------------------------------------------------------------- host identity
 hostname_v=$( (hostname 2>/dev/null || uname -n 2>/dev/null || cat /etc/hostname 2>/dev/null) | clean )

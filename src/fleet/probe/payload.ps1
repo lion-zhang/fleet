@@ -22,6 +22,7 @@ $cs = Get-CimInstance Win32_ComputerSystem
 
 Emit "host.hostname" $env:COMPUTERNAME
 Emit "host.uname_s" "Windows"
+Emit "probe.now" ([DateTimeOffset]::UtcNow.ToUnixTimeSeconds())
 Emit "host.arch" $env:PROCESSOR_ARCHITECTURE
 Emit "host.kernel" $os.Version
 Emit "host.os" $os.Caption

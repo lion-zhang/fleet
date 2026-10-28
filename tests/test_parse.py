@@ -305,3 +305,26 @@ def test_the_ollama_app_does_not_list_every_model_twice():
 def test_a_program_name_with_spaces_reads_as_spaces():
     snap = _laptop("tcp|127.0.0.1|15292|12|Adobe\\x20Desktop\\x20Service\n", "")
     assert "Adobe Desktop Service" in {s.name for s in snap.services}
+
+
+def test_a_machine_whose_clock_is_out_has_its_times_put_on_ours():
+    """A rental three hours ahead said its software was read three hours from now, and an
+    agent reads `observed_at` to know how old each part is."""
+    import time
+
+    from fleet.models import Device
+    from fleet.render.view import Detail, device_view
+
+    now = int(time.time())
+    body = (f"#FLEET v1\nprobe.now={now + 10800}\nhost.hostname=box\ncpu.cores=4\n"
+            f"#SOFTWARE key|value\nscanned_at|{now + 10800 - 60}\npython|3.12\n"
+            f"#STORE kind|path|exists|avail_kb|size_kb|sized_at\n"
+            f"models|/m|1|100|50|{now + 10800 - 600}\n#END\n")
+    snap = parse_payload(body)
+    assert abs(snap.clock_offset_s + 10800) < 5
+    view = device_view(Device(id="x", name="box"), {"status": "ok"}, snap.to_dict(),
+                       detail=Detail.FULL)
+    assert abs(view["observed_at"]["software"] - (now - 60)) < 5
+    assert abs(view["storage"]["models"][0]["sized_at"] - (now - 600)) < 5
+    near = parse_payload(body.replace(f"probe.now={now + 10800}", f"probe.now={now - 30}"))
+    assert near.clock_offset_s == 0, "seconds apart is the probe's own run time"

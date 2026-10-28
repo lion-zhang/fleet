@@ -404,9 +404,14 @@ def storage_view(snap: dict | None, *, full: bool) -> dict[str, list[dict]]:
                "size_gb": round(st["size_kb"] / 1048576, 3 if st["size_kb"] < 1048576 else 1)
                if st.get("size_kb") is not None else None}
         if full:
-            row["sized_at"] = st.get("sized_at")
+            row["sized_at"] = on_our_clock(st.get("sized_at"), snap)
         out.setdefault(st.get("kind", ""), []).append(row)
     return out
+
+
+def on_our_clock(at: int | None, snap: dict | None) -> int | None:
+    """A time the machine stamped with its own clock, on this machine's."""
+    return at + int((snap or {}).get("clock_offset_s") or 0) if at else at
 
 
 def declared(dev: Device, snap: dict | None) -> tuple[list[str], dict, str]:
@@ -528,7 +533,7 @@ def device_view(dev: Device, state: dict | None, snap: dict | None,
         "software": software_view(snap, full=full),
         # How old each part is: a probe reading is seconds old, a software list hours.
         "observed_at": {"probe": (snap or {}).get("ts"),
-                        "software": (snap or {}).get("software_at")},
+                        "software": on_our_clock((snap or {}).get("software_at"), snap)},
         "alerts": _alerts(dev, snap, state),
         "tags": tags,
         "facts": facts(dev, snap, state),
