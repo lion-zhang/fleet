@@ -131,3 +131,13 @@ def test_is_default_identity_is_only_about_ssh_s_own_folder(home):
     assert not cmd.is_default_identity(str(home / "elsewhere" / "id_rsa"))
     assert not cmd.is_default_identity(str(home / ".ssh" / "vast"))
     assert not cmd.is_default_identity("")
+
+
+def test_a_windows_path_keeps_its_backslashes():
+    """POSIX shlex took `C:\\Users\\me\\key` for escapes and handed ssh `C:Usersmekey`."""
+    words = cmd.split_command(r'ssh -p 2222 -i C:\Users\me\.ssh\vast "root@1.2.3.4"',
+                              windows=True)
+    assert words == ["ssh", "-p", "2222", "-i", r"C:\Users\me\.ssh\vast", "root@1.2.3.4"]
+    assert cmd.split_command(r'ssh -i "C:\My Keys\k" box', windows=True)[2] == r"C:\My Keys\k"
+    assert cmd.split_command("ssh -o 'User=a b' box", windows=False) == \
+        ["ssh", "-o", "User=a b", "box"]

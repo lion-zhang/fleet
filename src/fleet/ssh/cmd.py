@@ -69,9 +69,22 @@ class Endpoint:
         return " ".join(bits)
 
 
+def split_command(cmd: str, *, windows: bool = os.name == "nt") -> list[str]:
+    """Words of an ssh command as the shell you typed it in would split them.
+
+    POSIX shlex reads every backslash as an escape, so on Windows `-i C:\\Users\\me\\key`
+    came out as `C:Usersmekey`, a key that does not exist. There a path's backslashes
+    are kept, and only the quotes around a word are taken off.
+    """
+    if not windows:
+        return shlex.split(cmd)
+    return [t[1:-1] if len(t) > 1 and t[0] == t[-1] and t[0] in "\"'" else t
+            for t in shlex.split(cmd, posix=False)]
+
+
 def parse_ssh_command(cmd: str) -> ParsedSsh:
     """Parse `ssh -p 58418 -i ~/.ssh/k root@1.2.3.4 [remote cmd]` or a bare alias."""
-    tokens = shlex.split(cmd.strip())
+    tokens = split_command(cmd.strip())
     if tokens and os.path.basename(tokens[0]) in ("ssh", "ssh.exe"):
         tokens = tokens[1:]
 
