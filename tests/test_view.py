@@ -246,3 +246,38 @@ def test_show_works_before_anything_is_set_up(monkeypatch):
     assert r.exit_code == 0, r.output
     assert "laptop" in r.output and "fleet add --self" in " ".join(r.output.split())
     assert inv.load() == []
+
+
+# ------------------------------------------------------------ edges of the numbers
+
+def test_a_model_server_on_an_ipv6_address_gets_a_url_that_parses():
+    from urllib.parse import urlsplit
+
+    from fleet.render.view import model_servers
+
+    snap = {"services": [{"port": 8000, "addr": "*", "kind": "llm", "status": "ok",
+                          "model_ids": ["m"], "framework": "vllm"}]}
+    for target in ("2001:db8::5", "[2001:db8::5]"):
+        dev = make(endpoints=[{"name": "primary", "target": target, "user": "u", "port": 22}])
+        url = model_servers(dev, snap)[0]["url"]
+        assert url == "http://[2001:db8::5]:8000/v1" and urlsplit(url).port == 8000
+
+
+def test_a_full_disk_and_no_free_ram_are_zero_not_unknown():
+    from fleet.render.view import storage_view
+
+    snap = {"storage": [{"kind": "models", "path": "/m", "exists": True, "avail_kb": 0,
+                         "size_kb": 10}]}
+    assert storage_view(snap, full=False)["models"][0]["free_gb"] == 0
+    row = device_view(make(), STATE_OK, {**snap_of("gpu-box"), "mem_avail_kb": 0})
+    assert row["ram_free_gb"] == 0
+
+
+def test_a_reading_from_the_future_has_no_age():
+    """The clock went back: an AGE of -7200s, and `top` calling the reading live."""
+    import time
+
+    future = int(time.time()) + 7200
+    row = device_view(make(), {**STATE_OK, "last_probe_at": future},
+                      {**snap_of("gpu-box"), "ts": future})
+    assert row["telemetry_age_s"] is None and row["snapshot_age_s"] is None

@@ -157,3 +157,26 @@ def test_a_state_dir_that_cannot_exist_still_lets_fleet_run(tmp_path, monkeypatc
     for args in (["ls"], ["ls", "--json"], ["show", "phone"], ["doctor"]):
         r = CliRunner().invoke(cli.app, args)
         assert r.exception is None or isinstance(r.exception, SystemExit), (args, r.output)
+
+
+@pytest.mark.parametrize("junk", [b"this is not sqlite at all" * 200,
+                                  b"SQLite format 3\x00" + b"\x00" * 90])
+def test_a_cache_that_cannot_be_read_is_set_aside_and_started_again(tmp_path, junk, capsys):
+    """A cache half-written by a crash or a full disk stopped every command with
+    "file is not a database". It is disposable by design."""
+    db = tmp_path / "cache.db"
+    db.write_bytes(junk)
+    conn = store.connect(db)
+    try:
+        store.record(conn, "box", _res())
+        assert store.latest(conn, "box")[1] is not None
+    finally:
+        conn.close()
+    assert list(tmp_path.glob("cache.db.broken-*"))
+    assert "started a new one" in capsys.readouterr().err
+
+
+def test_a_reading_of_nan_is_no_reading():
+    from fleet.probe.parse import _float
+
+    assert _float("nan") is None and _float("inf") is None and _float("1.5") == 1.5

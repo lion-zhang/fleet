@@ -12,6 +12,7 @@ connected, so it can be declined for a host you do not trust with that.
 
 from __future__ import annotations
 
+import re
 import shlex
 from pathlib import Path
 
@@ -221,6 +222,19 @@ if command -v crontab >/dev/null 2>&1; then
   printf '%s\\n' "$fleet_cron_rest" | crontab - || true
 fi
 """
+
+
+def needs_agent(url: str, *, from_git: bool = True) -> bool:
+    """Whether the install has any use for your ssh agent: a git clone over ssh.
+
+    Forwarding it to a machine lets whoever is root there use your keys for as long as
+    the session lasts, and fleet is made for rentals. An https clone, or an upgrade from
+    PyPI, authenticates with nothing of yours, so it was exposure with no purpose.
+    """
+    if not from_git:
+        return False
+    url = url.strip()
+    return url.startswith("ssh://") or bool(re.match(r"^[\w.-]+@[\w.-]+:", url))
 
 
 def build_install_argv(ep: Endpoint, *, forward_agent: bool = True,

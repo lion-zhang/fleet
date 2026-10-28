@@ -98,7 +98,9 @@ def snapshot(names: list[str] | None = None, *, refresh: bool = False,
         backoff = 0 if names else int(cfg.offline_backoff_max_s or 0)
         for d in devices:
             st, _ = store.latest(conn, d.id)
-            eligible = d.probeable or (bool(names) and d.probe_policy != "never")
+            # A mobile machine is never measured (docs/reference/facts.md), named or not.
+            eligible = d.probeable or (bool(names) and d.probe_policy != "never"
+                                       and d.kind is not Kind.MOBILE)
             ttl = int(cfg.telemetry_ttl_s)
             if d.kind == Kind.SHARED:
                 # A multi-user cluster is not measured more often than this, by `ls` and

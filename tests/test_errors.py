@@ -89,6 +89,12 @@ def test_the_cli_reports_it_in_one_line_and_as_json(tmp_path):
      "device box in the inventory is malformed: endpoint h: port '22a' is not a number"),
     (b"devices:\n- {id: a, name: box, endpoints: [h.example]}\n",
      "device box in the inventory is malformed: each endpoint must be a mapping"),
+    (b"devices:\n- {id: a, name: box, cost: 1.5}\n",
+     "device box in the inventory is malformed: cost 1.5 is not `usd_per_hour: N`"),
+    (b"devices:\n- {id: a, name: box, cost: {usd_per_hour: lots}}\n",
+     "device box in the inventory is malformed: cost 'lots' is not US dollars per hour"),
+    (b"devices:\n- {id: a, name: box, tags: {gpu: 1}}\n",
+     "device box in the inventory is malformed: tags {'gpu': 1} is not a list"),
 ])
 def test_a_hand_edited_machines_file_is_named_not_a_traceback(tmp_path, text, said):
     """machines.yaml is meant to be fixable by hand, and shared with dotfiles: a bad byte
@@ -97,3 +103,13 @@ def test_a_hand_edited_machines_file_is_named_not_a_traceback(tmp_path, text, sa
     path.write_bytes(text)
     with pytest.raises(inv.InventoryError, match=said.replace("(", r"\(")):
         inv.load(path)
+
+
+def test_numbers_typed_into_machines_yaml_are_read_as_they_were_meant(tmp_path):
+    """YAML reads `7` as an int and `"1.50"` as a string; the views then failed on a tag
+    with no .strip() and a cost that `:.2f` cannot format."""
+    path = tmp_path / "machines.yaml"
+    path.write_text('devices:\n- {id: a, name: box, tags: [gpu, 7], '
+                    'cost: {usd_per_hour: "1.50"}}\n', encoding="utf-8")
+    (dev,) = inv.load(path)
+    assert dev.tags == ["gpu", "7"] and dev.cost["usd_per_hour"] == 1.5
