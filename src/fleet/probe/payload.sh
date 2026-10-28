@@ -10,6 +10,11 @@
 
 FLEET_MODE=${FLEET_MODE:-full}
 OS=$(uname -s 2>/dev/null || echo unknown)
+# Numbers as the parser reads them. ssh forwards LANG and LC_*, and under de_DE ps prints
+# CPU use as "12,5" -- read as 12, and under 1% a busy process was dropped as idle. Only
+# the numeric part changes: names keep the machine's own character set.
+[ -n "${LC_ALL:-}" ] && { LANG=$LC_ALL; export LANG; unset LC_ALL; }
+LC_NUMERIC=C; export LC_NUMERIC
 
 emit() { printf '%s=%s\n' "$1" "$2"; }
 have() { command -v "$1" >/dev/null 2>&1; }
@@ -145,10 +150,15 @@ gpu_present=0; gpu_driver=""; gpu_err=""; gpu_vendor=""; amd_out=""
 if have nvidia-smi; then
   gpu_vendor=nvidia
   gpu_driver=$(nvidia-smi --query-gpu=driver_version --format=csv,noheader 2>/dev/null | head -1 | clean)
-  if [ -n "$gpu_driver" ]; then gpu_present=1; else
-    gpu_present=err
-    gpu_err=$(nvidia-smi 2>&1 >/dev/null | head -1 | clean)
-  fi
+  # A broken driver answers on stdout -- "Failed to initialize NVML: Driver/library
+  # version mismatch" -- so anything that is not a version number is the error, not a
+  # driver: read as one, the GPU table was made of that sentence.
+  case $gpu_driver in
+    [0-9]*) gpu_present=1 ;;
+    *) gpu_present=err
+       gpu_err=${gpu_driver:-$(nvidia-smi 2>&1 | grep . | head -1 | clean)}
+       gpu_driver="" ;;
+  esac
 fi
 
 # AMD: amd-smi (ROCm 6.1 and later) or rocm-smi before it. Both are Python programs, so
@@ -352,9 +362,30 @@ declared=$(declared_endpoints)
 # treated as writable: on macOS it is the read-only signed system volume, yet the free
 # space df reports for it belongs to the shared container that user data fills, so
 # trusting -w there would silence the one alert that matters most.
+#
+# Read from the mount's own flags, not from whether we can write there: a user's -w is
+# false on /home, /mnt/data and every other disk owned by root, and a full one of those
+# never alerted. -w is the fallback where the flags cannot be read.
 writable() {
   [ "$1" = "/" ] && { echo 1; return; }
-  if [ -w "$1" ]; then echo 1; else echo 0; fi
+  ro=""
+  if [ -r /proc/mounts ]; then
+    # The longest mount point holding the path; spaces in /proc/mounts are \040.
+    ro=$(awk -v p="$1" '{ m = $2; gsub(/\\040/, " ", m)
+           if ((p == m || index(p, (m == "/" ? "/" : m "/")) == 1) && length(m) >= best) {
+             best = length(m); r = ($4 ~ /(^|,)ro(,|$)/) } }
+         END { if (best != "") print r }' /proc/mounts 2>/dev/null)
+  elif have mount; then
+    ro=$(mount 2>/dev/null | awk -v p="$1" '{ i = index($0, " on "); j = index($0, " (")
+           if (!i || j <= i) next; m = substr($0, i + 4, j - i - 4)
+           if ((p == m || index(p, (m == "/" ? "/" : m "/")) == 1) && length(m) >= best) {
+             best = length(m); r = (substr($0, j) ~ /read-only/) } }
+         END { if (best != "") print r }')
+  fi
+  case $ro in
+    1) echo 0 ;; 0) echo 1 ;;
+    *) if [ -w "$1" ]; then echo 1; else echo 0; fi ;;
+  esac
 }
 
 # ---------------------------------------------------------------- disk
@@ -363,9 +394,10 @@ if have df; then
   if [ -n "${FLEET_DISK_PATHS:-}" ]; then
     # Configured paths win outright. df is asked about each path directly, so a plain
     # directory works as well as a mount point, and the row is labelled with the path
-    # the user asked about rather than whatever filesystem happens to hold it.
-    for p in $FLEET_DISK_PATHS; do
-      [ -e "$p" ] || continue
+    # the user asked about rather than whatever filesystem happens to hold it. They
+    # come separated by "|", not spaces, which cut "/mnt/My Data" in two.
+    printf '%s\n' "$FLEET_DISK_PATHS" | tr '|' '\n' | while IFS= read -r p; do
+      [ -n "$p" ] && [ -e "$p" ] || continue
       rw=$(writable "$p")
       df -Pk "$p" 2>/dev/null | awk -v p="$p" -v rw="$rw" 'NR>1 && $2+0>0 {
         printf "%s|%s|%s|%s|%s\n", p, $2, $3, $4, rw
@@ -375,8 +407,10 @@ if have df; then
     # writability is decided in the shell, not awk: a mount you cannot write to cannot
     # fill up, so "100% full" there is never actionable -- a mounted disk image is the
     # usual case, and it alerted forever.
+    # The mount point is everything after the capacity column: $6 alone cut
+    # "/Volumes/My Passport" to "/Volumes/My", which df then could not find again.
     df -Pk 2>/dev/null | awk 'NR>1 && $2+0>0 {
-      m=$6
+      m=$0; sub(/^.* [0-9]+% +/, "", m)
       if (m=="/" || m ~ /^\/(workspace|data|mnt|home|srv|opt|Volumes|scratch)/)
         printf "%s|%s|%s|%s\n", m, $2, $3, $4
     }' | sort -u | head -20 | while IFS='|' read -r m tot used avail; do
@@ -444,7 +478,8 @@ if [ "$FLEET_MODE" != "shared" ]; then
   else
     ps -eo pid=,ppid=,user=,pcpu=,rss=,etimes=,comm= 2>/dev/null \
       | awk -v me="$$" '$1 != me && $2 != me && $4+0>1.0 && $6+0>=1 {
-              printf "%s|%s|%s|%s|%s|%s\n",$1,$3,$4,$5,$6,$7}' \
+              c=$7; for (i = 8; i <= NF; i++) c = c " " $i     # "Web Content", not "Web"
+              printf "%s|%s|%s|%s|%s|%s\n",$1,$3,$4,$5,$6,c}' \
       | sort -t'|' -k3 -rn | head -10
   fi
 fi
@@ -454,7 +489,8 @@ listen=$( {
 if [ "$OS" = "Darwin" ] && have lsof; then
   # macOS: netstat exists but has no -tlnp; lsof is the only reliable source.
   lsof +c 0 -nP -iTCP -sTCP:LISTEN 2>/dev/null | tail -n +2 \
-    | awk '{n=split($9,a,":"); printf "LISTEN 0 0 %s:%s x users:((\"%s\",pid=%s,fd=0))\n", (n>1?a[n-1]:"*"), a[n], $1, $2}'
+    | awk '{la=$9; port=la; sub(/.*:/, "", port); addr=substr(la, 1, length(la)-length(port)-1)
+            printf "LISTEN 0 0 %s:%s x users:((\"%s\",pid=%s,fd=0))\n", (addr==""?"*":addr), port, $1, $2}'
 elif have ss; then
   # -p names the program behind each port -- every process we may see, which is ours
   # and, as root, everyone's. Without it a vLLM server was an anonymous port 8000.
@@ -465,7 +501,8 @@ elif have netstat; then
   printf '%s\n' "$ns" | tail -n +3
 elif have lsof; then
   lsof +c 0 -nP -iTCP -sTCP:LISTEN 2>/dev/null | tail -n +2 \
-    | awk '{n=split($9,a,":"); printf "LISTEN 0 0 %s:%s x users:((\"%s\",pid=%s,fd=0))\n", (n>1?a[n-1]:"*"), a[n], $1, $2}'
+    | awk '{la=$9; port=la; sub(/.*:/, "", port); addr=substr(la, 1, length(la)-length(port)-1)
+            printf "LISTEN 0 0 %s:%s x users:((\"%s\",pid=%s,fd=0))\n", (addr==""?"*":addr), port, $1, $2}'
 fi; } 2>/dev/null | awk '
   {
     la=""
@@ -510,7 +547,8 @@ age_ok() {  # file max_age_s: does the file exist and say it was written recentl
 # in the background, detached from this probe, and the next probe reports what it found.
 sizes="$CACHE/sizes"
 if [ -n "$paths" ] && [ -n "$CACHE" ] && [ "${FLEET_LIGHT:-}" != "1" ]; then
-  want=$(printf '%s\n' "$paths" | cut -d'|' -f2 | sort -u | tr '\n' ' ')
+  # "|"-separated, as the paths may hold spaces; the header line records the same list.
+  want=$(printf '%s\n' "$paths" | cut -d'|' -f2 | sort -u | tr '\n' '|')
   have_for=$(sed -n '1s/^#v1 [0-9]* //p' "$sizes" 2>/dev/null)
   if [ "${FLEET_REFRESH:-}" = "1" ] || [ "$want" != "$have_for" ] || ! age_ok "$sizes" 21600; then
     # One at a time: a lock older than an hour is from a run that died.
@@ -522,8 +560,8 @@ if [ -n "$paths" ] && [ -n "$CACHE" ] && [ "${FLEET_LIGHT:-}" != "1" ]; then
         trap 'rmdir "$lock" 2>/dev/null' EXIT
         tmp="$sizes.$$"
         echo "#v1 $NOW $want" > "$tmp"
-        for p in $want; do
-          [ -e "$p" ] || continue
+        printf '%s' "$want" | tr '|' '\n' | while IFS= read -r p; do
+          [ -n "$p" ] && [ -e "$p" ] || continue
           kb=$($T du -sk "$p" 2>/dev/null | tail -1 | cut -f1)
           [ -n "$kb" ] && printf '%s|%s\n' "$p" "$kb" >> "$tmp"
         done
@@ -666,6 +704,10 @@ print("%03d %.3f" % (code, time.time() - t))
 PY
     fi
   }
+  is_list() {  # key: is the body a JSON object with this list in it?
+    [ "$(tr -d ' \t\r\n' < "$body" 2>/dev/null | head -c 1)" = "{" ] \
+      && grep -q "\"$1\"[ ]*:[ ]*\\[" "$body" 2>/dev/null
+  }
   echo "#LLMMODEL port|status|ms|model"
   # Declared ones first, so the eight-server limit never drops what someone asked for.
   # The listing goes in through the environment: a newline in `awk -v` is an error in
@@ -680,18 +722,25 @@ PY
       tolower($5) ~ /vllm|sglang|ollama|mlx|llama|lmstudio|lms|text-gen|omlx|kobold|tabby|aphrodite|litellm|local-ai|exllama/ || ($3 in hint) { print $2 "|" $3 "|" }'
   } | awk -F'|' '$2 != "" && !seen[$2]++' | head -8 | while IFS='|' read -r addr port base; do
     case "$addr" in
-      ""|"*"|0.0.0.0|"::"|"[::]"|127.*|"::1"|"[::1]") host=127.0.0.1 ;;
+      ""|"*"|0.0.0.0|"::"|"[::]"|127.*) host=127.0.0.1 ;;
+      "::1"|"[::1]") host="[::1]" ;;      # IPv6 loopback only: 127.0.0.1 finds nothing
       *:*) host="[${addr#[}"; host="${host%]}]" ;;
       *) host=$addr ;;
     esac
     set -- $(get "http://$host:$port${base:-/v1}/models"); code=$1; secs=$2
     ids=""
+    # A 200 is a model server only when the answer is a model list: a web app on
+    # :8080 answers every path with its HTML page, and any JSON API has an "id" in it.
     if [ "$code" = "200" ]; then
-      ids=$(grep -o '"id"[ ]*:[ ]*"[^"]*"' "$body" 2>/dev/null | sed 's/.*"\([^"]*\)"$/\1/' | grep -v '^modelperm-')
+      if is_list data; then
+        ids=$(grep -o '"id"[ ]*:[ ]*"[^"]*"' "$body" 2>/dev/null | sed 's/.*"\([^"]*\)"$/\1/' | grep -v '^modelperm-')
+      else
+        code=other
+      fi
     fi
     if [ -z "$ids" ] && [ -z "$base" ] && [ "$code" != "401" ] && [ "$code" != "403" ]; then
       set -- $(get "http://$host:$port/api/tags")   # ollama's own list
-      if [ "$1" = "200" ]; then
+      if [ "$1" = "200" ] && is_list models; then
         code=200; secs=$2
         ids=$(grep -o '"name"[ ]*:[ ]*"[^"]*"' "$body" 2>/dev/null | sed 's/.*"\([^"]*\)"$/\1/')
       fi

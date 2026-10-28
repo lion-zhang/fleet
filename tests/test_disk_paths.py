@@ -23,9 +23,18 @@ def test_probe_env_always_carries_the_mode():
     assert probe_env("shared", [])["FLEET_MODE"] == "shared"
 
 
-def test_probe_env_passes_configured_disk_paths_space_separated():
-    env = probe_env("full", ["/workspace", "/data"])
-    assert env["FLEET_DISK_PATHS"] == "/workspace /data"
+def test_probe_env_passes_configured_disk_paths_bar_separated():
+    """Not spaces: "/mnt/My Data" is one path."""
+    env = probe_env("full", ["/workspace", "/mnt/My Data"])
+    assert env["FLEET_DISK_PATHS"] == "/workspace|/mnt/My Data"
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="payload is POSIX sh")
+def test_payload_reports_a_configured_path_with_a_space_in_it(tmp_path):
+    spaced = tmp_path / "My Data"
+    spaced.mkdir()
+    rows = _disk_rows(_run_payload(FLEET_DISK_PATHS=f"/definitely/not/here|{spaced}"))
+    assert [r.split("|")[0] for r in rows] == [str(spaced)]
 
 
 def test_probe_env_omits_disk_paths_when_the_device_has_none():

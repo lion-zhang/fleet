@@ -119,7 +119,8 @@ def probe_env(mode: str, disk_paths: list[str] | None = None, *, light: bool = F
     """
     env = {"FLEET_MODE": mode}
     if disk_paths:
-        env["FLEET_DISK_PATHS"] = " ".join(disk_paths)
+        # "|", which no path holds: a space split "/mnt/My Data" into two that did not exist.
+        env["FLEET_DISK_PATHS"] = "|".join(disk_paths)
     # `fleet top` re-reads every machine every few seconds: it takes what the machine has
     # cached and skips anything that waits on the network. `-r` rebuilds the caches.
     if light:
