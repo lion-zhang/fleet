@@ -880,6 +880,13 @@ def cmd_edit(name: str = typer.Argument(None, help="defaults to this machine"),
 
     [dim]Example:[/dim]  fleet edit machine_A --ssh "ssh -p 40001 root@5.6.7.8"
     """
+    # The range every reader of a cost keeps. Outside it -- -5, nan, inf -- the machine's
+    # file took it and printed ✓, and every probe after dropped it as invalid, so the
+    # machine showed no cost at all and nothing said why.
+    if cost is not None and not (0 <= cost < 1e6):
+        err.print(f"[red]--cost {cost:g}[/red] is not a cost  "
+                  "[dim]US dollars per hour, from 0 (which clears it) up to a million[/dim]")
+        raise typer.Exit(2)
     devices = inv.load()
     dev = _this_machine(devices, "edit") if name is None else inv.find(devices, name)
     if dev is None:
@@ -1544,7 +1551,9 @@ def cmd_ssh(ctx: typer.Context,
     if ep.jump:
         argv += ["-J", ep.jump]
     argv += ["--", f"{ep.user}@{ep.target}" if ep.user else ep.target]
-    extra = [a for a in ctx.args if a != "--"]
+    # click has already taken the separator. Any `--` left is the command's own, and
+    # dropping it ran `fleet ssh box -- git log -- README.md` as `git log README.md`.
+    extra = list(ctx.args)
     if extra:
         from .ssh.cmd import expanded_here
 

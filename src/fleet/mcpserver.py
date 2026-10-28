@@ -393,7 +393,31 @@ def build_server():
             args += ["--ssh", ssh_command]
         return _run(args)
 
+    _refuse_unknown_arguments(server)
     return server
+
+
+def _refuse_unknown_arguments(server) -> None:
+    """Make a tool call with an argument the tool does not take an error.
+
+    The SDK drops unknown arguments without a word. `run_on_machine` and
+    `set_machine_paths` name the machine `machine`, so `show_machine(machine="gpubox")`
+    is an easy call to make -- and it answered with *this* machine, as though asked for
+    no name at all: a wrong answer that looks right. Reaches into the SDK's tool list,
+    so if that ever moves the tools stay as lenient as the SDK makes them.
+    """
+    try:
+        tools = server._tool_manager.list_tools()
+    except AttributeError:      # pragma: no cover - a future SDK
+        return
+    for tool in tools:
+        try:
+            model = tool.fn_metadata.arg_model
+            model.model_config["extra"] = "forbid"
+            model.model_rebuild(force=True)
+            tool.parameters = model.model_json_schema(by_alias=True)
+        except Exception:       # noqa: BLE001 - never stop the server over strictness
+            continue
 
 
 def serve() -> None:

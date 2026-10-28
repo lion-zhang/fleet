@@ -58,7 +58,9 @@ max_workers: 16
 | `repo` | (empty) | The git URL `fleet install` and `fleet update` deploy from; otherwise the repository fleet was installed from, or GitHub. |
 
 An unreadable `config.yaml` is ignored rather than stopping fleet, and a number setting
-that is not a number falls back to its default, with one warning. Keys fleet does not
+that is not a number falls back to its default, with one warning. So does one that is
+below 1 where 0 cannot work: `max_workers`, `probe_timeout_s`, `connect_timeout_s` and
+`snapshot_retention`. Keys fleet does not
 know — such as 0.5's `sync_ttl_s` and `access_retry_s` — are ignored.
 
 ## Environment variables

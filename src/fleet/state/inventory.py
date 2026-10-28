@@ -102,6 +102,11 @@ def load(path: Path | None = None) -> list[Device]:
         # Report the line rather than read it as empty -- a stray tab must not blank
         # your fleet. `fleet` turns this into one line, not a traceback.
         raise InventoryError(f"{path} is not valid YAML: {exc}") from exc
+    except UnicodeDecodeError as exc:
+        raise InventoryError(f"{path} is not UTF-8 text: {exc.reason} at byte "
+                             f"{exc.start}") from exc
+    except OSError as exc:
+        raise InventoryError(f"{path} cannot be read: {exc.strerror or exc}") from exc
     return _devices_from(raw)
 
 
@@ -134,6 +139,15 @@ def _device_from(d) -> Device:
     # "gpu", which every consumer then iterates into ["g", "p", "u"].
     if isinstance(d.get("tags"), str):
         d["tags"] = [t for t in d["tags"].replace(",", " ").split() if t]
+    # A port typed by hand (`port: 22a`) raised in every command that dialled out,
+    # rather than naming the machine whose entry it is.
+    for e in d.get("endpoints") or []:
+        if not isinstance(e, dict):
+            raise TypeError("each endpoint must be a mapping of fields")
+        for field in ("port", "preference"):
+            if e.get(field) not in (None, "") and not str(e[field]).strip().isdigit():
+                raise ValueError(f"endpoint {e.get('target', '?')}: {field} "
+                                 f"{e[field]!r} is not a number")
     known = {f for f in Device.__slots__}
     return Device(**{k: v for k, v in d.items() if k in known})
 

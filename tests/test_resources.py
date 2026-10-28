@@ -16,6 +16,7 @@ import shutil
 import subprocess
 import sys
 import threading
+import time
 from pathlib import Path
 
 import pytest
@@ -422,6 +423,50 @@ def test_a_file_saved_with_a_bom_is_still_one_we_can_change(tmp_path, monkeypatc
     assert notes.parse(f.read_text())["paths"] == {"models": ["/m"]}
 
 
+@posix
+def test_edits_made_at_the_same_time_are_all_kept(tmp_path, monkeypatch):
+    """Two edits that read the same file both passed the check and both replaced it: eight
+    `fleet edit --tag` run at once each printed their ✓ and the file kept four tags."""
+    from fleet.ops import machinefile
+
+    monkeypatch.setenv("HOME", str(tmp_path))
+    f = tmp_path / ".config" / "fleet" / "machine.yaml"
+    f.parent.mkdir(parents=True)
+    f.write_text("cost: 1\n")
+    tags = [f"t{i}" for i in range(8)]
+    errors = []
+
+    def add(tag):
+        try:
+            machinefile.change(None, "posix", tags_add=[tag])
+        except Exception as e:                       # noqa: BLE001 -- reported below
+            errors.append(e)
+
+    threads = [threading.Thread(target=add, args=(t,)) for t in tags]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join()
+    assert not errors
+    assert sorted(notes.parse(f.read_text())["tags"]) == sorted(tags)
+    assert not (f.parent / "machine.yaml.lock").exists(), "the lock is let go"
+
+
+@posix
+def test_a_lock_left_by_a_killed_write_is_taken_over(tmp_path, monkeypatch):
+    from fleet.ops import machinefile
+
+    monkeypatch.setenv("HOME", str(tmp_path))
+    f = tmp_path / ".config" / "fleet" / "machine.yaml"
+    f.parent.mkdir(parents=True)
+    lock = f.parent / "machine.yaml.lock"
+    lock.mkdir()
+    old = time.time() - 600
+    os.utime(lock, (old, old))
+    machinefile.change(None, "posix", tags_add=["gpu"])
+    assert notes.parse(f.read_text())["tags"] == ["gpu"]
+
+
 # ---------------------------------------------------------------- Windows twin
 PWSH = shutil.which("pwsh")
 
@@ -544,3 +589,27 @@ def test_removing_a_tag_a_machine_never_had_writes_no_file_there(tmp_path, monke
     before, after = machinefile.change(None, "posix", tags_remove=["gpu"])
     assert before == after
     assert not (tmp_path / ".config" / "fleet" / "machine.yaml").exists()
+
+
+@pytest.mark.skipif(PWSH is None, reason="needs PowerShell")
+def test_the_windows_write_takes_and_lets_go_of_its_lock(tmp_path):
+    """Run as fleet runs it, over `-Command -`, which evaluates one line at a time: the
+    lock has to be taken and let go of on lines of their own, and a second write must
+    find it free."""
+    from fleet.ops import machinefile
+
+    local = tmp_path / "local"
+    env = {**os.environ, "TERM": "dumb", "LOCALAPPDATA": str(local)}
+
+    def write(old: bytes, new: str) -> subprocess.CompletedProcess:
+        return subprocess.run([PWSH, "-NoProfile", "-Command", "-"], text=True,
+                              input=machinefile._write_script("windows", old, new),
+                              capture_output=True, timeout=120, env=env)
+
+    first = write(b"", "cost: 1\n")
+    assert machinefile.DONE in first.stdout and not first.stderr.strip(), first.stderr
+    second = write(b"cost: 1\n", "cost: 2\n")
+    assert machinefile.DONE in second.stdout and not second.stderr.strip(), second.stderr
+    assert (local / "fleet" / "machine.yaml").read_text() == "cost: 2\n"
+    stale = write(b"cost: 1\n", "cost: 3\n")
+    assert "CHANGED" in stale.stdout and not stale.stderr.strip(), stale.stderr
