@@ -693,9 +693,11 @@ def cmd_add(ssh_command: str = typer.Argument(None, help='e.g. "ssh -p 58418 roo
         # port moved, say -- the tags would be dropped without a word. Apply them to the
         # record that actually survived.
         survivor = inv.find_exact(current, dev.id)
+        # A new machine too: under `survivor is not dev` alone, its tags never reached
+        # the list and `fleet ls --tag` found nothing.
+        if survivor is not None and tags:
+            apply_edits(survivor, add_tags=tags)
         if survivor is not None and survivor is not dev:
-            if tags:
-                apply_edits(survivor, add_tags=tags)
             # The same for what was said explicitly: `fleet add ... --kind rental` on a
             # machine removed earlier printed "added (rental)" and kept it permanent.
             if kind and survivor.kind is not dev.kind:
