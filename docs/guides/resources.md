@@ -139,6 +139,11 @@ for `paths` each kind replaces the same kind. Because the file lives on the mach
 everyone who looks at the machine — from any other machine, any number of people — sees
 the same answer, and there is nothing to copy between them.
 
+Machines that share a home folder, like the nodes of a cluster on one NFS home, share
+`~/.config/fleet/machine.yaml` too: a tag or cost set there with `fleet edit` is read by
+every one of them. Keep what is one node's own in its `/etc/fleet/machine.yaml`, or in
+your list with `fleet edit NAME --tag ... --local`.
+
 ```yaml
 # What this machine says about itself. Read by every fleet that probes it.
 cost: 1.89                 # US dollars per hour, for the $/HR column and the burn rate
