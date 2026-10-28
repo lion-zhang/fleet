@@ -720,7 +720,8 @@ def test_a_write_that_runs_out_of_space_says_so_and_leaves_nothing(tmp_path, mon
     (stubs / "base64").write_text(
         f'#!/bin/sh\n[ "$1" = -d ] || [ "$1" = -D ] || exec {shutil.which("base64")} "$@"\n'
         '[ "$1" = -D ] && { echo "base64: invalid option -- \'D\'" >&2; exit 1; }\n'
-        'head -c 3; [ -n "$(cat)" ] || exit 0\n'
+        # Read whole first: BSD head reads past the bytes it prints, from a pipe.
+        'x=$(cat); [ -n "$x" ] || exit 0; printf %.3s "$x"\n'
         'echo "base64: write error: No space left on device" >&2; exit 1\n')
     (stubs / "base64").chmod(0o755)
     monkeypatch.setenv("PATH", f"{stubs}{os.pathsep}{os.environ['PATH']}")
