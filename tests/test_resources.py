@@ -683,6 +683,20 @@ def test_a_declared_server_is_listed_even_when_nothing_listens_there():
     assert row["url"] == "http://127.0.0.1:9999/api/v2" and row["source"] == "declared"
 
 
+def test_a_declared_server_on_every_interface_is_reached_at_its_url():
+    """Its port carried no program name (another user's, or Docker's proxy), so it was
+    dropped, then listed from the notes as listening on 127.0.0.1 only: "local only",
+    with a tunnel to dig, when it answered on the network all along."""
+    out = ("#FLEET v1\nnotes.user=" + base64.b64encode(b"endpoints:\n  mine: 9000\n").decode()
+           + "\n#LISTEN proto|addr|port|pid|comm\ntcp|0.0.0.0|9000||\ntcp|0.0.0.0|9500||\n"
+           "#LLMMODEL port|status|ms|model\n9000|ok|3|qwen3|1\n#END rc=0\n")
+    snap = parse_payload(out)
+    (svc,) = snap.services
+    assert svc.addr == "0.0.0.0"
+    (row,) = model_servers(_dev(), snap.to_dict())
+    assert row["reach"] == "network" and row["url"].endswith(":9000/v1")
+
+
 def test_endpoint_specs_are_checked():
     assert notes.endpoint_spec("9000") == {"port": 9000, "path": ""}
     assert notes.endpoint_spec("9000/v1") == {"port": 9000, "path": "/v1"}

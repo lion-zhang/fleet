@@ -413,10 +413,15 @@ def _print_show(r: dict) -> None:
         console.print("  [bold]services[/bold]")
         for s in r["services_detail"]:
             console.print(f"        :{s['port']:<6} {escape(s.get('kind') or '?'):<10} {escape(s.get('comm') or '')}")
+    def _more(m, shown):
+        # Six names here, twenty kept: either way, say that there were more.
+        more = max(m.get("models_total") or 0, len(m["models"])) - min(shown, len(m["models"]))
+        return f" [dim]and {more} more[/dim]" if more > 0 else ""
+
     for m in r.get("models", []):
         where = m["url"] or "local only"
         console.print(f"  [bold]models[/bold] :{m['port']} {escape(m['framework'] or '')} [dim]{escape(where)}[/dim]  "
-                      + (escape(", ".join(m["models"][:6])) if m["models"]
+                      + (escape(", ".join(m["models"][:6])) + _more(m, 6) if m["models"]
                          else "[yellow]wants an API key[/yellow]" if m["status"] == "auth"
                          else "[dim]none listed[/dim]"))
     sw = r.get("software") or {}

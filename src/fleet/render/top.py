@@ -425,8 +425,10 @@ def render_device(row: dict[str, Any], live_within: int = 10) -> Table:
                   f"{proc.get('vram_mib', 0)} MiB  {escape(proc.get('user') or '?')}  "
                   f"[dim]{escape(short_command(what, 60))}[/dim]")
     for m in row.get("models") or []:
+        more = (m.get("models_total") or 0) - len(m.get("models") or [])
         t.add_row("[bold]models[/bold]",
-                  f":{m.get('port')} {escape(', '.join(m.get('models') or []) or '-')}  "
+                  f":{m.get('port')} {escape(', '.join(m.get('models') or []) or '-')}"
+                  + (f" and {more} more" if more > 0 else "") + "  "
                   f"[dim]{escape(m.get('framework') or '')}[/dim]")
     if sl := row.get("slurm"):
         # A shared host's stand-in for a process list, as in `fleet show`.
@@ -579,6 +581,8 @@ def render_models(view: dict[str, Any]) -> list:
                           else "[dim]none listed[/dim]", escape(sv["machine"]), label, reach)
             for m in sv["models"]:
                 t.add_row(escape(m), escape(sv["machine"]), label, reach)
+            if (more := (sv.get("models_total") or 0) - len(sv["models"])) > 0:
+                t.add_row(f"[dim]and {more} more[/dim]", escape(sv["machine"]), label, reach)
         out.append(t)
     if view["model_folders"]:
         out.append("\n[bold]model folders[/bold]")

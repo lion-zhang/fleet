@@ -119,3 +119,22 @@ def test_install_and_update_go_by_the_route_that_answered(monkeypatch):
     CliRunner().invoke(cli.app, ["install", "gpubox"])
     CliRunner().invoke(cli.app, ["update", "gpubox"])
     assert went == ["gpubox.example.ts.net"] * 2
+
+
+def test_the_tunnel_takes_the_key_and_jump_host_fleet_uses(tmp_path):
+    """It was ssh, the port and the address alone: a rental reached with its own key
+    asked for a password it does not have, and one behind a jump host was not found."""
+    key = tmp_path / "rental"
+    key.write_text("")
+    dev = Device(id="d", name="gpu", kind=Kind.RENTAL, endpoints=[
+        {"target": "1.2.3.4", "user": "root", "port": 2222,
+         "identity": str(key), "jump": "me@bastion"}])
+    snap = Snapshot(hostname="gpu").to_dict()
+    snap["services"] = [{"port": 8000, "addr": "127.0.0.1", "kind": "llm", "status": "ok",
+                         "model_ids": ["m"]},
+                        {"port": 8001, "addr": "::1", "kind": "llm", "status": "ok",
+                         "model_ids": ["n"]}]
+    v4, v6 = device_view(dev, {"status": "ok"}, snap, Detail.FULL)["models"]
+    assert v4["tunnel"] == (f"ssh -N -L 8000:127.0.0.1:8000 -p 2222 -i {key} "
+                            "-J me@bastion root@1.2.3.4")
+    assert v6["tunnel"].startswith("ssh -N -L 8001:[::1]:8001 ")

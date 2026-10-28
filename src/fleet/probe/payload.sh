@@ -577,6 +577,35 @@ elif have netstat; then
       printf "%s %s %s %s %s %s users:((\"%s\",pid=%s,fd=0))\n", $1, $2, $3, $4, $5, $6, c, pid
       next }
     { print }'
+elif [ "$OS" = "Linux" ] && [ -r /proc/net/tcp ]; then
+  # A slim image (a rented container) may have none of ss, netstat or lsof, and lsof run
+  # as a user lists only that user's ports: there `fleet models` found no server at all.
+  # The kernel's own table lists every port; the processes we may see name theirs.
+  # Which process holds each socket first, then the table, in one stream: no file to write.
+  { ls -l /proc/[0-9]*/fd 2>/dev/null | awk '
+      /^\/proc\/[0-9]+\/fd:$/ { pid = $0; sub(/^\/proc\//, "", pid); sub(/\/.*/, "", pid); next }
+      /socket:\[/ { i = $NF; gsub(/[^0-9]/, "", i); print "S", i, pid }'
+    cat /proc/net/tcp /proc/net/tcp6 2>/dev/null; } \
+    | awk '
+      function hex(s,  i, n) { n = 0; s = toupper(s)
+        for (i = 1; i <= length(s); i++) n = n * 16 + index("0123456789ABCDEF", substr(s, i, 1)) - 1
+        return n }
+      function v4(a) { return hex(substr(a,7,2)) "." hex(substr(a,5,2)) "." hex(substr(a,3,2)) "." hex(substr(a,1,2)) }
+      function v6(a,  w, i, out, g) {
+        if (a ~ /^0+$/) return "[::]"
+        if (a == "00000000000000000000000001000000") return "[::1]"
+        if (substr(a, 1, 16) == "0000000000000000" && substr(a, 17, 8) == "FFFF0000") return "[::ffff:" v4(substr(a, 25, 8)) "]"
+        out = ""
+        for (w = 0; w < 4; w++) { g = substr(a, w*8+1, 8)
+          g = substr(g,7,2) substr(g,5,2) substr(g,3,2) substr(g,1,2)
+          out = out (w ? ":" : "") sprintf("%x:%x", hex(substr(g,1,4)), hex(substr(g,5,4))) }
+        return "[" out "]" }
+      $1 == "S" { owner[$2] = $3; next }
+      $4 == "0A" { split($2, la, ":"); a = la[1]
+        addr = (length(a) == 8) ? v4(a) : v6(toupper(a)); port = hex(la[2]); pid = owner[$10]
+        if (pid == "") { printf "LISTEN 0 0 %s:%s x\n", addr, port; next }
+        comm = ""; cf = "/proc/" pid "/comm"; if ((getline comm < cf) <= 0) comm = "?"; close(cf)
+        printf "LISTEN 0 0 %s:%s x users:((\"%s\",pid=%s,fd=0))\n", addr, port, comm, pid }'
 elif have lsof; then
   lsof +c 0 -nP -iTCP -sTCP:LISTEN 2>/dev/null | tail -n +2 \
     | awk '{la=$9; port=la; sub(/.*:/, "", port); addr=substr(la, 1, length(la)-length(port)-1)
@@ -783,7 +812,8 @@ fi
 
 # ---------------------------------------------------------------- LLM servers
 # A port that looks like a model server is asked what it serves -- here, on the machine,
-# so a server that only listens on localhost answers too. Two seconds each, eight at most.
+# so a server that only listens on localhost answers too. Two seconds each, eight at most,
+# ten seconds in all.
 if [ "${FLEET_LIGHT:-}" != "1" ] && { [ -n "$listen" ] || [ -n "$declared" ]; } \
      && { have curl || have wget || have_python; }; then
   # Without mktemp, beside the script -- the probe's own folder -- not at a name in /tmp
@@ -828,6 +858,9 @@ PY
       tolower($5) ~ /^(controlce|ctrlcenter|airplay)/ { next }                 # macOS AirPlay on :5000
       tolower($5) ~ re || ($3 in hint) { print $2 "|" $3 "|" }'
   } | awk -F'|' '$2 != "" && !seen[$2]++' | head -8 | while IFS='|' read -r addr port base; do
+    # Ten seconds for all of them: eight servers that took the connection and never
+    # answered held the probe past its own limit, and the machine read as unreachable.
+    now=$(date +%s 2>/dev/null) && { [ -n "${t0:-}" ] || t0=$now; [ $((now - t0)) -lt 10 ] || break; }
     case "$addr" in
       ""|"*"|0.0.0.0|"::"|"[::]"|127.*) host=127.0.0.1 ;;
       "::1"|"[::1]") host="[::1]" ;;      # IPv6 loopback only: 127.0.0.1 finds nothing
@@ -845,7 +878,9 @@ PY
         code=other
       fi
     fi
-    if [ -z "$ids" ] && [ -z "$base" ] && [ "$code" != "401" ] && [ "$code" != "403" ]; then
+    # Not again when it did not answer at all: that doubled the wait on a hung server.
+    if [ -z "$ids" ] && [ -z "$base" ] && [ "$code" != "401" ] && [ "$code" != "403" ] \
+       && [ "$code" != "000" ]; then
       set -- $(get "http://$host:$port/api/tags")   # ollama's own list
       if [ "$1" = "200" ] && is_list models; then
         code=200; secs=$2
@@ -857,7 +892,10 @@ PY
       200) st=ok ;; 401|403) st=auth ;; 000) st=down ;; *) st=none ;;
     esac
     if [ -n "$ids" ]; then
-      printf '%s\n' "$ids" | head -20 | while read -r m; do printf '%s|%s|%s|%s\n' "$port" "$st" "$ms" "$(printf '%s' "$m" | clean)"; done
+      # Twenty names at most, and how many there were: a server with 300 showed twenty
+      # and said nothing of the rest.
+      n=$(printf '%s\n' "$ids" | grep -c .)
+      printf '%s\n' "$ids" | head -20 | while read -r m; do printf '%s|%s|%s|%s|%s\n' "$port" "$st" "$ms" "$(printf '%s' "$m" | clean)" "$n"; done
     else
       printf '%s|%s|%s|\n' "$port" "$st" "$ms"
     fi
