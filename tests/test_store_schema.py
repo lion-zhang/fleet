@@ -180,3 +180,31 @@ def test_a_reading_of_nan_is_no_reading():
     from fleet.probe.parse import _float
 
     assert _float("nan") is None and _float("inf") is None and _float("1.5") == 1.5
+
+
+def test_a_disk_that_fills_up_still_shows_what_was_just_read(tmp_path, monkeypatch, capsys):
+    """The cache opened, then would take nothing more: every `fleet ls -r` died with
+    "database or disk is full" -- on the machine whose full disk you were looking for."""
+    monkeypatch.setattr(store, "_warned", False)
+    conn = store.connect(tmp_path / "cache.db")
+    try:
+        store.record(conn, "box", _res(host="before"))
+        conn.execute("PRAGMA wal_checkpoint(TRUNCATE)")
+        pages = conn.execute("PRAGMA page_count").fetchone()[0]
+        conn.execute(f"PRAGMA max_page_count={pages}")   # full, as far as SQLite knows
+        big = ProbeResult(status=Status.OK, latency_ms=7,
+                          snapshot=Snapshot(hostname="after", os="x" * 200_000))
+        assert store.record(conn, "box", big) is False
+        state, snap = store.latest(conn, "box")
+        assert state["status"] == "ok" and state["probe_ms"] == 7
+        assert snap["hostname"] == "after"
+        # A machine that did not answer, then: still shown as it is now, with the last
+        # reading it gave.
+        store.record(conn, "box", ProbeResult(status=Status.TIMEOUT))
+        state, snap = store.latest(conn, "box")
+        assert state["status"] == "timeout" and snap["hostname"] == "after"
+        store.expire(conn, "box")
+        store.forget_except(conn, {"other"})
+    finally:
+        conn.close()
+    assert "database or disk is full" in capsys.readouterr().err

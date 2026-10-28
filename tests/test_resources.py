@@ -109,6 +109,52 @@ def test_folder_sizes_are_worked_out_in_the_background_and_reported_next_time(tm
     assert second.storage[0].sized_at
 
 
+def _probe_on_a_full_disk(home: Path, tmp_path: Path, **env) -> tuple[str, str]:
+    """Probe with ~/.cache/fleet a tiny filesystem, already holding what it held, and
+    full; after the background `du` is done, returns the probe's output and the sizes
+    file as left. Needs a mount, so it runs in a user namespace where that is allowed."""
+    if not shutil.which("unshare") or subprocess.run(
+            ["unshare", "-rm", "true"], capture_output=True).returncode:
+        pytest.skip("cannot mount a small filesystem here")
+    cache = home / ".cache" / "fleet"
+    saved = tmp_path / "saved"
+    shutil.copytree(cache, saved)
+    script = (f'c="{cache}"; mount -t tmpfs -o size=64k tmpfs "$c" && cp "{saved}"/* "$c"/'
+              ' && { dd if=/dev/zero of="$c/fill" bs=512 2>/dev/null; true; }'
+              f' && sh "{PAYLOAD}"; n=0; while [ -d "$c/du.lock" ] && [ $n -lt 100 ]; do'
+              ' sleep 0.1; n=$((n+1)); done; echo "#SIZES"; cat "$c/sizes"')
+    e = {"PATH": os.environ["PATH"], "HOME": str(home), **env}
+    p = subprocess.run(["unshare", "-rm", "sh", "-c", script], env=e, capture_output=True,
+                       text=True, timeout=60)
+    out, _, sizes = p.stdout.rpartition("#SIZES\n")
+    assert "#END" in out, p.stderr
+    return out, sizes
+
+
+@posix
+@pytest.mark.skipif(sys.platform != "linux", reason="mounts a tmpfs")
+def test_a_disk_that_fills_up_keeps_the_folder_sizes_it_had(tmp_path):
+    """A full disk swapped the sizes for an empty file -- gone just when you look for
+    what filled the disk."""
+    home = make_home(tmp_path, "paths:\n  models: ~/models\n")
+    venv(home, "a", "3.11", "torch-2.0.0")
+    (home / "models").mkdir()
+    (home / "models" / "w.bin").write_bytes(b"x" * 300_000)
+    probe(home)
+    sizes = home / ".cache" / "fleet" / "sizes"
+    for _ in range(100):
+        if sizes.exists():
+            break
+        threading.Event().wait(0.05)
+    before = sizes.read_text()
+    assert "/models|" in before
+    out, after = _probe_on_a_full_disk(home, tmp_path, FLEET_REFRESH="1")
+    assert after == before
+    snap = parse_payload(out)
+    assert snap.storage[0].size_kb and snap.storage[0].size_kb >= 290
+    assert any(p.package == "torch" for p in snap.pyenvs)
+
+
 # ---------------------------------------------------------------- software
 @posix
 def test_python_packages_are_read_from_their_folders_not_imported(tmp_path):
@@ -145,6 +191,25 @@ def test_a_machine_whose_home_cannot_be_written_still_reports_its_software(tmp_p
     venv(home, "a", "3.11", "torch-2.0.0")
     (home / ".cache").write_text("not a folder")       # mkdir of the cache fails
     assert any(p.package == "torch" for p in parse_payload(probe(home)).pyenvs)
+
+
+@posix
+@pytest.mark.skipif(hasattr(os, "geteuid") and os.geteuid() == 0,
+                    reason="root may write any folder")
+def test_a_cache_folder_it_may_not_write_still_lets_it_report_its_software(tmp_path):
+    # Left by a `sudo` run, or on a home that is read-only: the folder is there, so the
+    # mkdir passed, but every write in it failed and the list came back empty each time.
+    home = make_home(tmp_path)
+    venv(home, "a", "3.11", "torch-2.0.0")
+    cache = home / ".cache" / "fleet"
+    cache.mkdir(parents=True)
+    cache.chmod(0o555)
+    try:
+        assert any(p.package == "torch" for p in parse_payload(probe(home)).pyenvs)
+        assert any(p.package == "torch"
+                   for p in parse_payload(probe(home, FLEET_REFRESH="1")).pyenvs)
+    finally:
+        cache.chmod(0o755)
 
 
 # ---------------------------------------------------------------- model servers
@@ -613,3 +678,80 @@ def test_the_windows_write_takes_and_lets_go_of_its_lock(tmp_path):
     assert (local / "fleet" / "machine.yaml").read_text() == "cost: 2\n"
     stale = write(b"cost: 1\n", "cost: 3\n")
     assert "CHANGED" in stale.stdout and not stale.stderr.strip(), stale.stderr
+
+
+@posix
+@pytest.mark.skipif(hasattr(os, "geteuid") and os.geteuid() == 0,
+                    reason="root writes a folder whatever its mode says")
+def test_a_folder_it_may_not_write_is_said_at_once(tmp_path, monkeypatch):
+    """A ~/.config/fleet that `sudo` made root's: the lock's mkdir failed for that reason
+    and was taken for somebody else's lock -- twenty seconds, ten times over, then "the
+    file kept changing", which sent the user looking for another writer."""
+    from fleet.ops import machinefile
+
+    monkeypatch.setenv("HOME", str(tmp_path))
+    folder = tmp_path / ".config" / "fleet"
+    folder.mkdir(parents=True)
+    (folder / "machine.yaml").write_text("cost: 1\n")
+    folder.chmod(0o500)
+    try:
+        started = time.monotonic()
+        with pytest.raises(machinefile.MachineFileError, match="cannot write"):
+            machinefile.change(None, "posix", tags_add=["gpu"])
+        assert time.monotonic() - started < 10
+    finally:
+        folder.chmod(0o700)
+    assert (folder / "machine.yaml").read_text() == "cost: 1\n"
+
+
+@posix
+def test_a_write_that_runs_out_of_space_says_so_and_leaves_nothing(tmp_path, monkeypatch):
+    """On a full disk the decode failed, the macOS spelling was tried next, and the user
+    read "base64: invalid option -- 'D'" beside a half-written machine.yaml.1234."""
+    from fleet.ops import machinefile
+
+    monkeypatch.setenv("HOME", str(tmp_path))
+    folder = tmp_path / ".config" / "fleet"
+    folder.mkdir(parents=True)
+    (folder / "machine.yaml").write_text("cost: 1\n")
+    stubs = tmp_path / "bin"
+    stubs.mkdir()
+    # GNU base64 on a full disk: it writes what fits, then says so and fails.
+    (stubs / "base64").write_text(
+        f'#!/bin/sh\n[ "$1" = -d ] || [ "$1" = -D ] || exec {shutil.which("base64")} "$@"\n'
+        '[ "$1" = -D ] && { echo "base64: invalid option -- \'D\'" >&2; exit 1; }\n'
+        # Read whole first: BSD head reads past the bytes it prints, from a pipe.
+        'x=$(cat); [ -n "$x" ] || exit 0; printf %.3s "$x"\n'
+        'echo "base64: write error: No space left on device" >&2; exit 1\n')
+    (stubs / "base64").chmod(0o755)
+    monkeypatch.setenv("PATH", f"{stubs}{os.pathsep}{os.environ['PATH']}")
+    with pytest.raises(machinefile.MachineFileError, match="No space left") as e:
+        machinefile.change(None, "posix", tags_add=["gpu"])
+    assert "invalid option" not in str(e.value)
+    assert sorted(p.name for p in folder.iterdir()) == ["machine.yaml"]
+    assert (folder / "machine.yaml").read_text() == "cost: 1\n"
+
+
+@pytest.mark.skipif(not PWSH, reason="needs PowerShell")
+def test_the_windows_write_says_when_it_could_not_write(tmp_path):
+    """Each step of the write was a line of its own under `-Command -`, so one that
+    failed left the next to run: the file was never written, and the last line still
+    printed done -- `fleet edit` said ✓."""
+    from fleet.ops import machinefile
+
+    local = tmp_path / "local"
+    local.mkdir()
+    (local / "fleet").write_text("a file where the folder should be")
+    env = {**os.environ, "TERM": "dumb", "LOCALAPPDATA": str(local)}
+    p = subprocess.run([PWSH, "-NoProfile", "-Command", "-"], text=True,
+                       input=machinefile._write_script("windows", b"", "cost: 1\n"),
+                       capture_output=True, timeout=120, env=env)
+    assert machinefile.DONE not in p.stdout, p.stdout
+    assert p.stderr.strip()
+    # The lock is let go of: the next write, with the folder fixed, goes through.
+    (local / "fleet").unlink()
+    p = subprocess.run([PWSH, "-NoProfile", "-Command", "-"], text=True,
+                       input=machinefile._write_script("windows", b"", "cost: 1\n"),
+                       capture_output=True, timeout=120, env=env)
+    assert machinefile.DONE in p.stdout, p.stderr
+    assert (local / "fleet" / "machine.yaml").read_text() == "cost: 1\n"

@@ -67,8 +67,13 @@ def ensure_dirs() -> None:
     directory is the boundary that holds regardless of each file's own mode, and both are
     fleet's alone, so tightening them can surprise nobody.
     """
+    from .state.writes import cannot_write
+
     for d in (CONFIG_DIR, STATE_DIR):
-        d.mkdir(parents=True, exist_ok=True, mode=0o700)
+        try:
+            d.mkdir(parents=True, exist_ok=True, mode=0o700)
+        except OSError as exc:
+            raise cannot_write(d, exc) from exc
         try:
             if d.stat().st_mode & 0o077:
                 d.chmod(0o700)

@@ -90,12 +90,42 @@ def _set_aside(path: Path, exc: BaseException) -> None:
 _warned = False
 
 
-def _in_memory(path: Path, exc: BaseException) -> sqlite3.Connection:
+def _say_unsaved(path: Path | str, exc: BaseException) -> None:
     global _warned
     if not _warned:
         _warned = True
         print(f"fleet: cannot write its cache at {path} ({exc}); carrying on without "
               "saving what this run sees", file=sys.stderr)
+
+
+# What this run measured and the cache would not take -- the disk filled up after it was
+# opened -- by (cache file, device, source). `latest` answers with it, so the command
+# still shows what it just read. A full disk is when `fleet ls` matters most: it is how
+# you find which one. It died there with "database or disk is full".
+_unsaved: dict[tuple[str, str, str], tuple[dict, dict | None]] = {}
+
+
+def _file_of(conn: sqlite3.Connection) -> str:
+    try:
+        return str(conn.execute("PRAGMA database_list").fetchone()[2] or "")
+    except sqlite3.Error:
+        return ""
+
+
+def _refused(conn: sqlite3.Connection, exc: sqlite3.OperationalError) -> bool:
+    """Whether a failed write is the cache refusing it -- full, read-only, broken I/O --
+    rather than another fleet holding it, which stays an error. Undoes the half-made
+    change and says so, once."""
+    if str(getattr(exc, "sqlite_errorname", "")).startswith(("SQLITE_BUSY", "SQLITE_LOCKED")):
+        return False
+    if conn.in_transaction:
+        conn.rollback()
+    _say_unsaved(_file_of(conn) or DB_PATH, exc)
+    return True
+
+
+def _in_memory(path: Path, exc: BaseException) -> sqlite3.Connection:
+    _say_unsaved(path, exc)
     conn = sqlite3.connect(":memory:")
     try:
         disk = sqlite3.connect(f"{path.resolve().as_uri()}?mode=ro&immutable=1", uri=True)
@@ -216,16 +246,66 @@ def record(conn: sqlite3.Connection, device_id: str, res: ProbeResult, *,
     """
     now = int(time.time()) if at is None else min(int(at), int(time.time()))
     started = not conn.in_transaction
-    if started:
-        # The read below and the write after it as one step: two processes probing the
-        # same machine each read the streak and wrote it +1, losing a failure.
-        conn.execute("BEGIN IMMEDIATE")
-    prev = conn.execute("SELECT last_ok_at, fail_streak, last_probe_at FROM device_state "
-                        "WHERE device_id=? AND source=?", (device_id, source)).fetchone()
-    if only_if_newer and prev and int(prev["last_probe_at"] or 0) >= now:
+    state: dict | None = None
+    payload = res.snapshot.to_dict() if res.snapshot is not None else None
+    try:
         if started:
-            conn.rollback()
+            # The read below and the write after it as one step: two processes probing
+            # the same machine each read the streak and wrote it +1, losing a failure.
+            conn.execute("BEGIN IMMEDIATE")
+        prev = conn.execute("SELECT last_ok_at, fail_streak, last_probe_at FROM device_state "
+                            "WHERE device_id=? AND source=?", (device_id, source)).fetchone()
+        if only_if_newer and prev and int(prev["last_probe_at"] or 0) >= now:
+            if started:
+                conn.rollback()
+            return False
+        state = _state_row(device_id, source, res, prev, now, probed_by)
+        conn.execute(
+            """INSERT INTO device_state
+                 (device_id,source,status,error_class,error_detail,endpoint_used,
+                  last_probe_at,last_ok_at,probe_ms,stderr_tail,probed_by,fail_streak)
+               VALUES (:device_id,:source,:status,:error_class,:error_detail,:endpoint_used,
+                       :last_probe_at,:last_ok_at,:probe_ms,:stderr_tail,:probed_by,
+                       :fail_streak)
+               ON CONFLICT(device_id,source) DO UPDATE SET
+                 status=excluded.status, error_class=excluded.error_class,
+                 error_detail=excluded.error_detail, endpoint_used=excluded.endpoint_used,
+                 last_probe_at=excluded.last_probe_at, last_ok_at=excluded.last_ok_at,
+                 probe_ms=excluded.probe_ms, stderr_tail=excluded.stderr_tail,
+                 probed_by=excluded.probed_by, fail_streak=excluded.fail_streak""", state)
+        if payload is not None:
+            if payload.get("light"):
+                last = conn.execute("SELECT payload FROM snapshot WHERE device_id=? AND "
+                                    "source=? ORDER BY id DESC LIMIT 1",
+                                    (device_id, source)).fetchone()
+                if last:
+                    carry_over(json.loads(last["payload"]), payload)
+            conn.execute("INSERT INTO snapshot (device_id, ts, source, payload) VALUES (?,?,?,?)",
+                         (device_id, res.snapshot.ts, source, json.dumps(payload, default=str)))
+            keep = int(load_config().snapshot_retention)
+            conn.execute(
+                """DELETE FROM snapshot WHERE device_id=? AND source=? AND id NOT IN
+                     (SELECT id FROM snapshot WHERE device_id=? AND source=?
+                      ORDER BY id DESC LIMIT ?)""",
+                (device_id, source, device_id, source, keep))
+        conn.commit()
+    except sqlite3.OperationalError as exc:
+        if not _refused(conn, exc):
+            raise
+        key = (_file_of(conn), device_id, source)
+        kept = _unsaved.get(key, (None, None))
+        _unsaved[key] = (state or _state_row(device_id, source, res, None, now, probed_by),
+                         payload if payload is not None else kept[1])
         return False
+    if _unsaved and (kept := _unsaved.pop((_file_of(conn), device_id, source), None)):
+        # Saved this time: only a reading the cache never took is still newer than it.
+        if payload is None and kept[1] is not None:
+            _unsaved[(_file_of(conn), device_id, source)] = (state, kept[1])
+    return True
+
+
+def _state_row(device_id: str, source: str, res: ProbeResult, prev, now: int,
+               probed_by: str) -> dict:
     # A failed probe degrades a device to "stale but known" -- last_ok_at is preserved
     # so the UI can say "last seen 2h ago" instead of blanking the device.
     last_ok = now if res.ok else (prev["last_ok_at"] if prev else None)
@@ -234,37 +314,11 @@ def record(conn: sqlite3.Connection, device_id: str, res: ProbeResult, *,
     # granted since, which is exactly when someone looks again.
     streak = ((prev["fail_streak"] or 0) if prev else 0) + 1 if res.status in SLOW_FAILURES \
         else 0
-    conn.execute(
-        """INSERT INTO device_state
-             (device_id,source,status,error_class,error_detail,endpoint_used,
-              last_probe_at,last_ok_at,probe_ms,stderr_tail,probed_by,fail_streak)
-           VALUES (?,?,?,?,?,?,?,?,?,?,?,?)
-           ON CONFLICT(device_id,source) DO UPDATE SET
-             status=excluded.status, error_class=excluded.error_class,
-             error_detail=excluded.error_detail, endpoint_used=excluded.endpoint_used,
-             last_probe_at=excluded.last_probe_at, last_ok_at=excluded.last_ok_at,
-             probe_ms=excluded.probe_ms, stderr_tail=excluded.stderr_tail,
-             probed_by=excluded.probed_by, fail_streak=excluded.fail_streak""",
-        (device_id, source, res.status.value, res.error_class, res.error_detail,
-         res.endpoint_used, now, last_ok, res.latency_ms, res.stderr_tail, probed_by,
-         streak))
-    if res.snapshot is not None:
-        payload = res.snapshot.to_dict()
-        if payload.get("light"):
-            last = conn.execute("SELECT payload FROM snapshot WHERE device_id=? AND source=? "
-                                "ORDER BY id DESC LIMIT 1", (device_id, source)).fetchone()
-            if last:
-                carry_over(json.loads(last["payload"]), payload)
-        conn.execute("INSERT INTO snapshot (device_id, ts, source, payload) VALUES (?,?,?,?)",
-                     (device_id, res.snapshot.ts, source, json.dumps(payload, default=str)))
-        keep = int(load_config().snapshot_retention)
-        conn.execute(
-            """DELETE FROM snapshot WHERE device_id=? AND source=? AND id NOT IN
-                 (SELECT id FROM snapshot WHERE device_id=? AND source=?
-                  ORDER BY id DESC LIMIT ?)""",
-            (device_id, source, device_id, source, keep))
-    conn.commit()
-    return True
+    return {"device_id": device_id, "source": source, "status": res.status.value,
+            "error_class": res.error_class, "error_detail": res.error_detail,
+            "endpoint_used": res.endpoint_used, "last_probe_at": now, "last_ok_at": last_ok,
+            "probe_ms": res.latency_ms, "stderr_tail": res.stderr_tail,
+            "probed_by": probed_by, "fail_streak": streak}
 
 
 def carry_over(prev: dict, snap: dict) -> None:
@@ -299,11 +353,16 @@ def forget_except(conn: sqlite3.Connection, keep: set[str]) -> int:
         return 0                               # an empty inventory is a reason to stop
     gone = [r[0] for r in conn.execute("SELECT DISTINCT device_id FROM device_state")
             if r[0] not in keep]
-    for device_id in gone:
-        conn.execute("DELETE FROM device_state WHERE device_id=?", (device_id,))
-        conn.execute("DELETE FROM snapshot WHERE device_id=?", (device_id,))
-    if gone:
-        conn.commit()
+    try:
+        for device_id in gone:
+            conn.execute("DELETE FROM device_state WHERE device_id=?", (device_id,))
+            conn.execute("DELETE FROM snapshot WHERE device_id=?", (device_id,))
+        if gone:
+            conn.commit()
+    except sqlite3.OperationalError as exc:
+        if not _refused(conn, exc):
+            raise
+        return 0
     return len(gone)
 
 
@@ -322,12 +381,16 @@ def rename_device(conn: sqlite3.Connection, old_id: str, new_id: str) -> None:
     """
     if old_id == new_id:
         return
-    conn.execute("DELETE FROM device_state WHERE device_id=? AND EXISTS "
-                 "(SELECT 1 FROM device_state WHERE device_id=?)", (old_id, new_id))
-    for table in ("device_state", "snapshot", "event"):
-        conn.execute(f"UPDATE OR REPLACE {table} SET device_id=? WHERE device_id=?",
-                     (new_id, old_id))
-    conn.commit()
+    try:
+        conn.execute("DELETE FROM device_state WHERE device_id=? AND EXISTS "
+                     "(SELECT 1 FROM device_state WHERE device_id=?)", (old_id, new_id))
+        for table in ("device_state", "snapshot", "event"):
+            conn.execute(f"UPDATE OR REPLACE {table} SET device_id=? WHERE device_id=?",
+                         (new_id, old_id))
+        conn.commit()
+    except sqlite3.OperationalError as exc:
+        if not _refused(conn, exc):
+            raise
 
 
 def expire(conn: sqlite3.Connection, device_id: str) -> None:
@@ -337,13 +400,23 @@ def expire(conn: sqlite3.Connection, device_id: str) -> None:
     which the reading cached a minute ago knows nothing of: `fleet ls` straight after
     an edit showed the old cost and the old alert.
     """
-    with conn:
-        conn.execute("UPDATE device_state SET last_probe_at=0 WHERE device_id=?",
-                     (device_id,))
+    try:
+        with conn:
+            conn.execute("UPDATE device_state SET last_probe_at=0 WHERE device_id=?",
+                         (device_id,))
+    except sqlite3.OperationalError as exc:
+        if not _refused(conn, exc):
+            raise
 
 
 def latest(conn: sqlite3.Connection, device_id: str) -> tuple[dict | None, dict | None]:
     """Return (state_row, snapshot_dict) -- either may be None."""
+    if _unsaved and (kept := _unsaved.get((_file_of(conn), device_id, "self"))):
+        if kept[1] is not None:
+            return dict(kept[0]), kept[1]
+        sn = conn.execute("SELECT payload FROM snapshot WHERE device_id=? AND source='self' "
+                          "ORDER BY id DESC LIMIT 1", (device_id,)).fetchone()
+        return dict(kept[0]), json.loads(sn["payload"]) if sn else None
     st = conn.execute("SELECT * FROM device_state WHERE device_id=? AND source='self'",
                       (device_id,)).fetchone()
     sn = conn.execute(

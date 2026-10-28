@@ -67,15 +67,26 @@ def _write_script(platform: str, old: bytes, new: str) -> str:
                 "$h=[BitConverter]::ToString([Security.Cryptography.SHA256]::Create()"
                 ".ComputeHash($cur)).Replace('-','').ToLower()\n"
                 f"if($h -ne '{old_sha}'){{'CHANGED'; $m.ReleaseMutex(); exit 0}}\n"
-                "New-Item -ItemType Directory -Force -Path (Split-Path $f) | Out-Null\n"
+                # One line, so that one try can hold it: a folder it may not write
+                # failed each step on its own line, and the last one still said done.
                 "$t=\"$f.$PID\"\n"
-                f"[IO.File]::WriteAllBytes($t,[Convert]::FromBase64String('{b64}'))\n"
-                "Move-Item -Force -LiteralPath $t -Destination $f\n"
-                "$m.ReleaseMutex()\n"
-                f"'{DONE}'\n")
+                "try{New-Item -ItemType Directory -Force -ErrorAction Stop "
+                "-Path (Split-Path $f) | Out-Null; "
+                f"[IO.File]::WriteAllBytes($t,[Convert]::FromBase64String('{b64}')); "
+                "Move-Item -Force -ErrorAction Stop -LiteralPath $t -Destination $f; "
+                f"$m.ReleaseMutex(); '{DONE}'}}"
+                "catch{Remove-Item -LiteralPath $t -ErrorAction SilentlyContinue; "
+                "$m.ReleaseMutex(); "
+                "[Console]::Error.WriteLine($_.Exception.Message); exit 1}\n")
     # sha256sum on Linux and busybox, shasum on macOS; the comparison is the same.
     # mkdir is the one atomic test-and-set every POSIX shell has (no flock on macOS).
-    return (f'f={_POSIX}; l="$f.lock"; mkdir -p "$(dirname "$f")" || exit 1; n=0; '
+    #
+    # A folder it may not write -- a read-only home, a ~/.config/fleet that `sudo` made
+    # root's -- said so at once. The lock's mkdir failed for that reason too, and was
+    # taken for somebody else's lock: twenty seconds of waiting, ten times over, and then
+    # "the file kept changing", which sent the user looking for another writer.
+    return (f'f={_POSIX}; l="$f.lock"; d=$(dirname "$f"); mkdir -p "$d" || exit 1; '
+            '[ -w "$d" ] || { echo "cannot write $d" >&2; exit 1; }; n=0; '
             'until mkdir "$l" 2>/dev/null; do '
             '[ -n "$(find "$l" -prune -mmin +1 2>/dev/null)" ] && rmdir "$l" 2>/dev/null; '
             'n=$((n+1)); [ $n -ge 100 ] && { echo CHANGED; exit 0; }; '
@@ -84,9 +95,12 @@ def _write_script(platform: str, old: bytes, new: str) -> str:
             'h=$( { [ -f "$f" ] && cat "$f"; } | { sha256sum 2>/dev/null || shasum -a 256; } '
             '| cut -d" " -f1); '
             f'[ "$h" = "{old_sha}" ] || {{ echo CHANGED; exit 0; }}; '
-            't="$f.$$" && '
-            f'printf %s {b64} | {{ base64 -d 2>/dev/null || base64 -D; }} > "$t" && '
-            f'mv -f "$t" "$f" && echo {DONE}')
+            # The decoder is picked before it is used: falling back to -D after a -d
+            # that failed for want of space blamed "invalid option -- 'D'" and left
+            # the half-written copy behind, on a disk already full.
+            't="$f.$$"; b=-d; base64 -d </dev/null >/dev/null 2>&1 || b=-D; '
+            f'if printf %s {b64} | base64 $b > "$t" && mv -f "$t" "$f"; then echo {DONE}; '
+            'else rm -f "$t"; exit 1; fi')
 
 
 def _run(ep: Endpoint | None, script: str, platform: str) -> str:
