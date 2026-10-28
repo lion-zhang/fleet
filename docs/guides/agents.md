@@ -250,7 +250,7 @@ gets the same answers as an agent with one.
 | `show_machine` | `fleet show NAME --json`, with `rescan` |
 | `list_gpu_jobs` | `fleet ps --json`, with `refresh` |
 | `list_models` | `fleet models --json`, with `refresh`/`rescan` |
-| `run_on_machine` | `fleet ssh NAME -- COMMAND`: its output and exit code, within two minutes |
+| `run_on_machine` | `fleet ssh NAME -- COMMAND`: its exit code and the last 8000 characters of its output (`stdout_cut` says when there was more), within two minutes |
 | `add_machine` | `fleet add "ssh …" --json` |
 | `discover_machines` | `fleet ls --discover --json` |
 | `doctor_machine` | `fleet doctor [NAME] --json` |

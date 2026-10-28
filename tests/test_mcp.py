@@ -465,3 +465,28 @@ def test_a_command_that_outlasts_the_wait_is_not_called_stopped(monkeypatch):
     text = json.dumps([getattr(c, "text", str(c)) for c in
                        (out[0] if isinstance(out, tuple) else out)])
     assert "still_running" in text and "may still be running on gpu" in text, text
+
+
+def test_output_cut_to_its_end_says_so(monkeypatch):
+    """Only the last 8000 characters come back: the tail of a long listing read as the
+    whole of it."""
+    import asyncio
+    import json
+    import subprocess
+
+    from fleet import mcpserver
+
+    long = "".join(f"file-{i:05d}\n" for i in range(2000))
+    monkeypatch.setattr(mcpserver, "_exec", lambda args, *t: subprocess.CompletedProcess(
+        args, 0, stdout=long, stderr=""))
+    server = mcpserver.build_server()
+    out = asyncio.run(server.call_tool("run_on_machine", {"machine": "gpu", "command": "ls"}))
+    text = json.dumps([getattr(c, "text", str(c)) for c in
+                       (out[0] if isinstance(out, tuple) else out)])
+    assert "stdout_cut" in text and f"of {len(long)} characters" in text, text
+
+    monkeypatch.setattr(mcpserver, "_exec", lambda args, *t: subprocess.CompletedProcess(
+        args, 0, stdout="short\n", stderr=""))
+    out = asyncio.run(server.call_tool("run_on_machine", {"machine": "gpu", "command": "ls"}))
+    assert "stdout_cut" not in json.dumps([getattr(c, "text", str(c)) for c in
+                                            (out[0] if isinstance(out, tuple) else out)])
