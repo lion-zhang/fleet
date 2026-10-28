@@ -224,6 +224,32 @@ def test_doctor_changes_nothing_and_answers_as_json(monkeypatch, mykey):
     assert inv.INVENTORY_PATH.read_text() == before
 
 
+
+def test_doctor_looks_at_the_failing_machines_side_by_side(monkeypatch, mykey):
+    """One after another, every machine switched off cost its whole timeout: twenty of
+    them kept `fleet doctor` silent for minutes, and two hundred never finished."""
+    import time
+
+    from fleet.state import store
+
+    names = [f"box{i}" for i in range(8)]
+    inv.save([_dev(id=f"id:{n}", name=n) for n in names])
+    monkeypatch.setattr(store, "latest", lambda conn, dev_id: ({"status": "timeout"}, None))
+
+    def slow(dev, **k):
+        time.sleep(0.5)
+        return doctor.advise(dev, Status.TIMEOUT.value, "")
+
+    monkeypatch.setattr(doctor, "diagnose", slow)
+    started = time.monotonic()
+    r = CliRunner().invoke(cli.app, ["doctor", "--json"])
+    assert r.exit_code == 0, r.output
+    assert time.monotonic() - started < 3          # eight in a row took four seconds
+    assert [m["name"] for m in json.loads(r.stdout)["machines"]] == names
+    r = CliRunner().invoke(cli.app, ["doctor"])
+    assert [ln.split()[1] for ln in r.stdout.splitlines() if ln.startswith("✗")] == names
+
+
 # ---------------------------------------------------------------- add
 def test_a_machine_that_refuses_us_is_not_recorded_and_the_fix_is_said(monkeypatch, mykey):
     monkeypatch.setattr(cli, "onboard", lambda cmd, **k: (

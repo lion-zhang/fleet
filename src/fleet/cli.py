@@ -1984,20 +1984,34 @@ def cmd_doctor(name: str = typer.Argument(None, help="one machine; all that are 
                        not in (None, Status.OK.value)]
         finally:
             conn.close()
-    verdicts = []
-    for dev in targets:
-        conn = store.connect()
-        try:
-            state, snap = store.latest(conn, dev.id)
-        finally:
-            conn.close()
-        verdicts.append(doctor.diagnose(dev, state=state, snap=snap))
-    if _emit({"machines": [v.to_dict() for v in verdicts]}, json_out):
-        return
-    if not verdicts:
-        console.print("[green]✓[/green] every machine fleet watches answered its last probe"
-                      " [dim](fleet doctor NAME looks at one now)[/dim]")
-        return
+    conn = store.connect()
+    try:
+        last = [store.latest(conn, dev.id) for dev in targets]
+    finally:
+        conn.close()
+    # Side by side, as `ls` probes, and each said as soon as it and those before it are
+    # done: one after another, twenty machines that were switched off kept `fleet doctor`
+    # silent for minutes, and two hundred for longer than anyone waits.
+    import concurrent.futures
+
+    pool = concurrent.futures.ThreadPoolExecutor(
+        max_workers=max(1, min(int(load_config().max_workers), len(targets) or 1)))
+    try:
+        found = pool.map(lambda job: doctor.diagnose(job[0], state=job[1][0], snap=job[1][1]),
+                         zip(targets, last))
+        if json_out:
+            _emit({"machines": [v.to_dict() for v in found]}, True)
+            return
+        if not targets:
+            console.print("[green]✓[/green] every machine fleet watches answered its last "
+                          "probe [dim](fleet doctor NAME looks at one now)[/dim]")
+            return
+        _print_verdicts(found)
+    finally:
+        pool.shutdown(wait=False, cancel_futures=True)
+
+
+def _print_verdicts(verdicts) -> None:
     for v in verdicts:
         mark = "[green]✓[/green]" if v.status == Status.OK.value else "[red]✗[/red]"
         console.print(f"{mark} [bold]{v.name}[/bold]  [dim]{v.status}"
