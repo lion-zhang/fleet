@@ -299,6 +299,29 @@ def test_model_servers_are_asked_what_they_serve(tmp_path, monkeypatch):
             s.shutdown()
 
 
+@posix
+def test_a_model_server_is_kept_on_a_machine_with_many_services(tmp_path):
+    """Listening ports are cut at 40, by port: a node with 40 services below it lost its
+    vLLM server from `fleet models`, and an agent was told the machine served nothing."""
+    bin_ = tmp_path / "bin"
+    bin_.mkdir()
+    rows = "".join(f'LISTEN 0 128 0.0.0.0:{p} 0.0.0.0:* users:(("svc",pid={p},fd=3))\n'
+                   for p in range(7000, 7050))
+    rows += 'LISTEN 0 128 0.0.0.0:18000 0.0.0.0:* users:(("vllm",pid=9,fd=3))\n'
+    (bin_ / "ss").write_text(f"#!/bin/sh\nprintf '%s' '{rows}'\n")
+    lsof = "COMMAND PID USER FD TYPE DEVICE SIZE/OFF NODE NAME\n" + "".join(
+        f"svc {p} me 3u IPv4 0x1 0t0 TCP *:{p} (LISTEN)\n" for p in range(7000, 7050)) + (
+        "vllm 9 me 3u IPv4 0x1 0t0 TCP *:18000 (LISTEN)\n")
+    (bin_ / "lsof").write_text(f"#!/bin/sh\nprintf '%s' '{lsof}'\n")
+    for f in ("ss", "lsof"):
+        (bin_ / f).chmod(0o755)
+    snap = parse_payload(probe(make_home(tmp_path), PATH=f"{bin_}:{os.environ['PATH']}",
+                               FLEET_LIGHT="1"))
+    ports = [s.port for s in snap.services]
+    assert 18000 in ports and len(ports) == 40
+    assert ports == sorted(ports)
+
+
 def test_a_server_that_listed_models_is_no_longer_a_guess():
     out = ("#FLEET v1\n#LISTEN proto|addr|port|pid|comm\ntcp|*|8000|5|python3\n"
            "tcp|*|5000|6|python3\n"
