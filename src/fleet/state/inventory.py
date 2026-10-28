@@ -78,18 +78,39 @@ def _usable(e: dict) -> bool:
 
 def endpoints_of(dev: Device) -> list[Endpoint]:
     out: list[Endpoint] = []
+    names: set[str] = set()
     for i, e in enumerate(dev.endpoints):
         if not _usable(e):
             continue
+        # One name each: every route `fleet add` merged in was called "primary", so the
+        # probe's record of which one answered named all of them.
+        name = str(e.get("name") or f"ep{i}")
+        if name in names:
+            name = f"{name}-{i + 1}"
+        names.add(name)
         out.append(Endpoint(
             target=e.get("target", ""), user=e.get("user", ""),
             port=int(e.get("port", 22) or 22), identity=_identity(e.get("identity", "")),
-            jump=e.get("jump", "") or "", name=e.get("name", f"ep{i}"),
+            jump=e.get("jump", "") or "", name=name,
             preference=int(e.get("preference", 10)),
             via=_via(e.get("via", ""), e.get("host") or e.get("target", "")),
             host=str(e.get("host", "") or ""),
         ))
     return out
+
+
+def by_use(dev: Device, state: dict | None = None) -> list[Endpoint]:
+    """The endpoints in preference order, with the one that answered the last probe first.
+
+    The probe tries every route and keeps the first that answers, so a machine reached
+    over its tailnet while its LAN address is down read as up -- and `fleet ssh` and the
+    command `fleet show` printed went to the LAN address, and failed.
+    """
+    eps = sorted(endpoints_of(dev), key=lambda e: e.preference)
+    used = (state or {}).get("endpoint_used") if (state or {}).get("status") == "ok" else ""
+    if used and any(e.name == used for e in eps):
+        eps.sort(key=lambda e: e.name != used)
+    return eps
 
 
 def load(path: Path | None = None) -> list[Device]:

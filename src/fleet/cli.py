@@ -1605,7 +1605,12 @@ def cmd_ssh(ctx: typer.Context,
     dev = inv.find(devices, name)
     if dev is None:
         _no_such(devices, name)
-    eps = sorted(inv.endpoints_of(dev), key=lambda e: e.preference)
+    conn = store.connect()
+    try:
+        cached, snap = store.latest(conn, dev.id)
+    finally:
+        conn.close()
+    eps = inv.by_use(dev, cached)
     if not eps:
         if dev.id == identity.local_device_id():
             err.print(f"[red]{dev.name} is this machine[/red] -- run the command here, "
@@ -1615,11 +1620,6 @@ def cmd_ssh(ctx: typer.Context,
                       f"one: fleet edit {dev.name} --ssh \"ssh user@host\"[/dim]")
         raise typer.Exit(1)
     ep = eps[0]
-    conn = store.connect()
-    try:
-        cached, snap = store.latest(conn, dev.id)
-    finally:
-        conn.close()
     platform = remote_platform(snap)
     # A cached refusal is evidence only while it is fresh: you may have fixed it since,
     # and nothing tells fleet. Stale, we try -- a key that really is missing fails in

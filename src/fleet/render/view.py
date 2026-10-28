@@ -292,9 +292,9 @@ def gpu_jobs(snap: dict | None) -> dict[str, list[dict]]:
     return out
 
 
-def _host_of(dev: Device) -> str:
-    from ..state.inventory import endpoints_of
-    eps = sorted(endpoints_of(dev), key=lambda e: e.preference)
+def _host_of(dev: Device, state: dict | None = None) -> str:
+    from ..state.inventory import by_use
+    eps = by_use(dev, state)
     # The address, not an ssh config alias: the URL is for an HTTP client, which has
     # never heard of ~/.ssh/config.
     return eps[0].address if eps else ""
@@ -306,14 +306,15 @@ def _url_host(host: str) -> str:
     return f"[{bare}]" if ":" in bare else bare
 
 
-def model_servers(dev: Device, snap: dict | None, *, here: bool = False) -> list[dict]:
+def model_servers(dev: Device, snap: dict | None, *, here: bool = False,
+                  state: dict | None = None) -> list[dict]:
     """Every server here that answered as a model server, and how to reach it.
 
     `reach` is honest about where it listens: `local` means only from that machine, so the
     way in from anywhere else is the ssh tunnel beside it.
     """
-    from ..state.inventory import endpoints_of
-    eps = sorted(endpoints_of(dev), key=lambda e: e.preference)
+    from ..state.inventory import by_use
+    eps = by_use(dev, state)
     out = []
     for s in (snap or {}).get("services", []):
         if not s.get("status") or s.get("status") == "none":
@@ -322,7 +323,7 @@ def model_servers(dev: Device, snap: dict | None, *, here: bool = False) -> list
             continue
         addr, port = str(s.get("addr") or "*"), s.get("port")
         local = addr.startswith(_LOOPBACK)
-        host = "127.0.0.1" if here else _host_of(dev)
+        host = "127.0.0.1" if here else _host_of(dev, state)
         base = s.get("url") if str(s.get("url") or "").startswith("/") else "/v1"
         row = {
             "port": port, "framework": s.get("framework") or "", "status": s.get("status"),
@@ -511,7 +512,8 @@ def device_view(dev: Device, state: dict | None, snap: dict | None,
                      for s in (snap or {}).get("services", [])],
         # For choosing a machine, the names of what it serves; `show` and `fleet models`
         # carry the servers in full -- with how to reach each.
-        **({"models": model_servers(dev, snap, here=bool(self_id and dev.id == self_id)),
+        **({"models": model_servers(dev, snap, here=bool(self_id and dev.id == self_id),
+                                    state=state),
             "storage": storage_view(snap, full=True)} if full else
            {"served_models": sorted({m for s in model_servers(dev, snap)
                                      for m in s["models"]})}),
@@ -587,8 +589,8 @@ def connect_view(dev: Device, state: dict | None = None, *, here: bool = False) 
     replayed in every later turn, so it says how to connect and nothing that lets anyone
     in: fleet holds no key or password, and the command is the one you would type.
     """
-    from ..state.inventory import endpoints_of
-    eps = sorted(endpoints_of(dev), key=lambda e: e.preference)
+    from ..state.inventory import by_use
+    eps = by_use(dev, state)
     if not eps:
         # The machine fleet runs on needs none, and "no endpoint recorded" under the
         # very first `fleet show` read as something to fix.
