@@ -43,11 +43,15 @@ def _read(path: Path) -> str | None:
     Never an exception: this runs in the first run of every command, and one AGENTS.md
     saved in another encoding raised out of it before the first run could finish -- so
     it ran, and failed, again on every command after.
+
+    Line ends are read as read_text reads them, so a copy with Windows line ends -- as
+    Python writes it there, or git checks it out -- is the same text, not an older one.
     """
     try:
-        return path.read_bytes().decode("utf-8")
+        text = path.read_bytes().decode("utf-8")
     except (OSError, UnicodeDecodeError):
         return None
+    return text.replace("\r\n", "\n").replace("\r", "\n")
 
 
 def apply_block(existing: str, body: str) -> str:

@@ -162,3 +162,15 @@ def test_uninstall_takes_an_old_copy_out_when_the_current_one_is_gone(tmp_path):
     changes = docs.uninstall(tmp_path, ["codex"])
     assert not old.exists()
     assert "removed" in [c.action for c in changes]
+
+
+def test_a_copy_with_windows_line_ends_is_current(tmp_path):
+    """Read as raw bytes, every copy Python wrote on Windows looked older than fleet's,
+    so `fleet ls` always said to refresh and setup rewrote it each time."""
+    (tmp_path / ".codex").mkdir()
+    docs.install(tmp_path, ["codex"], "fleet", project=True)
+    agents = tmp_path / "AGENTS.md"
+    agents.write_bytes(agents.read_bytes().replace(b"\n", b"\r\n"))
+    assert docs.stale_targets(tmp_path, "fleet", project=True) == []
+    assert [c.action for c in docs.install(tmp_path, ["codex"], "fleet", project=True)] \
+        == ["unchanged"]
