@@ -345,10 +345,17 @@ def _parse_resources(snap: Snapshot, kv: dict[str, str], rows: dict[str, list[st
     # Servers the machine's notes declare: marked as such, and listed even when no
     # listening port was seen for them (it may be down -- the answer below says so).
     by_port = {s.port: s for s in snap.services}
+    # Where each port listens, the anonymous ones too (another user's, or Docker's proxy):
+    # one on every interface was listed as 127.0.0.1, "local only", with a tunnel to dig.
+    listening = {}
+    for ln in rows.get("LISTEN", []):
+        f = ln.split("|")
+        if len(f) >= 3 and (p := _int(f[2])) is not None:
+            listening.setdefault(p, f[1].strip().split("%", 1)[0])
     for name, ep in (snap.notes.get("endpoints") or {}).items():
         svc = by_port.get(ep["port"])
         if svc is None:
-            svc = Service(port=ep["port"], addr="127.0.0.1", comm="")
+            svc = Service(port=ep["port"], addr=listening.get(ep["port"], "127.0.0.1"), comm="")
             snap.services.append(svc)
             by_port[ep["port"]] = svc
         svc.source, svc.name = "declared", name
@@ -358,6 +365,7 @@ def _parse_resources(snap: Snapshot, kv: dict[str, str], rows: dict[str, list[st
             svc.url = ep["path"]          # the base path; the view adds host and port
 
     answered: dict[int, tuple[str, int | None, list[str]]] = {}
+    totals: dict[int, int] = {}
     for ln in rows.get("LLMMODEL", []):
         f = ln.split("|")
         port = _int(f[0]) if f else None
@@ -366,11 +374,14 @@ def _parse_resources(snap: Snapshot, kv: dict[str, str], rows: dict[str, list[st
         status, ms, models = answered.get(port, (f[1].strip(), _int(f[2]), []))
         if len(f) > 3 and f[3].strip():
             models.append(f[3].strip())
+        if len(f) > 4 and (n := _int(f[4])) is not None:
+            totals[port] = n
         answered[port] = (status, ms, models)
     for svc in snap.services:
         if svc.port not in answered:
             continue
         svc.status, svc.latency_ms, svc.model_ids = answered[svc.port]
+        svc.models_total = max(totals.get(svc.port, 0), len(svc.model_ids))
         svc.healthy = svc.status in ("ok", "auth")
         if svc.kind == "llm?" and svc.model_ids:
             svc.kind = "llm"         # it listed models: no longer a guess. A 401 alone

@@ -50,7 +50,8 @@ server — vLLM, SGLang, ollama, llama.cpp, LM Studio, MLX, oMLX, TGI, KoboldCpp
 LiteLLM, LocalAI — or that sits on a port such servers use (8000, 8080, 11434, 1234…), it
 asks the server what it serves. It asks from the machine itself, so a server that only
 accepts local connections answers too. It asks at most eight servers per machine and
-waits at most two seconds for each.
+waits at most two seconds for each. Of each server's models it keeps the first 20 names;
+`models_total` in `--json` says how many it serves, and the table ends with *and N more*.
 
 | `reach` | Meaning |
 |---|---|

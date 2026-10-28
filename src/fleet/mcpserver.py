@@ -293,7 +293,9 @@ def build_server():
                              "url, and for a server that only listens on its own machine "
                              "a `tunnel` command to reach it; plus the folders each "
                              "machine keeps models in. Check this before downloading a "
-                             "model: one already served or on disk need not be fetched.")
+                             "model: one already served or on disk need not be fetched. "
+                             "`models` names a server's first 20; `models_total` says how "
+                             "many it serves, and the rest are at its own /v1/models.")
     def list_models(names: list[str] | None = None, refresh: bool = False,
                     rescan: bool = False) -> Any:
         """`refresh` asks the servers again now; `rescan` also re-measures model folders."""

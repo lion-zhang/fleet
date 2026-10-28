@@ -342,6 +342,8 @@ def model_servers(dev: Device, snap: dict | None, *, here: bool = False,
         row = {
             "port": port, "framework": s.get("framework") or "", "status": s.get("status"),
             "models": list(s.get("model_ids") or []), "latency_ms": s.get("latency_ms"),
+            # "models" names at most 20; this is how many it serves
+            "models_total": max(s.get("models_total") or 0, len(s.get("model_ids") or [])),
             # declared: the machine's notes name it; discovered: found by port or program
             "source": s.get("source") or "discovered",
             "name": s.get("name") if s.get("source") == "declared" else "",

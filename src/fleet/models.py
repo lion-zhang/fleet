@@ -98,6 +98,7 @@ class Service:
     healthy: bool | None = None
     latency_ms: int | None = None
     model_ids: list[str] = field(default_factory=list)
+    models_total: int | None = None   # how many it serves; model_ids holds the first 20
     source: str = "discovered"  # discovered | declared
     # What asking it for its models said: ok | auth (it wants a key) | none (it answered,
     # but not as a model server) | down. Empty when it was not asked.

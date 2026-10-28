@@ -258,3 +258,65 @@ echo "tcp6       0      0 :::7860                 :::*                    LISTEN
     by_port = {s.port: s for s in parse_payload(p.stdout).services}
     assert by_port[8000].comm == "vllm" and by_port[8000].pid == 4242
     assert by_port[7860].comm == "Web Content"
+
+
+@linux
+def test_a_machine_with_none_of_ss_netstat_or_lsof_still_finds_its_servers(tmp_path):
+    """A slim container image has none of the three, and lsof run as a user lists only
+    that user's ports: `fleet models` found no server there at all."""
+    class Models(_Web):
+        body = b"{}"
+
+    bin_ = tmp_path / "bin"
+    bin_.mkdir()
+    for d in ("/usr/local/bin", "/usr/bin", "/bin", "/usr/sbin", "/sbin"):
+        for f in Path(d).iterdir() if Path(d).is_dir() else []:
+            if f.name not in ("ss", "lsof", "netstat") and not (bin_ / f.name).exists():
+                (bin_ / f.name).symlink_to(f)
+    srvs = [_serve(Models)]
+    try:
+        srvs.append(_serve(Models, socket.AF_INET6, "::1"))
+    except OSError:
+        pass
+    try:
+        home = tmp_path / "home"
+        home.mkdir()
+        p = subprocess.run(["sh", str(PAYLOAD)], env={"PATH": str(bin_), "HOME": str(home)},
+                           capture_output=True, text=True, timeout=60)
+        by_port = {s.port: s for s in parse_payload(p.stdout).services}
+        v4 = by_port[srvs[0].server_address[1]]
+        assert v4.addr == "127.0.0.1" and v4.pid == os.getpid() and v4.comm
+        if len(srvs) > 1:
+            assert by_port[srvs[1].server_address[1]].addr == "[::1]"
+    finally:
+        for s in srvs:
+            s.shutdown()
+
+
+@need_http
+def test_a_server_with_many_models_says_how_many(tmp_path, bin_):
+    """Twenty names are kept; a server with 30 showed twenty and said nothing more."""
+    class Many(_Web):
+        body = json.dumps({"object": "list",
+                           "data": [{"id": f"m{i}"} for i in range(30)]}).encode()
+
+    srv = _serve(Many)
+    try:
+        port = srv.server_address[1]
+        _listening(bin_, "127.0.0.1", port)
+        [svc] = [s for s in parse_payload(_probe(tmp_path)).services if s.port == port]
+        assert len(svc.model_ids) == 20 and svc.models_total == 30
+    finally:
+        srv.shutdown()
+
+
+def test_the_models_table_says_what_it_left_out():
+    from rich.console import Console
+    from fleet.render.top import render_models
+    sv = {"machine": "box", "port": 9100, "framework": "vllm", "status": "ok",
+          "models": [f"m{i}" for i in range(20)], "models_total": 300, "url": None,
+          "tunnel": "ssh -N -L 9100:127.0.0.1:9100 box", "name": ""}
+    c = Console(width=200, record=True)
+    for part in render_models({"servers": [sv], "model_folders": []}):
+        c.print(part)
+    assert "and 280 more" in c.export_text()

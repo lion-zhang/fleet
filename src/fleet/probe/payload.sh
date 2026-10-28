@@ -577,6 +577,35 @@ elif have netstat; then
       printf "%s %s %s %s %s %s users:((\"%s\",pid=%s,fd=0))\n", $1, $2, $3, $4, $5, $6, c, pid
       next }
     { print }'
+elif [ "$OS" = "Linux" ] && [ -r /proc/net/tcp ]; then
+  # A slim image (a rented container) may have none of ss, netstat or lsof, and lsof run
+  # as a user lists only that user's ports: there `fleet models` found no server at all.
+  # The kernel's own table lists every port; the processes we may see name theirs.
+  ls -l /proc/[0-9]*/fd 2>/dev/null | awk '
+      /^\/proc\/[0-9]+\/fd:$/ { pid = $0; sub(/^\/proc\//, "", pid); sub(/\/.*/, "", pid); next }
+      /socket:\[/ { i = $NF; gsub(/[^0-9]/, "", i); print i, pid }' > "${TMPDIR:-/tmp}/fleet-socks.$$"
+  cat /proc/net/tcp /proc/net/tcp6 2>/dev/null \
+    | awk -v socks="${TMPDIR:-/tmp}/fleet-socks.$$" '
+      function hex(s,  i, n) { n = 0; s = toupper(s)
+        for (i = 1; i <= length(s); i++) n = n * 16 + index("0123456789ABCDEF", substr(s, i, 1)) - 1
+        return n }
+      function v4(a) { return hex(substr(a,7,2)) "." hex(substr(a,5,2)) "." hex(substr(a,3,2)) "." hex(substr(a,1,2)) }
+      function v6(a,  w, i, out, g) {
+        if (a ~ /^0+$/) return "[::]"
+        if (a == "00000000000000000000000001000000") return "[::1]"
+        if (substr(a, 1, 16) == "0000000000000000" && substr(a, 17, 8) == "FFFF0000") return "[::ffff:" v4(substr(a, 25, 8)) "]"
+        out = ""
+        for (w = 0; w < 4; w++) { g = substr(a, w*8+1, 8)
+          g = substr(g,7,2) substr(g,5,2) substr(g,3,2) substr(g,1,2)
+          out = out (w ? ":" : "") sprintf("%x:%x", hex(substr(g,1,4)), hex(substr(g,5,4))) }
+        return "[" out "]" }
+      BEGIN { while ((getline l < socks) > 0) { split(l, f, " "); owner[f[1]] = f[2] } }
+      $4 == "0A" { split($2, la, ":"); a = la[1]
+        addr = (length(a) == 8) ? v4(a) : v6(toupper(a)); port = hex(la[2]); pid = owner[$10]
+        if (pid == "") { printf "LISTEN 0 0 %s:%s x\n", addr, port; next }
+        comm = ""; cf = "/proc/" pid "/comm"; if ((getline comm < cf) <= 0) comm = "?"; close(cf)
+        printf "LISTEN 0 0 %s:%s x users:((\"%s\",pid=%s,fd=0))\n", addr, port, comm, pid }'
+  rm -f "${TMPDIR:-/tmp}/fleet-socks.$$"
 elif have lsof; then
   lsof +c 0 -nP -iTCP -sTCP:LISTEN 2>/dev/null | tail -n +2 \
     | awk '{la=$9; port=la; sub(/.*:/, "", port); addr=substr(la, 1, length(la)-length(port)-1)
@@ -857,7 +886,10 @@ PY
       200) st=ok ;; 401|403) st=auth ;; 000) st=down ;; *) st=none ;;
     esac
     if [ -n "$ids" ]; then
-      printf '%s\n' "$ids" | head -20 | while read -r m; do printf '%s|%s|%s|%s\n' "$port" "$st" "$ms" "$(printf '%s' "$m" | clean)"; done
+      # Twenty names at most, and how many there were: a server with 300 showed twenty
+      # and said nothing of the rest.
+      n=$(printf '%s\n' "$ids" | grep -c .)
+      printf '%s\n' "$ids" | head -20 | while read -r m; do printf '%s|%s|%s|%s|%s\n' "$port" "$st" "$ms" "$(printf '%s' "$m" | clean)" "$n"; done
     else
       printf '%s|%s|%s|\n' "$port" "$st" "$ms"
     fi
