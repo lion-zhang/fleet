@@ -45,6 +45,17 @@ class Endpoint:
     name: str = "default"
     preference: int = 10
     via: str = ""                          # mesh | lan | public
+    # What ssh config resolves `target` to, when `target` is a Host alias from your
+    # ~/.ssh/config. fleet dials the alias, so ssh applies that Host block -- its
+    # ProxyCommand, IdentityAgent, known_hosts file -- exactly as it does for you; this
+    # is only for what needs an address rather than a name ssh knows (a model server's
+    # URL, which kind of route it is).
+    host: str = ""
+
+    @property
+    def address(self) -> str:
+        """Where the machine actually is: the HostName behind an alias, or the target."""
+        return self.host or self.target
 
     def ssh_command(self) -> str:
         bits = ["ssh"]
@@ -123,31 +134,48 @@ def resolve(parsed: ParsedSsh, *, timeout: float = 10.0) -> Endpoint:
         raise ValueError(f"ssh -G failed for {parsed.target!r}: {proc.stderr.strip()[:200]}")
 
     cfg: dict[str, str] = {}
-    identities: list[str] = []
     for line in proc.stdout.splitlines():
         key, _, val = line.partition(" ")
-        key, val = key.strip().lower(), val.strip()
-        if key == "identityfile":
-            identities.append(val)          # ssh emits one line per candidate, in order
-        else:
-            cfg.setdefault(key, val)        # first wins, as ssh does
+        cfg.setdefault(key.strip().lower(), val.strip())    # first wins, as ssh does
 
-    # ssh lists up to five default identity files whether or not they exist; keep the
-    # first that is actually present so IdentitiesOnly=yes has something to offer.
+    # Only a key named with `-i` is the machine's own. ssh -G lists the five default
+    # identity files whether or not they were asked for, and recording the first that
+    # existed pinned every machine to ~/.ssh/id_ed25519 with IdentitiesOnly=yes: a key
+    # that lives only in your agent (1Password, a hardware key) was then never offered,
+    # and a machine `ssh` reached refused fleet. Anything else ssh picks itself.
     identity = ""
-    for cand in identities:
-        expanded = os.path.expanduser(cand)
-        if os.path.exists(expanded):
-            identity = expanded
-            break
+    if parsed.identity:
+        given = os.path.expanduser(parsed.identity)
+        if os.path.exists(given) and not is_default_identity(given):
+            identity = given
 
+    hostname = cfg.get("hostname") or parsed.target
+    # A Host alias stays the target: dialled by its resolved HostName, ssh would no longer
+    # match the alias's Host block, and its ProxyCommand and the rest were lost -- `ssh
+    # box` worked while fleet said "DNS lookup failed". An address, or a name ssh config
+    # leaves alone, is the same either way.
+    alias = parsed.target if hostname.lower() != parsed.target.lower() else ""
     return Endpoint(
-        target=cfg.get("hostname") or parsed.target,
+        target=alias or hostname,
         user=cfg.get("user", ""),
         port=int(cfg.get("port", "22") or 22),
         identity=identity,
         jump=cfg.get("proxyjump", "") if cfg.get("proxyjump", "none") != "none" else "",
+        host=hostname if alias else "",
     )
+
+
+# The keys ssh offers on its own, without -i, from ~/.ssh.
+_DEFAULT_IDENTITIES = frozenset({"id_rsa", "id_ecdsa", "id_ecdsa_sk", "id_ed25519",
+                                 "id_ed25519_sk", "id_xmss", "id_dsa"})
+
+
+def is_default_identity(path: str) -> bool:
+    """Whether ssh would offer this key anyway, so naming it adds only IdentitiesOnly --
+    which shuts out every key in the agent. Older inventories name one for nearly every
+    machine, from before `resolve` stopped recording them."""
+    p = Path(os.path.expanduser(path or ""))
+    return p.name in _DEFAULT_IDENTITIES and p.parent == Path.home() / ".ssh"
 
 
 

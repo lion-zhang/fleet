@@ -765,7 +765,7 @@ def _split_a_clone(devices, dev, res, *, write: bool = True) -> bool:
         return False
     new_eps = inv.endpoints_of(dev)
     old_eps = sorted(inv.endpoints_of(existing), key=lambda e: e.preference)
-    if new_eps and any((e.target, e.port) == (new_eps[0].target, new_eps[0].port)
+    if new_eps and any((e.address, e.port) == (new_eps[0].address, new_eps[0].port)
                        for e in old_eps):
         return False                        # the same address: the same machine
     host = new.hostname or ""

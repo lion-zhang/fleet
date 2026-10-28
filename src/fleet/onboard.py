@@ -114,7 +114,7 @@ def classify_kind(snap: Snapshot | None, ep: Endpoint, *, override: str | None =
         # SLURM, or several distinct humans logged in, means it is not yours to fill.
         if snap.slurm or (snap.users or 0) > 3:
             return Kind.SHARED
-    if _RENTAL_HOST_RE.search(ep.target):
+    if _RENTAL_HOST_RE.search(ep.address):
         return Kind.RENTAL
     return Kind.PERMANENT
 
@@ -127,6 +127,8 @@ def endpoint_dict(ep: Endpoint, *, name: str = "primary", preference: int = 10,
         d["identity"] = ep.identity
     if ep.jump:
         d["jump"] = ep.jump
+    if ep.host:
+        d["host"] = ep.host
     if via or ep.via:
         d["via"] = via or ep.via
     return d
@@ -203,7 +205,7 @@ def onboard(ssh_command: str, *, name: str | None = None, kind: str | None = Non
     # Classify the route once, here, where a network round trip is already being paid
     # for. `via` decides both which address `edit` is willing to overwrite (an overlay
     # name is stable; a public IP churns) and whether the machine reports `public-ip`.
-    ep.via = classify_route(ep.target) or _resolved_route(ep.target)
+    ep.via = classify_route(ep.address) or _resolved_route(ep.address)
 
     res = run_probe(ep, timeout=timeout) if probe else ProbeResult(status=Status.SKIPPED_POLICY)
     snap = res.snapshot

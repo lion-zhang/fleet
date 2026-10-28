@@ -24,7 +24,7 @@ from .writes import QueueTimeout, atomic_write, turn
 
 from ..config import INVENTORY_PATH, ensure_dirs
 from ..models import Device, Kind
-from ..ssh.cmd import Endpoint, route_of
+from ..ssh.cmd import Endpoint, is_default_identity, route_of
 
 SCHEMA_VERSION = 1
 
@@ -48,7 +48,11 @@ def _identity(raw: str) -> str:
     choose a key as it would for you.
     """
     path = os.path.expanduser(raw or "")
-    return path if path and Path(path).exists() else ""
+    if not path or not Path(path).exists():
+        return ""
+    # A key ssh offers anyway, which fleet recorded for nearly every machine before it
+    # kept only an `-i` you typed: pinned, it shut out the keys in your agent.
+    return "" if is_default_identity(path) else path
 
 
 def _via(raw: str, target: str = "") -> str:
@@ -82,7 +86,8 @@ def endpoints_of(dev: Device) -> list[Endpoint]:
             port=int(e.get("port", 22) or 22), identity=_identity(e.get("identity", "")),
             jump=e.get("jump", "") or "", name=e.get("name", f"ep{i}"),
             preference=int(e.get("preference", 10)),
-            via=_via(e.get("via", ""), e.get("target", "")),
+            via=_via(e.get("via", ""), e.get("host") or e.get("target", "")),
+            host=str(e.get("host", "") or ""),
         ))
     return out
 

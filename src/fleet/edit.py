@@ -51,6 +51,8 @@ def _replace_primary(dev: Device, ep: Endpoint, out: Edits) -> None:
         record["identity"] = ep.identity
     if ep.jump:
         record["jump"] = ep.jump
+    if ep.host:
+        record["host"] = ep.host
 
     if not dev.endpoints:
         dev.endpoints = [record | {"name": "default", "preference": 10}]
@@ -70,7 +72,7 @@ def _replace_primary(dev: Device, ep: Endpoint, out: Edits) -> None:
     # to a public one and it would keep claiming `lan` -- and `public-ip` is derived from
     # this. Fall back to the old value only when the new target cannot be classified,
     # so a hostname does not silently erase what we already knew.
-    if route := (classify_route(ep.target) or old.get("via", "")):
+    if route := (classify_route(ep.address) or old.get("via", "")):
         record["via"] = route
     eps[idx] = record
     dev.endpoints = eps
