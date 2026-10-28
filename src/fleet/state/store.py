@@ -12,6 +12,7 @@ from pathlib import Path
 
 from ..config import DB_PATH, ensure_dirs, load_config
 from ..models import ProbeResult, Snapshot, Status
+from .timing import since
 
 # The outcomes that cost a wait to learn: nothing answered, so the probe sat out the
 # connect timeout. These are what back off; everything else answers at once.
@@ -51,8 +52,21 @@ def connect(path: Path | None = None) -> sqlite3.Connection:
             if p.exists() and not os.access(p, os.W_OK):
                 raise PermissionError(f"{p} is not writable")
         conn = sqlite3.connect(str(path), timeout=10.0)
-        conn.execute("PRAGMA journal_mode=WAL")
-        return _prepare(conn)
+        try:
+            conn.execute("PRAGMA journal_mode=WAL")
+            return _prepare(conn)
+        except sqlite3.DatabaseError as exc:
+            if isinstance(exc, sqlite3.OperationalError):
+                raise
+            # "file is not a database", "database disk image is malformed": a cache
+            # half-written by a crash or a full disk stopped every command. It is
+            # disposable by design, so it is set aside and started again.
+            conn.close()
+            conn = None
+            _set_aside(path, exc)
+            conn = sqlite3.connect(str(path), timeout=10.0)
+            conn.execute("PRAGMA journal_mode=WAL")
+            return _prepare(conn)
     except (OSError, sqlite3.OperationalError) as exc:
         # A sandbox that lets fleet read but not write its state dir -- Codex's
         # workspace-write, running `tar ... && fleet ssh ...` -- crashed every command
@@ -61,6 +75,16 @@ def connect(path: Path | None = None) -> sqlite3.Connection:
         if conn is not None:
             conn.close()
         return _in_memory(path, exc)
+
+
+def _set_aside(path: Path, exc: BaseException) -> None:
+    aside = path.with_name(f"{path.name}.broken-{int(time.time())}")
+    for suffix in ("", "-wal", "-shm"):
+        part = Path(f"{path}{suffix}")
+        if part.exists():
+            os.replace(part, Path(f"{aside}{suffix}"))
+    print(f"fleet: the cache {path} could not be read ({exc}); moved it to {aside.name} "
+          "and started a new one", file=sys.stderr)
 
 
 _warned = False
@@ -314,9 +338,12 @@ def latest(conn: sqlite3.Connection, device_id: str) -> tuple[dict | None, dict 
 
 
 def age_s(state: dict | None) -> int | None:
+    """Seconds since the last probe, or None -- also when the clock has gone back since,
+    which printed an AGE of -7200s and, in `top`, called the reading live."""
     if not state or not state.get("last_probe_at"):
         return None
-    return int(time.time()) - int(state["last_probe_at"])
+    elapsed = since(int(state["last_probe_at"]))
+    return None if elapsed is None else int(elapsed)
 
 
 def is_fresh(state: dict | None, ttl: int, *, backoff_max: int = 0) -> bool:

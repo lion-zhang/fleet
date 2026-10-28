@@ -15,6 +15,7 @@ from typing import Any
 from ..models import Device, Kind, Status
 from ..ssh.cmd import route_of
 from ..state.store import age_s
+from ..state.timing import since
 
 
 class Detail(StrEnum):
@@ -278,6 +279,12 @@ def _host_of(dev: Device) -> str:
     return eps[0].address if eps else ""
 
 
+def _url_host(host: str) -> str:
+    """An IPv6 address goes in brackets in a URL: `http://2001:db8::5:8000` is no URL."""
+    bare = host.strip("[]")
+    return f"[{bare}]" if ":" in bare else bare
+
+
 def model_servers(dev: Device, snap: dict | None, *, here: bool = False) -> list[dict]:
     """Every server here that answered as a model server, and how to reach it.
 
@@ -304,7 +311,8 @@ def model_servers(dev: Device, snap: dict | None, *, here: bool = False) -> list
             "name": s.get("name") if s.get("source") == "declared" else "",
             # here: the machine fleet runs on, where even a localhost-only server answers
             "reach": "here" if here else "local" if local else "network",
-            "url": None if (local and not here) or not host else f"http://{host}:{port}{base}",
+            "url": None if (local and not here) or not host
+            else f"http://{_url_host(host)}:{port}{base}",
         }
         if eps and not here:
             e = eps[0]
@@ -355,7 +363,8 @@ def storage_view(snap: dict | None, *, full: bool) -> dict[str, list[dict]]:
     out: dict[str, list[dict]] = {}
     for st in (snap or {}).get("storage", []):
         row = {"path": st.get("path"), "exists": bool(st.get("exists")),
-               "free_gb": round(st["avail_kb"] / 1048576, 1) if st.get("avail_kb") else None,
+               "free_gb": round(st["avail_kb"] / 1048576, 1)
+               if st.get("avail_kb") is not None else None,
                # three places under a gigabyte, or a 3 MB folder reads as empty
                "size_gb": round(st["size_kb"] / 1048576, 3 if st["size_kb"] < 1048576 else 1)
                if st.get("size_kb") is not None else None}
@@ -455,7 +464,7 @@ def device_view(dev: Device, state: dict | None, snap: dict | None,
         "ssh_auth": auth_of(dev, state),
         "cpu_cores": (snap or {}).get("cpu_cores"),
         "ram_total_gb": round(mem_total / 1048576, 1) if mem_total else None,
-        "ram_free_gb": round(mem_avail / 1048576, 1) if mem_avail else None,
+        "ram_free_gb": round(mem_avail / 1048576, 1) if mem_avail is not None else None,
         # the roomiest mount stays, as the one a job should be pointed at
         "disk_free_gb": roomiest["free_gb"] if roomiest else None,
         "disk_mount": roomiest["mount"] if roomiest else None,
@@ -486,7 +495,8 @@ def device_view(dev: Device, state: dict | None, snap: dict | None,
         # probed 4s ago to a timeout still carries the snapshot from its last success,
         # perhaps days old. Facts read as timeless claims, so they need their own
         # denominator.
-        "snapshot_age_s": (int(time.time()) - snap["ts"]) if snap and snap.get("ts") else None,
+        "snapshot_age_s": (int(a) if (a := since(snap["ts"])) is not None else None)
+        if snap and snap.get("ts") else None,
     }
     # Each GPU's jobs, by the order the GPUs are listed in.
     for g, raw in zip(out["gpus"], (snap or {}).get("gpus", [])):

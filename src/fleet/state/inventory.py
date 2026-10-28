@@ -139,6 +139,24 @@ def _device_from(d) -> Device:
     # "gpu", which every consumer then iterates into ["g", "p", "u"].
     if isinstance(d.get("tags"), str):
         d["tags"] = [t for t in d["tags"].replace(",", " ").split() if t]
+    # `tags: [gpu, 7]` and `cost: 1.5` are what YAML makes of a hand-typed number; every
+    # view then failed on an int with no .strip(), or a float with no .get().
+    if d.get("tags") is not None:
+        if not isinstance(d["tags"], list):
+            raise ValueError(f"tags {d['tags']!r} is not a list")
+        d["tags"] = [str(t) for t in d["tags"] if t is not None]
+    if d.get("cost") not in (None, {}):
+        cost = d["cost"]
+        if not isinstance(cost, dict):
+            raise ValueError(f"cost {cost!r} is not `usd_per_hour: N`")
+        if cost.get("usd_per_hour") is not None:
+            try:
+                usd = float(cost["usd_per_hour"])
+            except (TypeError, ValueError):
+                usd = float("nan")
+            if not 0 <= usd < 1e6:
+                raise ValueError(f"cost {cost['usd_per_hour']!r} is not US dollars per hour")
+            d["cost"] = {**cost, "usd_per_hour": usd}
     # A port typed by hand (`port: 22a`) raised in every command that dialled out,
     # rather than naming the machine whose entry it is.
     for e in d.get("endpoints") or []:

@@ -122,3 +122,15 @@ def test_once_the_wait_is_over_it_is_asked_again(one_dead_machine):
     conn.close()
     rows.snapshot()
     assert dialled == ["dead"]
+
+
+def test_naming_a_mobile_machine_does_not_dial_it(monkeypatch):
+    """facts.md: a mobile machine is never measured. Naming one asked for it anyway."""
+    from fleet.ops import rows
+
+    inv.save([Device(id="ph", name="phone", kind=Kind.MOBILE, probe_policy="auto",
+                     endpoints=[{"target": "phone.example", "user": "me", "port": 22}])])
+    dialled = []
+    monkeypatch.setattr(rows, "probe_many", lambda jobs, **kw: dialled.append(jobs) or {})
+    rows.snapshot(["phone"], refresh=True)
+    assert dialled == []

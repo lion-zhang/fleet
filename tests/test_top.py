@@ -418,3 +418,12 @@ def test_one_device_is_headed_by_its_fleet_name():
     out = shown({"name": "gpu-box", "hostname": "vm-2", "os": "linux"})
     assert "gpu-box (vm-2)" in out
     assert "(gpu-box)" not in shown({"name": "gpu-box", "hostname": "gpu-box"})
+
+
+def test_a_failing_machine_is_never_asked_more_often_than_a_healthy_one():
+    """The backoff was capped at a minute and nothing else, so a failing shared host --
+    asked every five minutes when well -- was asked every minute once it failed."""
+    s = Schedule(interval=2, shared_interval=300, max_backoff=60)
+    shared = _dev("koa04", Kind.SHARED)
+    s.record(shared.id, ok=False, now=0)
+    assert s.due([shared], now=120) == []

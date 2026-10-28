@@ -9,6 +9,8 @@ Design notes worth keeping:
 
 from __future__ import annotations
 
+import math
+
 import re
 
 from .. import notes as machine_notes
@@ -89,9 +91,12 @@ def _int(v: str | None) -> int | None:
 
 def _float(v: str | None) -> float | None:
     try:
-        return float(str(v).strip())
+        f = float(str(v).strip())
     except (TypeError, ValueError):
         return None
+    # `nan` and `inf` parse as floats, and a load of nan crashed `fleet top` in round()
+    # and came out of `show --json` as a bare NaN that strict JSON readers refuse.
+    return f if math.isfinite(f) else None
 
 
 def parse_etime(v: str) -> int:

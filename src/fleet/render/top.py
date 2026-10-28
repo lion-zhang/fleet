@@ -117,7 +117,9 @@ class Schedule:
         fails = self._fails.get(dev.id, 0)
         if not fails:
             return base
-        return min(self.max_backoff, base * (2 ** min(fails, _MAX_DOUBLINGS)))
+        # Never sooner than a healthy machine: capped at max_backoff alone, a failing
+        # shared host (asked every 5 minutes when well) was asked every minute.
+        return max(base, min(self.max_backoff, base * (2 ** min(fails, _MAX_DOUBLINGS))))
 
     def due(self, devices: list[Device], now: float) -> list[Device]:
         out = []
@@ -317,7 +319,7 @@ def render_fleet(rows: list[dict[str, Any]], summary: dict[str, Any],
             util,
             vram,
             "?" if pct is None else f"{pct}%",
-            f"{row['ram_free_gb']:.0f}G" if row.get("ram_free_gb") else "-",
+            f"{row['ram_free_gb']:.0f}G" if row.get("ram_free_gb") is not None else "-",
             disk_cell(row),
             jobs_cell(row),
             # "live" only for a machine that answered: one that just failed to was
@@ -416,7 +418,7 @@ def render_ls(rows: list[dict[str, Any]]) -> Table:
         t.add_row(DOT.get(r["status"], "?"), name_cell(r),
                   escape(r["kind"]), gpu, vram,
                   str(r["cpu_cores"] or "-"),
-                  f"{r['ram_free_gb']:.0f}G" if r["ram_free_gb"] else "-",
+                  f"{r['ram_free_gb']:.0f}G" if r["ram_free_gb"] is not None else "-",
                   disk_cell(r),
                   f"${r['usd_per_hour']:.2f}" if r["usd_per_hour"] else "-",
                   age, note)
