@@ -145,12 +145,15 @@ def _fake_ps(tmp_path):
     bin_dir = tmp_path / "bin"
     bin_dir.mkdir(exist_ok=True)
     ps = bin_dir / "ps"
-    # $$ and $PPID inside the fake are exactly what the real ps would report for itself
+    # $$ and $PPID inside the fake are exactly what the real ps would report for itself.
+    # The genuine process's pid is above Linux's largest possible pid, so the probe's own
+    # shell can never be given it -- with a pid like 4242 it sometimes was, on a busy CI
+    # runner, and the probe rightly dropped the row as its own.
     ps.write_text(
         '#!/bin/sh\n'
         'printf "%s %s root 99.9 1000 0 ps\\n" "$$" "$PPID"\n'
         'printf "%s %s root 98.0 1000 0 sh\\n" "$PPID" "1"\n'
-        'printf "4242 1 root 50.0 2000 9999 realwork\\n"\n')
+        'printf "99999999 1 root 50.0 2000 9999 realwork\\n"\n')
     ps.chmod(0o755)
     return bin_dir
 
