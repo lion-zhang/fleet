@@ -471,3 +471,17 @@ def test_clearing_disk_paths_and_naming_new_ones_keeps_the_new_ones(tmp_path, mo
     assert inv.load()[0].disk_paths == ["/data"]
     assert runner.invoke(cli.app, ["edit", "box", "--clear-disk-paths"]).exit_code == 0
     assert inv.load()[0].disk_paths == []
+
+
+def test_add_says_when_the_key_it_names_is_not_there(tmp_path, monkeypatch):
+    """ssh warns and goes on with its own keys; fleet went on in silence, so a mistyped
+    key path was never seen."""
+    runner = _cli(tmp_path, monkeypatch, [])
+    _readd(monkeypatch)
+    key = tmp_path / "real_key"
+    key.write_text("x")
+    r = runner.invoke(cli.app, ["add", f"ssh -i {tmp_path / 'typo_key'} root@10.0.0.5"])
+    assert r.exit_code == 0, r.output
+    assert "typo_key: no such file here" in r.output
+    r = runner.invoke(cli.app, ["add", f"ssh -i {key} root@10.0.0.5", "--name", "two"])
+    assert "no such file" not in r.output

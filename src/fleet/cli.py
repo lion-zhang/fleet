@@ -53,7 +53,7 @@ from .render.top import (Schedule, device_lines, disk_cell, gpu_cells_compact, r
 from .render.view import Detail, auth_of, device_view, fleet_view, matches_tag
 from .ssh.cmd import (WINDOWS, build_argv, local_platform, local_shell_argv, remote_command,
                       run as sshrun,
-                      remote_platform, resolve_command)
+                      parse_ssh_command, remote_platform, resolve_command)
 from .state import inventory as inv
 from .state import store
 from .ui import (DOT as _DOT, chatter_to_stderr as _chatter_to_stderr, console,
@@ -649,6 +649,11 @@ def cmd_add(ssh_command: str = typer.Argument(None, help='e.g. "ssh -p 58418 roo
             if not _emit({"ok": False, "error": str(exc)}, json_out):
                 err.print(f"[red]{escape(str(exc))}[/red]")
             raise typer.Exit(2)
+        if not json_out and (missing := _missing_key(ssh_command)):
+            # ssh warns and carries on with its own keys; fleet carried on in silence, so
+            # a mistyped key path was never seen, until those keys stopped being enough.
+            err.print(f"[yellow]![/yellow] -i {escape(missing)}: no such file here, so ssh "
+                      "offers its own keys instead")
         if res.status is Status.AUTH_FAILED and not json_out and not dry_run:
             dev, res = _offer_copy_id(ssh_command, dev, res, name=name, kind=kind,
                                       alias=alias, taken=taken)
@@ -1765,14 +1770,20 @@ def _skills_note() -> str:
     """
     try:
         root = Path.home()
-        stale = stale_targets(root, fleet_command()) + stale_mcp_clients(
-            root, config_command())
+        stale = stale_targets(root, fleet_command())
+        # An MCP entry holds no description, only the program to start: one that starts
+        # another fleet was called "an older description" too.
+        elsewhere = stale_mcp_clients(root, config_command())
     except Exception:
         return ""
-    if not stale:
-        return ""
-    return (f"{', '.join(stale)} read{'s' if len(stale) == 1 else ''} an older "
-            "description of fleet -- [bold]fleet setup --refresh[/bold]")
+    notes = []
+    if stale:
+        notes.append(f"{', '.join(stale)} read{'s' if len(stale) == 1 else ''} an older "
+                     "description of fleet")
+    if elsewhere:
+        notes.append(f"{', '.join(elsewhere)} start{'s' if len(elsewhere) == 1 else ''} "
+                     "another fleet program than this one")
+    return "; ".join(notes) + " -- [bold]fleet setup --refresh[/bold]" if notes else ""
 
 
 def _ago(seconds: int) -> str:
@@ -1884,6 +1895,15 @@ def cmd_setup(
         console.print("\n[dim]--dry-run: nothing was written.[/dim]")
     elif not remove and cmd != "fleet":
         err.print(f"\n[dim]{_short_name_hint(cmd)}[/dim]")
+
+
+def _missing_key(ssh_command: str) -> str:
+    """The `-i` key an ssh command names, when there is no such file."""
+    try:
+        key = parse_ssh_command(ssh_command).identity
+    except ValueError:
+        return ""
+    return key if key and not os.path.exists(os.path.expanduser(key)) else ""
 
 
 def _short_name_hint(cmd: str) -> str:

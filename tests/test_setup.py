@@ -811,3 +811,27 @@ def test_the_skill_has_agents_answer_the_prompts_they_cannot_see():
     printed "Aborted."."""
     text = skill_text("fleet")
     assert "fleet rm NAME --yes" in text and "fleet uninstall --yes" in text
+
+
+def test_a_skill_a_newer_fleet_wrote_is_not_called_older(tmp_path):
+    """A dev checkout beside a newer install, or a fleet just downgraded, called the
+    newer copy "an older description", and --refresh would have put the old words back."""
+    from fleet.agents.docs import stale_targets
+    from fleet.agents.registry import package_version
+    install(tmp_path, ["claude"], "fleet")
+    path = plan(tmp_path)["claude"]
+    ours = path.read_text()
+    path.write_text(ours.replace(f"fleet {package_version()} #", "fleet 99.0.0 #", 1)
+                    .replace("Use when", "Used when", 1))
+    assert stale_targets(tmp_path, "fleet") == []
+    path.write_text(ours.replace(f"fleet {package_version()} #", "fleet 0.0.1 #", 1)
+                    .replace("Use when", "Used when", 1))
+    assert stale_targets(tmp_path, "fleet") == ["claude"]
+
+
+def test_an_mcp_entry_for_another_fleet_is_not_called_an_older_description(monkeypatch):
+    from fleet import cli
+    monkeypatch.setattr(cli, "stale_targets", lambda *a, **k: [])
+    monkeypatch.setattr(cli, "stale_mcp_clients", lambda *a, **k: ["cursor"])
+    note = cli._skills_note()
+    assert "cursor starts another fleet program" in note and "older" not in note
