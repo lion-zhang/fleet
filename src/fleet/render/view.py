@@ -337,7 +337,9 @@ def model_servers(dev: Device, snap: dict | None, *, here: bool = False,
             continue
         addr, port = str(s.get("addr") or "*"), s.get("port")
         local = addr.startswith(_LOOPBACK)
-        host = "127.0.0.1" if here else _host_of(dev, state)
+        # A server on IPv6 loopback alone is not at 127.0.0.1, here or down a tunnel.
+        loop = "[::1]" if addr.strip("[]") == "::1" else "127.0.0.1"
+        host = loop if here else _host_of(dev, state)
         base = s.get("url") if str(s.get("url") or "").startswith("/") else "/v1"
         row = {
             "port": port, "framework": s.get("framework") or "", "status": s.get("status"),
@@ -353,11 +355,10 @@ def model_servers(dev: Device, snap: dict | None, *, here: bool = False,
             else f"http://{_url_host(host)}:{port}{base}",
         }
         if eps and not here:
-            e = eps[0]
-            dest = f"{e.user}@{e.target}" if e.user else e.target
-            row["tunnel"] = (f"ssh -N -L {port}:127.0.0.1:{port}"
-                             + (f" -p {e.port}" if e.port and e.port != 22 else "")
-                             + f" {dest}")
+            # The way fleet itself gets in, key and jump host too: without the machine's
+            # own key the tunnel asked for a password a rental does not have.
+            row["tunnel"] = (f"ssh -N -L {port}:{loop}:{port}"
+                             + eps[0].ssh_command().removeprefix("ssh"))
         out.append(row)
     return _one_per_ollama(out)
 

@@ -225,3 +225,19 @@ def test_a_vast_label_names_the_box_whole():
 
     snap = Snapshot(ts=1, vast_label="C.12345678")
     assert suggest_name(snap, Endpoint(target="ssh2.vast.ai"), set()) == "c-12345678"
+
+
+@pytest.mark.parametrize("windows,key,want", [
+    (False, "/home/jo/my keys/k", "-i '/home/jo/my keys/k'"),
+    (False, "~/my keys/k", "-i ~/'my keys/k'"),
+    (True, r"C:\Users\Jo Lee\.ssh\k", r'-i "C:\Users\Jo Lee\.ssh\k"'),
+    (False, "/home/jo/.ssh/k", "-i /home/jo/.ssh/k"),
+])
+def test_a_key_path_with_a_space_stays_one_word(monkeypatch, windows, key, want):
+    """Pasted as fleet printed it, `-i C:\\Users\\Jo Lee\\.ssh\\k` gave ssh `Lee\\.ssh\\k`
+    as the host."""
+    from fleet.ssh import cmd
+    monkeypatch.setattr(cmd, "_quoted", lambda w, _q=cmd._quoted: _q(w, windows=windows))
+    line = Endpoint(target="h", identity=key).ssh_command()
+    assert want in line
+    assert cmd.split_command(line, windows=windows)[2] == key

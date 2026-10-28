@@ -62,11 +62,23 @@ class Endpoint:
         if self.port and self.port != 22:
             bits += ["-p", str(self.port)]
         if self.identity:
-            bits += ["-i", self.identity]
+            bits += ["-i", _quoted(self.identity)]
         if self.jump:
             bits += ["-J", self.jump]
         bits.append(f"{self.user}@{self.target}" if self.user else self.target)
         return " ".join(bits)
+
+
+def _quoted(word: str, *, windows: bool = os.name == "nt") -> str:
+    """A word as a shell there takes it whole: `-i C:\\Users\\Jo Lee\\.ssh\\k` was two words
+    when pasted, so ssh read the second as the host."""
+    if not any(c.isspace() or c in "\"'" for c in word):
+        return word
+    if windows:
+        return f'"{word}"'
+    if word.startswith("~/"):               # quoted, ~ is no longer your home
+        return "~/" + shlex.quote(word[2:])
+    return shlex.quote(word)
 
 
 def split_command(cmd: str, *, windows: bool = os.name == "nt") -> list[str]:
