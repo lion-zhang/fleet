@@ -63,7 +63,8 @@ class Gpu:
 
     @property
     def busy(self) -> bool:
-        return self.util_pct >= 10 or self.compute_used_mib >= 1024
+        return (self.util_pct >= 10 or self.compute_used_mib >= 1024
+                or self.unattributed_mib >= 4096)    # render.view.HIDDEN_BUSY_MIB
 
 
 @dataclass(slots=True)

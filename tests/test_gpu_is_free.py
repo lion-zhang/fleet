@@ -1,8 +1,9 @@
-"""A GPU that shares the machine's memory is not a card with none.
+"""Whether a GPU has room: one with no memory of its own, and one held out of sight.
 
 On DGX Spark's GB10 nvidia-smi reports memory as [N/A]. Read as 0, `fleet ls` said
 "0.0G idle" and `fleet ps` "(0G free)": a card nothing fits on, on a machine with most
-of its 128G free for it.
+of its 128G free for it. And a card whose memory a job in a container held, listing no
+process, read "idle" and counted as free beside the alert saying not to.
 """
 
 from __future__ import annotations
@@ -45,3 +46,16 @@ def test_a_card_with_its_own_memory_is_unchanged():
     _, vram = top.gpu_cells_compact(row)
     assert vram.startswith("22.7G ")
     assert "vram-24g" in row["facts"]
+
+
+def test_a_card_held_by_a_process_we_cannot_see_is_not_free():
+    # A job in a container: nvidia-smi lists no process, and 70G of the card is in use.
+    row = _row("0|GPU-00000000-1111-2222-3333-444444444444|NVIDIA A100-SXM4-80GB"
+               "|81920|71680|10240|0|33|61.2", Detail.FULL)
+    assert row["gpus"][0]["busy"] is True
+    assert not jobs_view([row])["idle"]
+
+
+def test_a_desktops_own_windows_do_not_make_a_card_busy():
+    # The captured box: 414 MiB its desktop holds that nvidia-smi does not list.
+    assert _row(CARD)["gpus"][0]["busy"] is False

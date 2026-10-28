@@ -25,6 +25,14 @@ class Detail(StrEnum):
     FULL = "full"           # single-device views
 
 
+# Memory held by processes nvidia-smi does not show -- a job in a container, another
+# user's -- past what a desktop's own windows ever take (a few hundred MiB, a GiB or two
+# on Windows). Below it the card read "idle" and counted as free beside the alert saying
+# not to treat it as free, and a rental training in a container was "idle -- this is
+# costing money" each time its utilisation dipped.
+HIDDEN_BUSY_MIB = 4096
+
+
 def _gpu_view(g: dict) -> dict:
     used, compute, display = g["vram_used_mib"], g["compute_used_mib"], g["display_used_mib"]
     unattributed = max(0, used - compute - display)
@@ -38,7 +46,7 @@ def _gpu_view(g: dict) -> dict:
         "unattributed_mib": unattributed,
         "util_pct": g["util_pct"],
         "temp_c": g.get("temp_c"),
-        "busy": g["util_pct"] >= 10 or compute >= 1024,
+        "busy": g["util_pct"] >= 10 or compute >= 1024 or unattributed >= HIDDEN_BUSY_MIB,
         "shared_memory": bool(g.get("shared_memory")),
     }
 

@@ -84,8 +84,9 @@ NOTE column. In order:
 | *shared multi-user host -- not claimable* | always, for a `shared` machine |
 | *RENTAL is idle -- this is costing money* | a `rental` with at least one GPU, none of them busy |
 
-A GPU counts as **busy** at 10% utilisation or more, or with 1 GiB or more of compute
-memory in use.
+A GPU counts as **busy** at 10% utilisation or more, with 1 GiB or more of compute
+memory in use, or with 4 GiB or more held by processes fleet cannot see (a job in a
+container, another user's).
 
 `fleet ls` (not `--json`) can also print a line when an agent on this machine reads an
 older description of fleet.
