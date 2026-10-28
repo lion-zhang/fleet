@@ -429,3 +429,11 @@ def test_a_field_that_does_not_exist_is_said_to_not_exist(tmp_path, monkeypatch)
     r = runner.invoke(cli.app, ["ls", "--json", "--fields", "alias,nosuchfield"])
     assert r.exit_code == 0, r.output
     assert "no such field: nosuchfield " in " ".join(r.stderr.split()), r.stderr
+
+
+@pytest.mark.parametrize("cost", ["-5", "nan", "inf", "2000000"])
+def test_a_cost_no_reader_keeps_is_refused(cost):
+    """Written to the machine's file with a ✓, then dropped by every probe as invalid:
+    the machine showed no cost at all and nothing said why."""
+    r = CliRunner().invoke(cli.app, ["edit", "box", f"--cost={cost}"])
+    assert r.exit_code == 2 and "is not a cost" in r.output

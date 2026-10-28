@@ -46,26 +46,45 @@ def _write_script(platform: str, old: bytes, new: str) -> str:
 
     Compared as bytes, both ends: a file saved with a BOM or CRLF would otherwise never
     match the text it decodes to, and every write would read as a change by somebody else.
+
+    The check and the replace happen under a lock. Without one, two edits at once both
+    found the file as they had read it, both replaced it, and one was lost while each
+    printed its ✓: eight `fleet edit --tag` run together kept four tags. A lock left by a
+    write that was killed is taken over after a minute.
     """
     old_sha = hashlib.sha256(old).hexdigest()
     b64 = base64.b64encode(new.encode()).decode()
     if platform == WINDOWS:
         return (f"$f={_PS}\n"
+                # One mutex per user session: the file is in that user's own folder.
+                "$m=New-Object Threading.Mutex($false,'Local\\fleet-machine-yaml')\n"
+                "try{$own=$m.WaitOne(20000)}catch [Threading.AbandonedMutexException]{$own=$true}\n"
+                # No try/finally: `-Command -` runs one line at a time, and a block
+                # cannot span lines. A write that dies leaves the mutex abandoned, which
+                # the next WaitOne takes over.
+                "if(-not $own){'CHANGED'; exit 0}\n"
                 "$cur=[byte[]]@(); if(Test-Path -LiteralPath $f){$cur=[IO.File]::ReadAllBytes($f)}\n"
                 "$h=[BitConverter]::ToString([Security.Cryptography.SHA256]::Create()"
                 ".ComputeHash($cur)).Replace('-','').ToLower()\n"
-                f"if($h -ne '{old_sha}'){{'CHANGED'; exit 0}}\n"
+                f"if($h -ne '{old_sha}'){{'CHANGED'; $m.ReleaseMutex(); exit 0}}\n"
                 "New-Item -ItemType Directory -Force -Path (Split-Path $f) | Out-Null\n"
                 "$t=\"$f.$PID\"\n"
                 f"[IO.File]::WriteAllBytes($t,[Convert]::FromBase64String('{b64}'))\n"
                 "Move-Item -Force -LiteralPath $t -Destination $f\n"
+                "$m.ReleaseMutex()\n"
                 f"'{DONE}'\n")
     # sha256sum on Linux and busybox, shasum on macOS; the comparison is the same.
-    return (f'f={_POSIX}; '
+    # mkdir is the one atomic test-and-set every POSIX shell has (no flock on macOS).
+    return (f'f={_POSIX}; l="$f.lock"; mkdir -p "$(dirname "$f")" || exit 1; n=0; '
+            'until mkdir "$l" 2>/dev/null; do '
+            '[ -n "$(find "$l" -prune -mmin +1 2>/dev/null)" ] && rmdir "$l" 2>/dev/null; '
+            'n=$((n+1)); [ $n -ge 100 ] && { echo CHANGED; exit 0; }; '
+            'sleep 0.2 2>/dev/null || sleep 1; done; '
+            "trap 'rmdir \"$l\" 2>/dev/null' EXIT; "
             'h=$( { [ -f "$f" ] && cat "$f"; } | { sha256sum 2>/dev/null || shasum -a 256; } '
             '| cut -d" " -f1); '
             f'[ "$h" = "{old_sha}" ] || {{ echo CHANGED; exit 0; }}; '
-            'mkdir -p "$(dirname "$f")" && t="$f.$$" && '
+            't="$f.$$" && '
             f'printf %s {b64} | {{ base64 -d 2>/dev/null || base64 -D; }} > "$t" && '
             f'mv -f "$t" "$f" && echo {DONE}')
 
@@ -103,7 +122,7 @@ def read(ep: Endpoint | None, platform: str) -> str:
 
 def change(ep: Endpoint | None, platform: str, **edits) -> tuple[str, str]:
     """Make `edits` (see notes.edit) to the machine's file. Returns (before, after)."""
-    for _ in range(4):
+    for _ in range(10):
         raw = read_bytes(ep, platform)
         old = raw.decode("utf-8-sig", errors="replace")
         new = notes.edit(old, **edits)

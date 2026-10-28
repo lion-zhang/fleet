@@ -256,6 +256,27 @@ def test_an_app_can_set_the_disks_to_watch(monkeypatch):
                    ["edit", "gpu", "--json", "--clear-disk-paths"]]
 
 
+def test_an_argument_a_tool_does_not_take_is_an_error(monkeypatch):
+    """The SDK dropped it without a word: `show_machine(machine="gpubox")` -- the name
+    `run_on_machine` uses -- answered with this machine, as though no name were given."""
+    pytest.importorskip("mcp", reason="the mcp extra is optional")
+    import asyncio
+
+    from fleet import mcpserver
+
+    ran = []
+    monkeypatch.setattr(mcpserver, "_run", lambda args: ran.append(args) or {"ok": True})
+    server = mcpserver.build_server()
+    with pytest.raises(Exception, match="machine"):
+        asyncio.run(server.call_tool("show_machine", {"machine": "gpubox"}))
+    assert not ran, "nothing ran on a call it could not have meant"
+    asyncio.run(server.call_tool("show_machine", {"name": "gpubox"}))
+    assert ran and "gpubox" in ran[-1]
+    schemas = {t.name: t.input_schema for t in asyncio.run(server.list_tools())}
+    assert schemas["show_machine"].get("additionalProperties") is False, \
+        "and the schema says so, for clients that check before calling"
+
+
 @pytest.mark.skipif(sys.platform == "win32", reason="POSIX stand-in for fleet")
 def test_a_timeout_stops_everything_the_command_started(monkeypatch, tmp_path):
     """A timed-out command used to lose only its first process: what it started (the

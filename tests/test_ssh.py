@@ -59,6 +59,13 @@ def test_a_command_after_the_separator_is_run(box):
     assert ".local/bin" in argv[-1], "PATH is fixed up: a non-login shell will not have it"
 
 
+def test_a_separator_inside_the_command_is_kept(box):
+    """Every `--` was dropped, not just the one before the command: `git log -- FILE`
+    ran as `git log FILE`, and `grep -- -x file` as `grep -x file`."""
+    CliRunner().invoke(cli.app, ["ssh", "lin-xps", "--", "git", "log", "--", "README.md"])
+    assert box[-1][1][-1].endswith("git log -- README.md'")
+
+
 def test_the_process_is_replaced_rather_than_wrapped(box):
     """execvp, not subprocess: ssh must own the terminal outright or job control,
     signals and escape sequences all behave subtly wrong."""

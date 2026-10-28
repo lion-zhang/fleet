@@ -81,19 +81,34 @@ def load_config() -> Config:
             loaded = yaml.safe_load(CONFIG_PATH.read_text(encoding="utf-8")) or {}
             if isinstance(loaded, dict):
                 data.update(loaded)
-        except yaml.YAMLError:
+        except (yaml.YAMLError, OSError, UnicodeDecodeError):
             pass      # a broken config must never stop you from listing devices
     # A setting that is not a number (`telemetry_ttl_s: 5m`) used to raise on every read
-    # that used it. Fall back to the default, and say so once.
+    # that used it. Fall back to the default, and say so once. So does one below its
+    # least: `max_workers: 0` raised in the thread pool on every `ls`, a timeout of 0
+    # showed every machine offline, and `snapshot_retention: 0` deleted each reading as
+    # it was stored.
     for key, default in DEFAULTS.items():
         if isinstance(default, int) and not isinstance(data.get(key), bool):
+            least = _LEAST.get(key, 0)
             try:
-                data[key] = int(data[key])
+                value = int(data[key])
+                if value < least:
+                    raise ValueError
+                data[key] = value
             except (TypeError, ValueError):
                 if key not in _WARNED:
                     import sys
                     _WARNED.add(key)
-                    print(f"fleet: config.yaml: {key}: {data[key]!r} is not a number; "
+                    why = ("is not a number" if not isinstance(data[key], (int, float))
+                           else f"is less than {least}")
+                    print(f"fleet: config.yaml: {key}: {data[key]!r} {why}; "
                           f"using {default}", file=sys.stderr)
                 data[key] = default
     return Config(data)
+
+
+# The least each number setting can be and still work. The rest may be 0: a
+# `telemetry_ttl_s` of 0 measures on every read, which is a choice, not a mistake.
+_LEAST = {"max_workers": 1, "probe_timeout_s": 1, "connect_timeout_s": 1,
+          "snapshot_retention": 1}
