@@ -994,6 +994,11 @@ def cmd_edit(name: str = typer.Argument(None, help="defaults to this machine"),
             return
         console.print(f"[dim]· nothing to change on {dev.name}.[/dim]")
         return
+    if endpoint is not None and (other := _answers_as_another(dev, endpoint, devices)):
+        err.print(f"[red]{escape(ssh_command)} reaches {escape(other)}, not {dev.name}[/red]"
+                  "  [dim]-- nothing changed. A typo, or the address now belongs to "
+                  "another machine; `fleet add` it if it is a new one.[/dim]")
+        raise typer.Exit(2)
 
     def _apply(current):
         # Again, on the inventory as it is now: two agents tagging one machine at once
@@ -1022,6 +1027,27 @@ def cmd_edit(name: str = typer.Argument(None, help="defaults to this machine"),
         console.print(f"  {escape(line)}")
     if endpoint is not None:
         console.print(f"  [dim]run `fleet ls {dev.name} -r` to confirm it answers.[/dim]")
+
+
+def _answers_as_another(dev: Device, endpoint, devices) -> str | None:
+    """What a new address for `dev` reaches, when that is plainly another machine.
+
+    `edit --ssh` took any address on trust, and every later reading of whatever answered
+    there was recorded as this machine: a port typo pointed `gpubox` at the laptop, and
+    `fleet ls` showed gpubox with no GPUs, `fleet ssh gpubox` opened the laptop. Only a
+    machine that answers with a machine-id of its own is judged; one that does not
+    answer may just be down, and an address-keyed device has no id to compare.
+    """
+    if dev.id.startswith("net:"):
+        return None
+    res = run_probe(endpoint, mode=dev.probe_mode, timeout=15, multiplex=False)
+    if res.snapshot is None or not res.snapshot.machine_id:
+        return None
+    seen = derive_id(res.snapshot, endpoint)
+    if seen == dev.id:
+        return None
+    known = inv.find_exact(devices, seen)
+    return known.name if known else f"another machine ({res.snapshot.hostname or seen})"
 
 
 def configured_repo() -> str:

@@ -194,6 +194,9 @@ def _cli_env(tmp_path, monkeypatch, dev: Device):
     monkeypatch.setattr(inv, "INVENTORY_PATH", path)
     monkeypatch.setattr(store, "DB_PATH", tmp_path / "cache.db")
     monkeypatch.setattr(cli, "resolve_command", lambda cmd, **kw: _ep())
+    # `edit --ssh` asks the new address which machine it is; here, nothing answers.
+    from fleet.models import ProbeResult, Status
+    monkeypatch.setattr(cli, "run_probe", lambda ep, **kw: ProbeResult(status=Status.UNREACHABLE))
     return CliRunner(), path
 
 

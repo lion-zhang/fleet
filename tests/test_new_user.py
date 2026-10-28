@@ -206,3 +206,38 @@ def test_a_ticket_left_with_our_own_pid_by_an_earlier_run_is_not_ours():
     assert writes._alive({"pid": os.getpid(), "started": me})
     assert not writes._alive({"pid": os.getpid(), "started": me - 3600})
     assert writes._alive({"pid": os.getpid()})        # an old ticket with no start time
+
+
+# ------------------------------------------------------------------ edit --ssh
+def _answering(monkeypatch, machine_id: str | None):
+    from fleet.models import ProbeResult, Snapshot, Status
+
+    res = (ProbeResult(status=Status.UNREACHABLE) if machine_id is None else
+           ProbeResult(status=Status.OK, snapshot=Snapshot(hostname="laptop", os="Ubuntu",
+                                                           machine_id=machine_id)))
+    monkeypatch.setattr(cli, "run_probe", lambda ep, **k: res)
+    monkeypatch.setattr(ssh_cmd.subprocess, "run", lambda argv, **kw: subprocess.CompletedProcess(
+        argv, 0, "hostname 10.0.0.9\nuser me\nport 2222\n", ""))
+
+
+def test_a_new_address_that_reaches_another_machine_is_refused(monkeypatch):
+    """A port typo pointed gpubox at the laptop, and from then on `fleet ls` showed
+    gpubox with no GPUs and `fleet ssh gpubox` opened the laptop."""
+    inv.save([Device(id="linux:machine-id:aaaa", name="gpubox", kind=Kind.PERMANENT,
+                     endpoints=[{"target": "10.0.0.5", "user": "me", "port": 22}]),
+              Device(id="linux:machine-id:bbbb", name="laptop", kind=Kind.PERMANENT)])
+    _answering(monkeypatch, "bbbb")
+    r = CliRunner().invoke(cli.app, ["edit", "gpubox", "--ssh", "ssh -p 2222 me@10.0.0.9"])
+    assert r.exit_code == 2, r.output
+    assert "reaches laptop, not gpubox" in " ".join(r.output.split())
+    assert inv.find_exact(inv.load(), "linux:machine-id:aaaa").endpoints[0]["target"] == "10.0.0.5"
+
+
+@pytest.mark.parametrize("answer", [None, "aaaa"], ids=["down", "itself"])
+def test_a_new_address_that_is_down_or_reaches_the_machine_is_taken(monkeypatch, answer):
+    inv.save([Device(id="linux:machine-id:aaaa", name="gpubox", kind=Kind.PERMANENT,
+                     endpoints=[{"target": "10.0.0.5", "user": "me", "port": 22}])])
+    _answering(monkeypatch, answer)
+    r = CliRunner().invoke(cli.app, ["edit", "gpubox", "--ssh", "ssh -p 2222 me@10.0.0.9"])
+    assert r.exit_code == 0, r.output
+    assert inv.load()[0].endpoints[0]["target"] == "10.0.0.9"
