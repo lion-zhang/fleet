@@ -60,20 +60,27 @@ def _drop_probe_cache() -> list[str]:
     """The cache the probe keeps on every machine it reads -- this one included, since
     fleet reads the machine it runs on. --purge left it behind.
 
-    By name, as everywhere here: `software` and `sizes`, and the lock `du` holds.
+    By name, as everywhere here: `software` and `sizes`, and the lock `du` holds, in the
+    folder each machine keeps them in (a home shared by several has one for each), and
+    where they were kept before that.
     """
     import os
 
     base = os.environ.get("XDG_CACHE_HOME") or str(Path.home() / ".cache")
     cache = Path(base) / "fleet"
     removed = []
-    for name in ("software", "sizes"):
-        with suppress(OSError):
-            (cache / name).unlink()
-            removed.append(str(cache / name))
-    for d in (cache / "du.lock", cache):
-        with suppress(OSError):
-            d.rmdir()
+    try:
+        folders = [d for d in cache.iterdir() if d.is_dir() and d.name != "du.lock"]
+    except OSError:
+        folders = []
+    for folder in [*folders, cache]:
+        for name in ("software", "sizes"):
+            with suppress(OSError):
+                (folder / name).unlink()
+                removed.append(str(folder / name))
+        for d in (folder / "du.lock", folder):
+            with suppress(OSError):
+                d.rmdir()
     return removed
 
 
@@ -85,12 +92,15 @@ def _fleet_files() -> list[Path]:
     folder (`.NAME.queue`) goes with it.
     """
     from ..state import store
+    import socket
+
     from ..state import inventory as inv
     from . import identity
 
     cfg, st = config.CONFIG_DIR, config.STATE_DIR
     named = [
         inv.INVENTORY_PATH, config.CONFIG_PATH, identity.device_id_file(),
+        identity.device_id_file().with_name(f"device-id.{socket.gethostname()}"),
         cfg / "discover-hidden.txt",
         st / "first-run-done",
         store.DB_PATH, store.DB_PATH.with_name(store.DB_PATH.name + "-wal"),

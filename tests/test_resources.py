@@ -99,9 +99,8 @@ def test_folder_sizes_are_worked_out_in_the_background_and_reported_next_time(tm
     first = parse_payload(probe(home))
     # Not waited for: unknown, unless the background `du` was quicker than the probe.
     assert first.storage[0].size_kb is None or first.storage[0].sized_at
-    sizes = home / ".cache" / "fleet" / "sizes"
     for _ in range(100):
-        if sizes.exists():
+        if sizes := next((home / ".cache" / "fleet").glob("*/sizes"), None):
             break
         threading.Event().wait(0.05)
     second = parse_payload(probe(home))
@@ -119,10 +118,10 @@ def _probe_on_a_full_disk(home: Path, tmp_path: Path, **env) -> tuple[str, str]:
     cache = home / ".cache" / "fleet"
     saved = tmp_path / "saved"
     shutil.copytree(cache, saved)
-    script = (f'c="{cache}"; mount -t tmpfs -o size=64k tmpfs "$c" && cp "{saved}"/* "$c"/'
+    script = (f'c="{cache}"; mount -t tmpfs -o size=64k tmpfs "$c" && cp -R "{saved}"/* "$c"/'
               ' && { dd if=/dev/zero of="$c/fill" bs=512 2>/dev/null; true; }'
-              f' && sh "{PAYLOAD}"; n=0; while [ -d "$c/du.lock" ] && [ $n -lt 100 ]; do'
-              ' sleep 0.1; n=$((n+1)); done; echo "#SIZES"; cat "$c/sizes"')
+              f' && sh "{PAYLOAD}"; n=0; while [ -d "$c"/*/du.lock ] && [ $n -lt 100 ]; do'
+              ' sleep 0.1; n=$((n+1)); done; echo "#SIZES"; cat "$c"/*/sizes')
     e = {"PATH": os.environ["PATH"], "HOME": str(home), **env}
     p = subprocess.run(["unshare", "-rm", "sh", "-c", script], env=e, capture_output=True,
                        text=True, timeout=60)
@@ -141,9 +140,8 @@ def test_a_disk_that_fills_up_keeps_the_folder_sizes_it_had(tmp_path):
     (home / "models").mkdir()
     (home / "models" / "w.bin").write_bytes(b"x" * 300_000)
     probe(home)
-    sizes = home / ".cache" / "fleet" / "sizes"
     for _ in range(100):
-        if sizes.exists():
+        if sizes := next((home / ".cache" / "fleet").glob("*/sizes"), None):
             break
         threading.Event().wait(0.05)
     before = sizes.read_text()
@@ -223,6 +221,34 @@ def test_a_cache_folder_it_may_not_write_still_lets_it_report_its_software(tmp_p
                    for p in parse_payload(probe(home, FLEET_REFRESH="1")).pyenvs)
     finally:
         cache.chmod(0o755)
+
+
+@posix
+@pytest.mark.skipif(sys.platform != "linux", reason="mounts a machine-id")
+def test_machines_that_share_a_home_each_report_their_own_software(tmp_path):
+    """The nodes of a cluster share one home, and the probe's cache with it: one node
+    reported another's Docker, CUDA and Python for six hours."""
+    if not Path("/etc/machine-id").exists() or not shutil.which("unshare") or subprocess.run(
+            ["unshare", "-rm", "true"], capture_output=True).returncode:
+        pytest.skip("cannot give a probe a machine-id of its own here")
+    home = make_home(tmp_path)
+    bin_ = tmp_path / "bin"
+    bin_.mkdir()
+    (bin_ / "docker").write_text('#!/bin/sh\necho "Docker version 27.1.1, build x"\n')
+    (bin_ / "docker").chmod(0o755)
+
+    def on(machine: str, path: str) -> dict:
+        (tmp_path / machine).write_text(machine * 32 + "\n")
+        script = f'mount --bind "{tmp_path / machine}" /etc/machine-id && sh "{PAYLOAD}"'
+        p = subprocess.run(["unshare", "-rm", "sh", "-c", script], capture_output=True,
+                           text=True, timeout=60, env={"PATH": path, "HOME": str(home)})
+        assert "#END" in p.stdout, p.stderr
+        return parse_payload(p.stdout).software
+
+    plain = "/usr/bin:/bin:/usr/sbin:/sbin"
+    assert on("a", f"{bin_}:{plain}").get("docker") == "27.1.1"
+    assert on("b", plain).get("docker") != "27.1.1", "a's docker, not b's own"
+    assert on("a", f"{bin_}:{plain}").get("docker") == "27.1.1"
 
 
 # ---------------------------------------------------------------- model servers

@@ -57,9 +57,16 @@ emit host.machine_id "$machine_id"
 # The id fleet gave this machine when it found it shares its machine-id with another --
 # a clone of the same image. Written by the center (or by `fleet join`) into fleet's
 # config folder here, and read by fleet on this machine too, so all agree which it is.
+# `device-id.HOST` first: clones that share a home share the folder, one file each.
+# Where there are such files and none is this host's, the plain one is a copy of one of
+# theirs, kept for an older fleet.
 device_id=""
-for f in "$HOME/.config/fleet/device-id" "$HOME/Library/Application Support/fleet/device-id"; do
-  if [ -r "$f" ]; then device_id=$(head -n 1 "$f" 2>/dev/null | clean); break; fi
+for d in "$HOME/.config/fleet" "$HOME/Library/Application Support/fleet"; do
+  if [ -r "$d/device-id.$hostname_v" ]; then
+    device_id=$(head -n 1 "$d/device-id.$hostname_v" 2>/dev/null | clean); break
+  fi
+  for f in "$d"/device-id.*; do [ -e "$f" ] && break 2; done
+  if [ -r "$d/device-id" ]; then device_id=$(head -n 1 "$d/device-id" 2>/dev/null | clean); break; fi
 done
 emit host.device_id "$device_id"
 
@@ -590,6 +597,14 @@ CACHE="${XDG_CACHE_HOME:-$HOME/.cache}/fleet"
 # home -- is no place to keep them: every write failed, and the software list came back
 # empty on every probe, cuda and python and torch with it.
 { mkdir -p "$CACHE" && [ -w "$CACHE" ]; } 2>/dev/null || CACHE=""
+# One folder for each machine, by its id: a home shared by several -- the nodes of a
+# cluster -- shares this folder too, and one node reported another's CUDA, Python and
+# Docker, and its folder sizes, for six hours.
+if [ -n "$CACHE" ]; then
+  mine=$(printf '%s' "${machine_id:-$hostname_v}" | tr -c 'A-Za-z0-9._-' '_' | cut -c1-64)
+  CACHE="$CACHE/${mine:-this}"
+  { mkdir -p "$CACHE" && [ -w "$CACHE" ]; } 2>/dev/null || CACHE=""
+fi
 age_ok() {  # file max_age_s: does the file exist and say it was written recently enough?
   [ -n "$CACHE" ] && [ -r "$1" ] || return 1
   t=$(head -1 "$1" 2>/dev/null | awk '{print $2}')

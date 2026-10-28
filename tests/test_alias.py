@@ -437,3 +437,14 @@ def test_a_cost_no_reader_keeps_is_refused(cost):
     the machine showed no cost at all and nothing said why."""
     r = CliRunner().invoke(cli.app, ["edit", "box", f"--cost={cost}"])
     assert r.exit_code == 2 and "is not a cost" in r.output
+
+
+def test_a_new_machine_keeps_the_tags_it_was_added_with(tmp_path, monkeypatch):
+    """`fleet add ... --tag training` printed "added" and kept no tag: they were put only
+    on a machine already in the list, and `fleet ls --tag training` found nothing."""
+    runner = _cli(tmp_path, monkeypatch, [])
+    _readd(monkeypatch)
+    r = runner.invoke(cli.app, ["add", "ssh root@10.0.0.5", "--tag", "training",
+                                "--tag", "GPU"])
+    assert r.exit_code == 0 and "added box" in r.output, r.output
+    assert inv.find_exact(inv.load(), "box").tags == ["training", "gpu"]

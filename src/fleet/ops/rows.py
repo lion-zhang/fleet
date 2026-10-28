@@ -156,6 +156,12 @@ class Background:
             self.schedule = self._new()
         self._wake.set()
 
+    def follow(self, devices: list) -> None:
+        """The list as it is now, after another `fleet` changed it."""
+        with self._lock:
+            self._devices = devices
+        self._wake.set()
+
     def stop(self) -> None:
         self._stop.set()
         self._wake.set()

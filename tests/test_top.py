@@ -477,3 +477,47 @@ def test_one_machine_is_probed_on_the_thread_that_asked(monkeypatch):
     assert runner.probe_many({"a": []}) == {"a": "r"}
     assert seen == [threading.current_thread()]
     assert runner.probe_many({"a": [], "b": []}) == {"a": "r", "b": "r"}
+
+
+def test_the_live_view_follows_the_list_another_fleet_changes(tmp_path, monkeypatch):
+    """`fleet rm`, a rename or an add in another terminal while `fleet top` was open:
+    the window went on showing the removed machine online, and costing, until quit."""
+    from fleet import cli
+    from fleet.state import inventory as inv
+
+    path = tmp_path / "machines.yaml"
+    monkeypatch.setattr(inv, "INVENTORY_PATH", path)
+    inv.save([_dev("a"), _dev("b")], path)
+    seen = inv.stamp()
+    devices = inv.live(inv.load())
+    assert cli._list_now(devices, seen) == (devices, seen), "nothing changed, nothing read"
+
+    renamed = _dev("a")
+    renamed.name = "a2"
+    inv.save([renamed, _dev("c")], path)
+    fresh, seen = cli._list_now(devices, seen)
+    assert [d.name for d in fresh] == ["a2", "c"]
+    one, _ = cli._list_now(devices, None, one="linux:machine-id:a")
+    assert [d.name for d in one] == ["a2"], "top NAME follows its machine by id"
+
+    path.write_text("devices: [\n")
+    assert cli._list_now(fresh, seen)[0] is fresh, "a list that cannot be read keeps the view"
+
+
+def test_a_machine_added_while_the_view_is_open_is_probed(monkeypatch):
+    import threading
+    from types import SimpleNamespace
+
+    from fleet.ops import rows
+
+    asked = threading.Event()
+    monkeypatch.setattr(rows, "_probe", lambda conn, due, cfg, **k:
+                        due[0].name == "new" and asked.set())
+    monkeypatch.setattr(rows.store, "connect", lambda: SimpleNamespace(close=lambda: None))
+    bg = rows.Background([_dev("a")], lambda: Schedule(interval=60),
+                         SimpleNamespace(max_workers=8)).start()
+    try:
+        bg.follow([_dev("a"), _dev("new")])
+        assert asked.wait(5)
+    finally:
+        bg.stop()

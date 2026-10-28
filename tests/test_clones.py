@@ -143,3 +143,46 @@ def test_the_id_written_is_the_id_the_probe_reads(tmp_path):
     out = subprocess.run(["sh", str(PAYLOAD)], capture_output=True, text=True, env=env,
                          timeout=120).stdout
     assert f"host.device_id={BASE}:x1" in out
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="POSIX sh")
+def test_clones_that_share_a_home_each_read_their_own_id(tmp_path, monkeypatch):
+    """Containers on one volume, nodes on one NFS home: the file is the same for all of
+    them, and the one id in it was read by each -- the next `fleet add` from another
+    machine took one clone for the other, and every add stacked another suffix."""
+    from fleet import config
+    from fleet.probe.runner import PAYLOAD
+
+    home = tmp_path / "home"
+    home.mkdir()
+    env = {**os.environ, "HOME": str(home)}
+    for host in ("node8", "node9", "node8"):
+        p = subprocess.run(["sh", "-c", remote_device_id_command(f"{BASE}:{host}", host=host)],
+                           capture_output=True, text=True, env=env)
+        assert p.stdout.strip() == "ok", p.stderr
+    folder = home / ("Library/Application Support/fleet" if sys.platform == "darwin"
+                     else ".config/fleet")
+    assert (folder / "device-id.node9").read_text().strip() == f"{BASE}:node9"
+    assert (folder / "device-id").read_text() == f"{BASE}:node8\n", "as an older fleet reads it"
+
+    def probed_as(host: str) -> str:
+        bin_ = tmp_path / host
+        bin_.mkdir(exist_ok=True)
+        (bin_ / "hostname").write_text(f"#!/bin/sh\necho {host}\n")
+        (bin_ / "hostname").chmod(0o755)
+        out = subprocess.run(["sh", str(PAYLOAD)], capture_output=True, text=True,
+                             env={**env, "PATH": f"{bin_}:{os.environ['PATH']}",
+                                  "FLEET_MODE": "light"}, timeout=120).stdout
+        return next(line.split("=", 1)[1] for line in out.splitlines()
+                    if line.startswith("host.device_id="))
+
+    assert probed_as("node8") == f"{BASE}:node8"
+    assert probed_as("node9") == f"{BASE}:node9"
+    assert probed_as("node7") == "", "the clone it was copied from is the machine-id's own"
+
+    monkeypatch.setattr(config, "CONFIG_DIR", folder)
+    monkeypatch.setattr(identity, "_machine_id", lambda: BASE)
+    import socket
+    for host, want in (("node9", f"{BASE}:node9"), ("node7", BASE)):
+        monkeypatch.setattr(socket, "gethostname", lambda h=host: h)
+        assert identity.local_device_id() == want

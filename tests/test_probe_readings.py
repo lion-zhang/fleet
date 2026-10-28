@@ -184,9 +184,8 @@ def test_a_folder_with_a_space_in_its_name_is_measured(tmp_path):
     (home / "My Models" / "w.bin").write_bytes(b"x" * 300_000)
     (tmp_path / "bin").mkdir()
     _probe(tmp_path)
-    sizes = home / ".cache" / "fleet" / "sizes"
     for _ in range(100):
-        if sizes.exists():
+        if any((home / ".cache" / "fleet").glob("*/sizes")):
             break
         time.sleep(0.05)
     [store] = parse_payload(_probe(tmp_path)).storage

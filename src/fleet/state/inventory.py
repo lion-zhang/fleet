@@ -131,6 +131,15 @@ def load(path: Path | None = None) -> list[Device]:
     return _devices_from(raw)
 
 
+def stamp(path: Path | None = None) -> tuple | None:
+    """What the list file is now, cheaply: it changes whenever any `fleet` writes it."""
+    try:
+        st = (path or INVENTORY_PATH).stat()
+    except OSError:
+        return None
+    return st.st_mtime_ns, st.st_size, st.st_ino
+
+
 def _devices_from(raw: dict) -> list[Device]:
     """The records in a parsed inventory. A malformed one stops the load, by name.
 

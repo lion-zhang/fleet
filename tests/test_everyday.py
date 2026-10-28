@@ -178,5 +178,9 @@ def test_purge_takes_the_probe_s_cache_on_this_machine_too(tmp_path, monkeypatch
     (cache / "du.lock").mkdir(parents=True)
     (cache / "software").write_text("#v1 1 x\n")
     (cache / "sizes").write_text("#v1 1 x\n")
+    for machine in ("7f3c", "node-2"):       # one folder for each machine in a shared home
+        (cache / machine / "du.lock").mkdir(parents=True)
+        (cache / machine / "software").write_text("#v1 1 x\n")
+        (cache / machine / "sizes").write_text("#v1 1 x\n")
     uninstall.uninstall(purge=True)
     assert not cache.exists()

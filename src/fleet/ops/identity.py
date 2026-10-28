@@ -46,10 +46,21 @@ def assigned_id(base: str) -> str:
     machine-id -- counts. A file carried over into an image whose machine-id was then
     regenerated describes the machine it was copied from, not this one.
     """
+    import socket
+
+    path = device_id_file()
+    # This host's own file first: clones that share a home share the folder. Where
+    # others have one and this host has none, the plain file is a copy of theirs.
+    mine = path.with_name(f"{path.name}.{socket.gethostname()}")
     try:
-        text = device_id_file().read_text(encoding="utf-8").strip()
+        text = mine.read_text(encoding="utf-8").strip()
     except OSError:
-        return ""
+        if any(path.parent.glob(f"{path.name}.*")):
+            return ""
+        try:
+            text = path.read_text(encoding="utf-8").strip()
+        except OSError:
+            return ""
     return text if base and text.startswith(base + ":") else ""
 
 

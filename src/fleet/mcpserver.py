@@ -328,8 +328,14 @@ def build_server():
             # The command after the name is the command's own, `--` and all.
             p = _exec(["ssh", "--", machine, command])
         except subprocess.TimeoutExpired:
-            return {"ok": False, "error": f"still running after {TIMEOUT_S}s -- start it "
-                                          "detached with nohup and read its log"}
+            # Only this side stops: the connection is dropped, and a command that writes
+            # nothing goes on running there. "start it detached" alone had the agent
+            # start a second copy beside the first.
+            return {"ok": False, "still_running": True,
+                    "error": f"no answer after {TIMEOUT_S}s, so fleet stopped waiting, "
+                             f"but the command may still be running on {machine}: check "
+                             "there (ps, its output files) before starting it again, "
+                             "detached with nohup and a log"}
         except FileNotFoundError:
             return {"ok": False, "error": "fleet is not installed on this machine"}
         return {"ok": p.returncode == 0, "exit_code": p.returncode,
