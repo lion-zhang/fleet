@@ -340,43 +340,44 @@ def _show_unrecorded_self() -> dict:
 
 
 def _print_show(r: dict) -> None:
-    console.print(f"\n{_DOT.get(r['status'],'?')} [bold]{r['name']}[/bold]  "
-                  f"[dim]{r['kind']} · {r['status']} · {r.get('os') or '?'} · {r.get('arch') or ''}[/dim]")
+    console.print(f"\n{_DOT.get(r['status'],'?')} [bold]{escape(r['name'])}[/bold]  "
+                  f"[dim]{escape(r['kind'])} · {r['status']} · {escape(r.get('os') or '?')} · "
+                  f"{escape(r.get('arch') or '')}[/dim]")
     if r.get("error"):
-        console.print(f"  [red]{r['error']['class']}[/red]: {r['error']['detail']}")
+        console.print(f"  [red]{r['error']['class']}[/red]: {escape(r['error']['detail'] or '')}")
     if r.get("cpu_model"):
-        console.print(f"  cpu   {r['cpu_cores']}x {r['cpu_model']}   load {r.get('load')}")
+        console.print(f"  cpu   {r['cpu_cores']}x {escape(r['cpu_model'])}   load {r.get('load')}")
     if r.get("ram_total_gb"):
         console.print(f"  ram   {r['ram_free_gb']:.1f} / {r['ram_total_gb']:.1f} GB free")
     for g in r["gpus"]:
         bar = "█" * (g["util_pct"] // 10) + "░" * (10 - g["util_pct"] // 10)
-        console.print(f"  gpu{g['idx']}  {g['name']}  {bar} {g['util_pct']}%   "
+        console.print(f"  gpu{g['idx']}  {escape(g['name'])}  {bar} {g['util_pct']}%   "
                       f"{g['vram_free_mib']/1024:.1f}/{g['vram_total_mib']/1024:.1f} GB free")
         if g["display_used_mib"]:
             console.print(f"        [dim]{g['display_used_mib']} MiB desktop overhead (not a job)[/dim]")
         if g["unattributed_mib"]:
             console.print(f"        [yellow]{g['unattributed_mib']} MiB unattributed[/yellow]")
     for d in r.get("disks", []):
-        console.print(f"  disk  {d['mount']:<12} {d['free_gb']:.0f} GB free"
+        console.print(f"  disk  {escape(str(d['mount'])):<12} {d['free_gb']:.0f} GB free"
                       f"  [dim]{d['use_pct']}% used[/dim]")
     if r.get("processes"):
         console.print("  [bold]gpu compute[/bold]")
         for p in r["processes"]:
-            console.print(f"        {p['pid']:>8} {p['user']:<10} {p['vram_mib']:>6} MiB  "
-                          f"{runtime_text(p.get('etimes', 0)):>6}  {escape(p.get('args') or p['comm'])[:90]}")
+            console.print(f"        {p['pid']:>8} {escape(p['user'] or '?'):<10} {p['vram_mib']:>6} MiB  "
+                          f"{runtime_text(p.get('etimes', 0)):>6}  {escape((p.get('args') or p['comm'])[:90])}")
     elif r["gpus"]:
         console.print("  [dim]gpu compute   none — no job is using this GPU[/dim]")
     if r.get("top_cpu"):
         console.print("  [bold]top cpu[/bold]")
         for p in r["top_cpu"]:
-            console.print(f"        {p['pid']:>8} {p['user']:<10} {p['cpu_pct']:>5}%  {p['comm']}")
+            console.print(f"        {p['pid']:>8} {escape(p['user'] or '?'):<10} {p['cpu_pct']:>5}%  {escape(p['comm'] or '')}")
     if r.get("services_detail"):
         console.print("  [bold]services[/bold]")
         for s in r["services_detail"]:
-            console.print(f"        :{s['port']:<6} {s.get('kind','?'):<10} {s.get('comm','')}")
+            console.print(f"        :{s['port']:<6} {escape(s.get('kind') or '?'):<10} {escape(s.get('comm') or '')}")
     for m in r.get("models", []):
         where = m["url"] or "local only"
-        console.print(f"  [bold]models[/bold] :{m['port']} {m['framework'] or ''} [dim]{where}[/dim]  "
+        console.print(f"  [bold]models[/bold] :{m['port']} {escape(m['framework'] or '')} [dim]{escape(where)}[/dim]  "
                       + (escape(", ".join(m["models"][:6])) if m["models"]
                          else "[yellow]wants an API key[/yellow]" if m["status"] == "auth"
                          else "[dim]none listed[/dim]"))
@@ -394,24 +395,24 @@ def _print_show(r: dict) -> None:
     for kind, items in (r.get("storage") or {}).items():
         for st in items:
             if not st["exists"]:
-                console.print(f"  {kind:<9} {escape(st['path'])} [yellow]missing[/yellow]")
+                console.print(f"  {escape(kind):<9} {escape(st['path'])} [yellow]missing[/yellow]")
                 continue
             size = f"{size_text(st['size_gb'])} used" if st["size_gb"] is not None else "size pending"
             free = f", {st['free_gb']:.0f} GB free" if st["free_gb"] is not None else ""
-            console.print(f"  {kind:<9} {escape(st['path'])} [dim]{size}{free}[/dim]")
+            console.print(f"  {escape(kind):<9} {escape(st['path'])} [dim]{size}{free}[/dim]")
     # Both lists, labelled and apart, because this is the one surface with room for them
     # and the one a human reads when deciding. `tags` is what you said; `facts` is what
     # the last probe measured, and the two must stay distinguishable.
     if r.get("tags"):
-        console.print(f"  tags  {' '.join(r['tags'])}")
+        console.print(f"  tags  {escape(' '.join(map(str, r['tags'])))}")
     if r.get("facts"):
-        console.print(f"  facts [dim]{' '.join(r['facts'])}[/dim]")
+        console.print(f"  facts [dim]{escape(' '.join(map(str, r['facts'])))}[/dim]")
     for a in r["alerts"]:
-        console.print(f"  [yellow]![/yellow] {a}")
+        console.print(f"  [yellow]![/yellow] {escape(a)}")
     c = r["connect"]
-    console.print(f"\n  [bold]connect[/bold]  {c.get('ssh_command') or c.get('hint')}")
+    console.print(f"\n  [bold]connect[/bold]  {escape(c.get('ssh_command') or c.get('hint') or '')}")
     if r.get("notes"):
-        console.print(f"  [dim]{r['notes'].strip()}[/dim]")
+        console.print(f"  [dim]{escape(r['notes'].strip())}[/dim]")
 
 
 def _edit_machine_file(dev, json_out: bool, *, paths: list[str], endpoints: list[str],
@@ -483,7 +484,7 @@ def _edit_machine_file(dev, json_out: bool, *, paths: list[str], endpoints: list
         if not _emit({"ok": False, "name": dev.name, "error": str(exc),
                       "hint": "--local keeps tags and cost in this machine's own list"},
                      json_out):
-            err.print(f"[red]Could not change {dev.name}'s machine.yaml:[/red] {exc}")
+            err.print(f"[red]Could not change {dev.name}'s machine.yaml:[/red] {escape(str(exc))}")
             if tags_add or tags_remove or cost is not None:
                 err.print("  [dim]to keep tags or cost here instead: add --local[/dim]")
         raise typer.Exit(1)
@@ -499,18 +500,19 @@ def _edit_machine_file(dev, json_out: bool, *, paths: list[str], endpoints: list
     for kind in wanted:
         items = result.get("paths", {}).get(kind)
         console.print(f"[green]✓[/green] {dev.name} {kind}: "
-                      + (", ".join(items) if items else "[dim]cleared[/dim]"))
+                      + (escape(", ".join(items)) if items else "[dim]cleared[/dim]"))
     for name in servers:
         ep = result.get("endpoints", {}).get(name)
-        console.print(f"[green]✓[/green] {dev.name} server {name}: "
-                      + (f":{ep['port']}{ep['path']}" if ep else "[dim]removed[/dim]"))
+        console.print(f"[green]✓[/green] {dev.name} server {escape(name)}: "
+                      + (escape(f":{ep['port']}{ep['path']}") if ep else "[dim]removed[/dim]"))
     if tags_add or tags_remove:
-        console.print(f"[green]✓[/green] {dev.name} tags: {' '.join(result.get('tags', [])) or '-'}")
+        console.print(f"[green]✓[/green] {dev.name} tags: "
+                      f"{escape(' '.join(map(str, result.get('tags', [])))) or '-'}")
     if cost is not None:
         c = (result.get("cost") or {}).get("usd_per_hour")
         console.print(f"[green]✓[/green] {dev.name} cost: " + (f"${c:.2f}/hr" if c else "cleared"))
     if note is not None:
-        console.print(f"[green]✓[/green] {dev.name} note: " + (result.get("notes") or "cleared"))
+        console.print(f"[green]✓[/green] {dev.name} note: " + escape(result.get("notes") or "cleared"))
     console.print("  [dim]kept in machine.yaml on the machine itself, so everyone who looks "
                   "at it reads the same; it shows from the next probe[/dim]")
     return doc
@@ -603,8 +605,8 @@ def cmd_add(ssh_command: str = typer.Argument(None, help='e.g. "ssh -p 58418 roo
                       "error": res.error_detail, "why": verdict.why, "fix": verdict.fix},
                      json_out):
             err.print(f"[red]{dev.name} {'refused us' if res.status is Status.AUTH_FAILED else 'did not answer'}"
-                      f"[/red] — {res.status.value}: {res.error_detail}")
-            err.print(f"  {verdict.why}")
+                      f"[/red] — {res.status.value}: {escape(res.error_detail or '')}")
+            err.print(f"  {escape(verdict.why)}")
             for line in verdict.fix:
                 err.print(f"    [bold]{escape(line)}[/bold]")
             err.print("  [dim]nothing recorded; run the same `fleet add` again once it lets "
@@ -708,7 +710,7 @@ def cmd_add(ssh_command: str = typer.Argument(None, help='e.g. "ssh -p 58418 roo
                     console.print(f"  [dim]named after {source}; to rename it: "
                                   f"[bold]fleet edit {dev.name} --name NEW[/bold][/dim]")
         if not res.ok:
-            console.print(f"  [yellow]{res.status.value}[/yellow]: {res.error_detail}")
+            console.print(f"  [yellow]{res.status.value}[/yellow]: {escape(res.error_detail or '')}")
     _emit({"action": action, "name": dev.name, "id": dev.id, "kind": dev.kind.value,
            "status": res.status.value}, json_out)
 
@@ -993,7 +995,7 @@ def cmd_edit(name: str = typer.Argument(None, help="defaults to this machine"),
         return
     console.print(f"[green]✓[/green] {dev.name}")
     for line in result.changes:
-        console.print(f"  {line}")
+        console.print(f"  {escape(line)}")
     if endpoint is not None:
         console.print(f"  [dim]run `fleet ls {dev.name} -r` to confirm it answers.[/dim]")
 
@@ -1107,7 +1109,7 @@ def cmd_install(name: str = typer.Argument(None,
                                                 from_git=from_git),
                                  forward_agent=forward_agent, platform=platform)
     if code != 0:
-        err.print(f"[red]Install failed[/red] (exit {code})\n{output.strip()[-600:]}")
+        err.print(f"[red]Install failed[/red] (exit {code})\n{escape(output.strip()[-600:])}")
         if code == 90:
             err.print("  [dim]the device could not fetch uv -- it may have no outbound "
                       "internet.[/dim]")
@@ -1268,7 +1270,7 @@ def cmd_update(name: str = typer.Argument(None, help="defaults to this machine")
             # One unreachable device must not stop the rest: a fleet half-updated on
             # purpose is better than a fleet half-updated by an exception.
             err.print(f"[red]✗[/red] {dev.name} (exit {code}) "
-                      f"[dim]{output.strip()[-120:]}[/dim]")
+                      f"[dim]{escape(output.strip()[-120:])}[/dim]")
             failed += 1
 
     if here_later:
@@ -1875,7 +1877,7 @@ def cmd_doctor(name: str = typer.Argument(None, help="one machine; all that are 
         console.print(f"{mark} [bold]{v.name}[/bold]  [dim]{v.status}"
                       + (f" · {escape(v.server)}" if v.server else "")
                       + (f" · {escape(v.route)}" if v.route else "") + "[/dim]")
-        console.print(f"  {v.why}")
+        console.print(f"  {escape(v.why)}")
         for line in v.fix:
             console.print(f"    {escape(line)}", soft_wrap=True)
 

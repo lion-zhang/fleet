@@ -160,7 +160,7 @@ def _gb(gb: float) -> str:
 
 
 def _models(gpus: list[dict[str, Any]]) -> str:
-    return "\n".join(_model(g.get("name", "")) for g in gpus)
+    return "\n".join(escape(_model(g.get("name", ""))) for g in gpus)
 
 
 def gpu_cells(row: dict[str, Any]) -> tuple[str, str, str]:
@@ -219,11 +219,11 @@ def disk_cell(row: dict[str, Any]) -> str:
         mount = row.get("disk_mount")
         # name the mount unless it is root: "1.6T" alone is misleading on a rental
         # whose / is a small overlay and whose real storage lives elsewhere.
-        return _gb(free) if mount == "/" else f"{_gb(free)} [dim]{mount}[/dim]"
+        return _gb(free) if mount == "/" else f"{_gb(free)} [dim]{escape(str(mount))}[/dim]"
     if len(disks) == 1 and disks[0].get("mount") == "/":
         return _gb(disks[0].get("free_gb", 0))
     return "\n".join(_gb(d.get("free_gb", 0)).rjust(5)
-                      + f" [dim]{d.get('mount', '')}[/dim]" for d in disks)
+                      + f" [dim]{escape(str(d.get('mount', '')))}[/dim]" for d in disks)
 
 
 def device_lines(row: dict[str, Any]) -> int:
@@ -239,19 +239,19 @@ def name_cell(row: dict[str, Any]) -> str:
     repeats the noise per column, and a rule between devices spends a whole row per
     machine in a view whose point is fitting the fleet on one screen.
     """
-    name = f"[bold]{row['name']}[/bold]"
+    name = f"[bold]{escape(row['name'])}[/bold]"
     # Shown inline rather than in a column of its own: it is set on a minority of
     # machines, and an empty column costs width on every row in a view whose point is
     # fitting the fleet on one screen.
     if row.get("alias"):
-        name += f" [dim]({row['alias']})[/dim]"
+        name += f" [dim]({escape(row['alias'])})[/dim]"
     # Declared tags only, and at most two, on line 1. Facts are deliberately absent: the
     # table already shows them, numerically and more precisely -- `vram-24g` and
     # `cores-32` are lossy restatements of the GPU and CPU columns two cells away. And
     # this must never wrap: name_cell owns the gutter below, whose height comes from
     # device_lines(), which counts GPUs and disks and knows nothing about tags.
     if tags := row.get("tags") or []:
-        shown = " ".join(f"·{t}" for t in tags[:2])
+        shown = " ".join(f"·{escape(str(t))}" for t in tags[:2])
         more = f"+{len(tags) - 2}" if len(tags) > 2 else ""
         name += f" [dim]{shown}{more}[/dim]"
     if row.get("is_self"):
@@ -308,8 +308,8 @@ def render_fleet(rows: list[dict[str, Any]], summary: dict[str, Any],
         gpu, util, vram = gpu_cells(row)
         pct = cpu_pct(row)
         stale = staleness(row, live_within)
-        note = (row.get("error", {}).get("detail", "") if row["status"] != "ok"
-                else (row["alerts"][0] if row.get("alerts") else ""))
+        note = escape((row.get("error", {}).get("detail", "") if row["status"] != "ok"
+                       else (row["alerts"][0] if row.get("alerts") else "")) or "")
         t.add_row(
             _DOT.get(row["status"], "?"),
             name_cell(row),
@@ -342,7 +342,7 @@ def render_device(row: dict[str, Any], live_within: int = 10) -> Table:
     t.add_row("[bold]host[/bold]",
               f"{escape(row['name'])}"
               + (f" [dim]({escape(host)})[/dim]" if host and host != row["name"] else "")
-              + f"  [dim]{row.get('os', '')}[/dim]  "
+              + f"  [dim]{escape(row.get('os') or '')}[/dim]  "
               + (f"[dim]{stale} old[/dim]" if stale else "[green]live[/green]"))
     pct = cpu_pct(row)
     t.add_row("[bold]cpu[/bold]",
@@ -357,11 +357,11 @@ def render_device(row: dict[str, Any], live_within: int = 10) -> Table:
         t.add_row(f"[bold]gpu{gpu.get('idx', 0)}[/bold]",
                   f"{escape(meter(used, gpu.get('vram_total_mib', 0), 20))} "
                   f"{gpu.get('vram_free_mib', 0) / 1024:.1f}G free  "
-                  f"[dim]{gpu.get('util_pct', 0)}% util  {gpu.get('name', '')}[/dim]")
+                  f"[dim]{gpu.get('util_pct', 0)}% util  {escape(gpu.get('name') or '')}[/dim]")
     for disk in row.get("disks") or []:
         t.add_row("[bold]disk[/bold]",
                   f"{escape(meter(disk.get('use_pct', 0), 100, 20))} "
-                  f"{disk.get('free_gb', 0):.0f}G free  [dim]{disk.get('mount', '')}[/dim]")
+                  f"{disk.get('free_gb', 0):.0f}G free  [dim]{escape(str(disk.get('mount', '')))}[/dim]")
     for proc in (row.get("processes") or [])[:8]:
         t.add_row("[dim]gpu job[/dim]",
                   f"{proc.get('vram_mib', 0)} MiB  {escape(proc.get('user') or '?')}  "
@@ -372,16 +372,16 @@ def render_device(row: dict[str, Any], live_within: int = 10) -> Table:
                   f"[dim]{escape(m.get('framework') or '')}[/dim]")
     for proc in (row.get("top_cpu") or [])[:5]:
         t.add_row("[dim]cpu proc[/dim]",
-                  f"{proc.get('cpu_pct', 0):.0f}%  [dim]{proc.get('comm', '')}[/dim]")
+                  f"{proc.get('cpu_pct', 0):.0f}%  [dim]{escape(proc.get('comm') or '')}[/dim]")
     # Both lists, labelled, because this is the one surface with room for them and the
     # one place a human decides anything. Kept apart so provenance survives: `tags` is
     # what you said, `facts` is what the last probe measured.
     if tags := row.get("tags") or []:
-        t.add_row("[bold]tags[/bold]", " ".join(tags))
+        t.add_row("[bold]tags[/bold]", escape(" ".join(map(str, tags))))
     if fs := row.get("facts") or []:
-        t.add_row("[bold]facts[/bold]", f"[dim]{' '.join(fs)}[/dim]")
+        t.add_row("[bold]facts[/bold]", f"[dim]{escape(' '.join(map(str, fs)))}[/dim]")
     for alert in row.get("alerts") or []:
-        t.add_row("[yellow]![/yellow]", f"[yellow]{alert}[/yellow]")
+        t.add_row("[yellow]![/yellow]", f"[yellow]{escape(alert)}[/yellow]")
     return t
 
 
@@ -410,11 +410,11 @@ def render_ls(rows: list[dict[str, Any]]) -> Table:
         t.add_column(col, **kw)
     for r in rows:
         gpu, vram = gpu_cells_compact(r)
-        note = r.get("error", {}).get("detail", "") if r["status"] != "ok" else (
-            r["alerts"][0] if r["alerts"] else "")
+        note = escape((r.get("error", {}).get("detail", "") if r["status"] != "ok" else (
+            r["alerts"][0] if r["alerts"] else "")) or "")
         age = f"{r['telemetry_age_s']}s" if r["telemetry_age_s"] is not None else "-"
         t.add_row(DOT.get(r["status"], "?"), name_cell(r),
-                  r["kind"], gpu, vram,
+                  escape(r["kind"]), gpu, vram,
                   str(r["cpu_cores"] or "-"),
                   f"{r['ram_free_gb']:.0f}G" if r["ram_free_gb"] else "-",
                   disk_cell(r),
@@ -446,7 +446,7 @@ def render_ps(view: dict[str, Any]) -> list:
                          no_wrap=True, overflow="ellipsis",
                          max_width=70 if col == "COMMAND" else None)
         for j in view["jobs"]:
-            t.add_row(j["machine"], f"{j['gpu']} [dim]{escape(_short_gpu(j['gpu_name']))}[/dim]",
+            t.add_row(escape(j["machine"]), f"{j['gpu']} [dim]{escape(_short_gpu(j['gpu_name']))}[/dim]",
                       escape(j["user"] or "?"), f"{j['vram_mib'] / 1024:.1f}G",
                       runtime(j["runtime_s"]), escape(j["command"] or ""))
         out.append(t)
@@ -454,11 +454,11 @@ def render_ps(view: dict[str, Any]) -> list:
         out.append("[dim]No jobs on any GPU.[/dim]")
     if view["idle"]:
         out.append("\n[green]idle[/green]  " + "  ".join(
-            f"{i['machine']} gpu{i['gpu']} [dim]({i['vram_free_mib'] / 1024:.0f}G free)[/dim]"
+            f"{escape(i['machine'])} gpu{i['gpu']} [dim]({i['vram_free_mib'] / 1024:.0f}G free)[/dim]"
             for i in view["idle"]))
     if view["not_read"]:
         out.append(f"[yellow]![/yellow] [dim]not read just now: "
-                   f"{', '.join(view['not_read'])}[/dim]")
+                   f"{escape(', '.join(view['not_read']))}[/dim]")
     return out
 
 
@@ -482,17 +482,17 @@ def render_models(view: dict[str, Any]) -> list:
                                   if sv.get("tunnel") else "[dim]local only[/dim]")
             if sv["url"]:
                 reach = escape(reach)
-            label = f":{sv['port']} {sv['framework'] or sv.get('name') or ''}".strip()
+            label = escape(f":{sv['port']} {sv['framework'] or sv.get('name') or ''}".strip())
             if not sv["models"]:
                 t.add_row("[yellow]wants an API key[/yellow]" if sv["status"] == "auth"
-                          else "[dim]none listed[/dim]", sv["machine"], label, reach)
+                          else "[dim]none listed[/dim]", escape(sv["machine"]), label, reach)
             for m in sv["models"]:
-                t.add_row(escape(m), sv["machine"], label, reach)
+                t.add_row(escape(m), escape(sv["machine"]), label, reach)
         out.append(t)
     if view["model_folders"]:
         out.append("\n[bold]model folders[/bold]")
         for st in view["model_folders"]:
             shown = (size(st["size_gb"]) if st.get("size_gb") is not None else "size pending"
                      ) if st["exists"] else "[yellow]missing[/yellow]"
-            out.append(f"  {st['machine']:<16} {escape(st['path'])}  [dim]{shown}[/dim]")
+            out.append(f"  {escape(st['machine']):<16} {escape(st['path'])}  [dim]{shown}[/dim]")
     return out
