@@ -260,11 +260,15 @@ def test_the_probe_does_not_ask_vllm_engine_ports_for_models():
     if not shutil.which("awk"):
         pytest.skip("no awk")
     script = (pathlib.Path(__file__).parents[1] / "src/fleet/probe/payload.sh").read_text()
-    prog = re.search(r"printf '%s\\n' \"\$listen\" \| awk -F'\|' '(.*?)'\n", script, re.S)
+    prog = re.search(r"printf '%s\\n' \"\$listen\" \| awk -F'\|' "
+                     r"-v re=\"\$LLM_NAMES\" -v ports=\"\$LLM_PORTS\" '(.*?)'\n", script, re.S)
     assert prog, "the listening-port filter moved; update this test"
+    names = re.search(r"^LLM_NAMES='([^']*)'", script, re.M).group(1)
+    ports = re.search(r"^LLM_PORTS='([^']*)'", script, re.M).group(1)
     rows = "tcp|0.0.0.0|8080|900|vllm\ntcp|127.0.0.1|41000|901|VLLM::EngineCor\n" \
            "tcp|127.0.0.1|41001|902|VLLM::APIServer\n"
-    out = subprocess.run(["awk", "-F|", prog.group(1)], input=rows, capture_output=True,
+    out = subprocess.run(["awk", "-F|", "-v", f"re={names}", "-v", f"ports={ports}",
+                          prog.group(1)], input=rows, capture_output=True,
                          text=True, check=True).stdout
     assert [ln.split("|")[1] for ln in out.split()] == ["8080", "41001"], out
 
