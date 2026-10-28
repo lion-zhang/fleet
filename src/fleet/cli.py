@@ -1719,9 +1719,15 @@ def cmd_setup(
                    + install_mcp(root, clients, config_command(), dry_run=dry_run))
 
     for c in changes:
-        colour = {"created": "green", "updated": "green",
-                  "removed": "yellow"}.get(c.action, "dim")
-        console.print(f"  [{colour}]{c.action:<9}[/{colour}] {c.path}")
+        colour = {"created": "green", "updated": "green", "removed": "yellow",
+                  "unreadable": "yellow", "taken": "yellow"}.get(c.action, "dim")
+        console.print(f"  [{colour}]{c.action:<9}[/{colour}] {escape(str(c.path))}")
+    for action, why in (("unreadable", "not UTF-8 text fleet can parse, so it was left "
+                         "exactly as it was; add fleet to it by hand"),
+                        ("taken", "already has a server of its own called fleet, which "
+                         "was left in place")):
+        if any(c.action == action for c in changes):
+            err.print(f"[yellow]![/yellow] {action}: {why}")
     if dry_run:
         console.print("\n[dim]--dry-run: nothing was written.[/dim]")
     elif not remove and cmd != "fleet":

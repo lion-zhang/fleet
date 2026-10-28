@@ -81,7 +81,8 @@ def test_a_config_we_cannot_parse_is_returned_untouched():
 
 def test_removing_ours_leaves_theirs():
     before = json.dumps({"mcpServers": {"other": {"command": "x"},
-                                        "fleet": {"command": "f"}}})
+                                        "fleet": {"command": "/usr/local/bin/fleet",
+                                                  "args": ["mcp"]}}})
     after = json.loads(st.remove_mcp(before, "mcpServers"))
     assert "fleet" not in after["mcpServers"]
     assert "other" in after["mcpServers"]

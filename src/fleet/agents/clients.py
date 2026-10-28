@@ -30,44 +30,99 @@ def mcp_entry(cmd: str) -> dict:
 
 
 
+def _parse(existing: str):
+    """A client's config as (document, style), or None when it is not JSON we can edit.
+
+    Windows editors save a byte-order mark, which `json.loads` refuses, and CRLF line
+    ends. Both are put back on the way out: they are bytes we did not write.
+    """
+    bom = "\ufeff" if existing.startswith("\ufeff") else ""
+    try:
+        doc = json.loads(existing[len(bom):]) if existing.strip("\ufeff \t\r\n") else {}
+    except json.JSONDecodeError:
+        return None
+    style = (bom, "\r\n" if "\r\n" in existing else "\n")
+    return (doc, style) if isinstance(doc, dict) else None
+
+
+def _dump(doc: dict, style: tuple[str, str]) -> str:
+    bom, newline = style
+    return bom + (json.dumps(doc, indent=2) + "\n").replace("\n", newline)
+
+
+def _ours(entry) -> bool:
+    """Whether a server named "fleet" is one fleet registered, not the user's own.
+
+    Ours runs `<fleet> mcp` or `uvx agents-fleet mcp` (`agent-fleet` before the rename):
+    a command or package naming fleet, serving `mcp`. Anything else under that name is
+    someone's server, and replacing it would remove it from their client without a word.
+    """
+    if not isinstance(entry, dict) or not isinstance(entry.get("args"), list):
+        return False
+    args = [str(a) for a in entry["args"]]
+    return bool(args) and args[-1] == "mcp" and any(
+        "fleet" in Path(str(w).replace("\\", "/")).name.lower()
+        for w in [entry.get("command", ""), *args[:-1]])
+
+
+def mcp_state(existing: str, key: str, cmd: str | None = None) -> str:
+    """Whether our entry can go in: `ok`, `unreadable` when the file is not JSON we can
+    edit, or `taken` when a server of the user's own already goes by the name fleet."""
+    parsed = _parse(existing)
+    if parsed is None:
+        return "unreadable"
+    servers = parsed[0].get(key)
+    if isinstance(servers, dict) and "fleet" in servers and not _ours(servers["fleet"]) \
+            and (cmd is None or servers["fleet"] != mcp_entry(cmd)):
+        return "taken"
+    return "ok"
+
+
 def apply_mcp(existing: str, key: str, cmd: str) -> str:
     """Add or update our server in a client's config, leaving every other byte alone.
 
     Same promise as the markdown region, kept a different way: the document is parsed,
     exactly one key is set, and it is written back. A config we cannot parse is returned
     untouched -- refusing to guess is the only safe move on a file we did not write and
-    that may hold someone else's tokens.
+    that may hold someone else's tokens. So is one where "fleet" names a server of the
+    user's own.
     """
-    import json
-
-    try:
-        doc = json.loads(existing) if existing.strip() else {}
-    except json.JSONDecodeError:
+    if mcp_state(existing, key, cmd) != "ok":
         return existing
-    if not isinstance(doc, dict):
-        return existing
+    doc, style = _parse(existing)
     servers = doc.get(key)
     if not isinstance(servers, dict):
         servers = {}
     servers["fleet"] = mcp_entry(cmd)
     doc[key] = servers
-    return json.dumps(doc, indent=2) + "\n"
+    return _dump(doc, style)
 
 
 
 def remove_mcp(existing: str, key: str) -> str:
-    """Drop our server. A config that never had one comes back untouched."""
-    import json
+    """Drop our server. A config that never had one comes back untouched, and so does a
+    server of the user's own that happens to be called fleet."""
+    parsed = _parse(existing)
+    if parsed is None:
+        return existing
+    doc, style = parsed
+    if not isinstance(doc.get(key), dict) or not _ours(doc[key].get("fleet")):
+        return existing
+    del doc[key]["fleet"]
+    return _dump(doc, style)
 
+
+def _read(path: Path) -> str | None:
+    """A config's text, or None when it cannot be read as UTF-8.
+
+    Never an exception: this runs inside the first run of every command, and a client
+    config saved in another encoding raised out of it before the first run could mark
+    itself done -- so every later command, `fleet ls` included, failed the same way.
+    """
     try:
-        doc = json.loads(existing) if existing.strip() else {}
-    except json.JSONDecodeError:
-        return existing
-    if not isinstance(doc, dict) or not isinstance(doc.get(key), dict):
-        return existing
-    if doc[key].pop("fleet", None) is None:
-        return existing
-    return json.dumps(doc, indent=2) + "\n"
+        return path.read_bytes().decode("utf-8")
+    except (OSError, UnicodeDecodeError):
+        return None
 
 
 
@@ -92,12 +147,11 @@ def installed_mcp_clients(root: Path, platform: str = "") -> list[str]:
         path = c.path(root, platform)
         if not path or not path.exists():
             continue
-        try:
-            doc = json.loads(path.read_text(encoding="utf-8") or "{}")
-        except (OSError, ValueError):
+        parsed = _parse(_read(path) or "")
+        if parsed is None:
             continue
-        if isinstance(doc, dict) and isinstance(doc.get(c.key), dict) \
-                and "fleet" in doc[c.key]:
+        servers = parsed[0].get(c.key)
+        if isinstance(servers, dict) and _ours(servers.get("fleet")):
             out.append(c.name)
     return out
 
@@ -110,8 +164,8 @@ def stale_mcp_clients(root: Path, cmd: str, platform: str = "") -> list[str]:
         if c.name not in installed_mcp_clients(root, platform):
             continue
         path = c.path(root, platform)
-        current = path.read_text(encoding="utf-8")
-        if apply_mcp(current, c.key, cmd) != current:
+        current = _read(path)
+        if current is not None and apply_mcp(current, c.key, cmd) != current:
             out.append(c.name)
     return out
 
@@ -127,14 +181,16 @@ def install_mcp(root: Path, clients: list[str], cmd: str, *,
         path = client.path(root, platform)
         if path is None:
             continue
-        current = path.read_text(encoding="utf-8") if path.exists() else ""
-        desired = apply_mcp(current, client.key, cmd)
-        if desired == current and current.strip() and "fleet" not in current:
-            # apply_mcp returns the file untouched when it cannot parse it, which is the
-            # right thing to do to someone else's config and the wrong thing to report
-            # as "unchanged" -- that reads as already set up.
-            changes.append(Change(client.name, path, "unreadable"))
+        current = _read(path) if path.exists() else ""
+        state = "unreadable" if current is None else mcp_state(current, client.key, cmd)
+        if state != "ok":
+            # apply_mcp returns the file untouched then, which is the right thing to do
+            # to someone else's config and the wrong thing to report as "unchanged" --
+            # that reads as already set up. (Telling them apart by whether the text
+            # said "fleet" anywhere called a broken config naming a fleet path fine.)
+            changes.append(Change(client.name, path, state))
             continue
+        desired = apply_mcp(current, client.key, cmd)
         action = ("unchanged" if desired == current
                   else "created" if not current else "updated")
         if action != "unchanged" and not dry_run:
@@ -155,7 +211,12 @@ def uninstall_mcp(root: Path, clients: list[str], *,
         path = client.path(root, platform)
         if path is None or not path.exists():
             continue
-        current = path.read_text(encoding="utf-8")
+        current = _read(path)
+        if current is None or _parse(current) is None:
+            # Left as found, which may still hold our entry: say so rather than
+            # "unchanged", which reads as nothing of ours was there.
+            changes.append(Change(client.name, path, "unreadable"))
+            continue
         desired = remove_mcp(current, client.key)
         action = "removed" if desired != current else "unchanged"
         if action == "removed" and not dry_run:
