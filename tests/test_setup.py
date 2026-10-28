@@ -755,3 +755,47 @@ def test_an_installed_fleet_is_never_swapped_for_uvx(monkeypatch, tmp_path):
     monkeypatch.setattr(registry.sys, "prefix", str(tmp_path / "uv" / "archive-v0" / "abc"))
     assert registry.fleet_command() == str(exe)
     assert registry.config_command() == str(exe)
+
+
+def test_help_reads_as_paragraphs_in_an_80_column_terminal():
+    """Rich wrapped each long docstring line and kept its line break as well, so every
+    help page left a word or two on a line of its own: "its", "with", "ssh,"."""
+    import os
+    import subprocess
+
+    from fleet.cli import app
+
+    env = {k: v for k, v in os.environ.items()
+           if k not in ("GITHUB_ACTIONS", "FORCE_COLOR", "CI")}
+    env.update(COLUMNS="80", NO_COLOR="1", TERM="dumb", PYTHONUTF8="1")
+    stranded = []
+    for name in (c.name for c in app.registered_commands):
+        out = subprocess.run(["fleet", name, "--help"], capture_output=True, text=True,
+                             encoding="utf-8", errors="replace", env=env).stdout
+        about = out.split("Usage:", 1)[-1].split("╭", 1)[0].splitlines()[1:]
+        for line, after in zip(about, about[1:] + [""]):
+            if 0 < len(line.split()) <= 2 and after.strip() and "Example" not in line:
+                stranded.append(f"{name}: {line.strip()!r}")
+    assert not stranded, stranded
+
+
+def test_the_short_name_hint_fits_how_fleet_was_installed(tmp_path, monkeypatch):
+    """It said `uv tool update-shell` for fleet in a pip venv, where that changes nothing."""
+    import shutil
+
+    from fleet import cli
+    from fleet.agents.registry import UVX
+    monkeypatch.setattr(Path, "home", lambda: tmp_path)
+    monkeypatch.setattr(shutil, "which", lambda name: "/usr/bin/uv")
+    venv = cli._short_name_hint("/opt/work/.venv/bin/fleet")
+    assert "/opt/work/.venv/bin on PATH" in venv and "update-shell" not in venv
+    assert "update-shell" in cli._short_name_hint(str(tmp_path / ".local/bin/fleet"))
+    monkeypatch.setattr(shutil, "which", lambda name: None)
+    assert "update-shell" not in cli._short_name_hint(str(tmp_path / ".local/bin/fleet"))
+    assert "uv tool install agents-fleet" in cli._short_name_hint(UVX)
+
+
+def test_removing_a_skill_that_is_already_gone_says_so(tmp_path):
+    install(tmp_path, ["claude"], "fleet")
+    assert [c.action for c in uninstall(tmp_path, ["claude"])] == ["removed"]
+    assert [c.action for c in uninstall(tmp_path, ["claude"])] == ["not there"]

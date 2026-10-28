@@ -1877,10 +1877,27 @@ def cmd_setup(
     if dry_run:
         console.print("\n[dim]--dry-run: nothing was written.[/dim]")
     elif not remove and cmd != "fleet":
-        err.print(f"\n[dim]A new shell here does not find `fleet` by name, so the "
-                  f"skill calls it by its full path, {cmd}. To use the short name: "
-                  "[bold]uv tool update-shell[/bold], then [bold]fleet setup[/bold] in a "
-                  "new terminal.[/dim]")
+        err.print(f"\n[dim]{_short_name_hint(cmd)}[/dim]")
+
+
+def _short_name_hint(cmd: str) -> str:
+    """How to give agents the bare name `fleet`. It said `uv tool update-shell` whatever
+    the path: for fleet pip-installed in a venv that changes nothing, and with no uv
+    installed the command is not there."""
+    import shutil
+
+    from .agents.registry import UVX
+
+    if cmd == UVX:
+        return (f"fleet is not installed here, so agents run it as {cmd}. To install it: "
+                "[bold]uv tool install agents-fleet[/bold], then [bold]fleet setup[/bold].")
+    where = Path(cmd).parent
+    how = ("[bold]uv tool update-shell[/bold]"
+           if where == Path.home() / ".local" / "bin" and shutil.which("uv")
+           else f"put {escape(str(where))} on PATH in your shell's profile")
+    return (f"A new shell here does not find `fleet` by name, so agents call it by its "
+            f"full path, {escape(cmd)}. To use the short name: {how}, then "
+            "[bold]fleet setup[/bold] in a new terminal.")
 
 
 @app.command("mcp", hidden=True)
@@ -2065,6 +2082,24 @@ def _print_verdicts(verdicts) -> None:
         console.print(f"  {escape(v.why)}")
         for line in v.fix:
             console.print(f"    {escape(line)}", soft_wrap=True)
+
+
+def _reflowed(doc: str) -> str:
+    """A docstring with each paragraph on one line, for Rich to wrap to the terminal.
+
+    Rich wraps a line that is too long and keeps the docstring's own line breaks too, so
+    in an 80-column terminal every help page had a word or two stranded on a line of its
+    own ("its", "with", "ssh,").
+    """
+    import inspect
+
+    return "\n\n".join(" ".join(ln.strip() for ln in para.splitlines() if ln.strip())
+                       for para in inspect.cleandoc(doc).split("\n\n"))
+
+
+for _command in app.registered_commands:
+    if _command.help is None and _command.callback is not None and _command.callback.__doc__:
+        _command.callback.__doc__ = _reflowed(_command.callback.__doc__)
 
 
 def main() -> None:
