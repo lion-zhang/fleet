@@ -29,8 +29,29 @@ END = "<!-- END fleet -->"
 
 
 
-_REGION = re.compile(re.escape(BEGIN) + r".*?" + re.escape(END), re.DOTALL)
+# From the last BEGIN before an END. A BEGIN left without its END -- a hand edit, a
+# merge -- otherwise opened a region that ran on to the next run's END, and everything
+# the user had written between the two went with it.
+_REGION = re.compile(re.escape(BEGIN) + r"(?:(?!" + re.escape(BEGIN) + r").)*?" + re.escape(END),
+                     re.DOTALL)
 
+
+
+def _read(path: Path) -> str | None:
+    """A file's text, or None when it is missing, unreadable or not UTF-8.
+
+    Never an exception: this runs in the first run of every command, and one AGENTS.md
+    saved in another encoding raised out of it before the first run could finish -- so
+    it ran, and failed, again on every command after.
+
+    Line ends are read as read_text reads them, so a copy with Windows line ends -- as
+    Python writes it there, or git checks it out -- is the same text, not an older one.
+    """
+    try:
+        text = path.read_bytes().decode("utf-8")
+    except (OSError, UnicodeDecodeError):
+        return None
+    return text.replace("\r\n", "\n").replace("\r", "\n")
 
 
 def apply_block(existing: str, body: str) -> str:
@@ -91,10 +112,7 @@ def installed_targets(root: Path, *, project: bool = False) -> list[str]:
     """
     out = []
     for target, path in plan(root, project=project).items():
-        try:
-            text = path.read_text(encoding="utf-8")
-        except OSError:
-            text = None
+        text = _read(path)
         if text is not None and (path.name == "SKILL.md" or BEGIN in text):
             out.append(target)
         elif not project and _left_behind(root, target):
@@ -111,16 +129,13 @@ def _left_behind(root: Path, target: str) -> bool:
         return False
     for path in agent.stray_paths(root):
         try:
-            if path.is_file() and "name: fleet" in path.read_text(encoding="utf-8").split("---", 2)[1]:
+            if path.is_file() and "name: fleet" in (_read(path) or "").split("---", 2)[1]:
                 return True
-        except (OSError, IndexError):
+        except IndexError:
             continue
     for path in legacy_paths(root).get(target, []):
-        try:
-            if BEGIN in path.read_text(encoding="utf-8"):
-                return True
-        except OSError:
-            continue
+        if BEGIN in (_read(path) or ""):
+            return True
     return False
 
 
@@ -130,11 +145,9 @@ def stale_targets(root: Path, cmd: str, *, project: bool = False) -> list[str]:
     out = []
     for target in installed_targets(root, project=project):
         path = paths[target]
-        try:
-            if path.read_text(encoding="utf-8") != _desired(target, path, cmd):
-                out.append(target)
-        except OSError:
-            continue
+        current = _read(path)
+        if current is not None and current != _desired(target, path, cmd):
+            out.append(target)
     return out
 
 
@@ -146,7 +159,7 @@ def _desired(target: str, path: Path, cmd: str) -> str:
         agent = BY_NAME.get(target)
         return (hermes_skill_text(cmd) if agent and agent.skill == "hermes"
                 else skill_text(cmd))
-    existing = path.read_text(encoding="utf-8") if path.exists() else ""
+    existing = _read(path) or ""
     return apply_block(existing, agents_block(cmd))
 
 
@@ -167,7 +180,12 @@ def install(root: Path, targets: list[str], cmd: str, *,
             changes += _drop_legacy(root, target, seen, dry_run=dry_run)
             continue
         seen.add(path)
-        current = path.read_text(encoding="utf-8") if path.exists() else None
+        current = _read(path)
+        if current is None and path.exists():
+            # Not UTF-8: writing our region into it would rewrite the rest in another
+            # encoding. Left alone, and said so.
+            changes.append(Change(target, path, "unreadable"))
+            continue
         desired = _desired(target, path, cmd)
         action = ("unchanged" if current == desired
                   else "created" if current is None else "updated")
@@ -196,9 +214,8 @@ def _drop_legacy(root: Path, target: str, seen: set[Path], *, dry_run: bool) -> 
         # the one the agent cannot see, and a second fleet if it ever looks there too.
         if path in seen or not path.is_file():
             continue
-        try:
-            text = path.read_text(encoding="utf-8")
-        except OSError:
+        text = _read(path)
+        if text is None:
             continue
         front = text.split("---", 2)[1] if text.startswith("---") else ""
         if "name: fleet" not in front:
@@ -212,7 +229,9 @@ def _drop_legacy(root: Path, target: str, seen: set[Path], *, dry_run: bool) -> 
     for path in legacy_paths(root).get(target, []):
         if path in seen or not path.exists():
             continue
-        current = path.read_text(encoding="utf-8")
+        current = _read(path)
+        if current is None:
+            continue
         stripped = remove_block(current)
         if stripped == current:
             continue
@@ -247,6 +266,15 @@ def uninstall(root: Path, targets: list[str], *,
         seen.add(path)
         if not path.exists():
             changes.append(Change(target, path, "unchanged"))
+            # Its current copy is gone, but one where it used to be looked for may not
+            # be: that is the copy this agent may still be reading.
+            changes += _drop_legacy(root, target, seen, dry_run=dry_run)
+            continue
+        if path.name == "SKILL.md" and (others := _still_reading(root, path, targets,
+                                                                   project=project)):
+            # ~/.agents/skills is read by several agents. Removing fleet from one took
+            # it from all the others too.
+            changes.append(Change(target, path, f"kept for {', '.join(others)}"))
             continue
         # Ownership is read from the filename, exactly as _desired reads it. Dispatching
         # on the agent's name instead meant uninstalling Hermes left its skill file on
@@ -262,11 +290,29 @@ def uninstall(root: Path, targets: list[str], *,
             changes += [c for c in _drop_legacy(root, target, seen, dry_run=dry_run)
                         if c.path.name == "SKILL.md"]
             continue
-        current = path.read_text(encoding="utf-8")
+        current = _read(path)
+        if current is None:
+            changes.append(Change(target, path, "unreadable"))
+            continue
         stripped = remove_block(current)
         action = "removed" if stripped != current else "unchanged"
         if action == "removed" and not dry_run:
-            replace_file(path, stripped)
+            # As in _drop_legacy: a file that held only our region was made by fleet.
+            if stripped.strip():
+                replace_file(path, stripped)
+            else:
+                path.unlink()
         changes.append(Change(target, path, action))
     return changes
+
+
+def _still_reading(root: Path, path: Path, targets: list[str], *, project: bool) -> list[str]:
+    """The other agents that read this same skill file and are not being uninstalled.
+
+    At home, only those installed here count; in a repo there is no telling who works
+    in it, so every agent that reads the path does.
+    """
+    present = set(detect_targets(root)) if not project else None
+    return [a for a, p in plan(root, project=project).items()
+            if p == path and a not in targets and (present is None or a in present)]
 

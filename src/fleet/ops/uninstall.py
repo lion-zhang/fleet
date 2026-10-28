@@ -51,8 +51,30 @@ def uninstall(*, purge: bool) -> Outcome:
         for d in {config.CONFIG_DIR, config.STATE_DIR}:
             with suppress(OSError):
                 d.rmdir()                      # only if nothing else is in it
+        out.files_removed += _drop_probe_cache()
     out.remove_program = how_to_remove_program()
     return out
+
+
+def _drop_probe_cache() -> list[str]:
+    """The cache the probe keeps on every machine it reads -- this one included, since
+    fleet reads the machine it runs on. --purge left it behind.
+
+    By name, as everywhere here: `software` and `sizes`, and the lock `du` holds.
+    """
+    import os
+
+    base = os.environ.get("XDG_CACHE_HOME") or str(Path.home() / ".cache")
+    cache = Path(base) / "fleet"
+    removed = []
+    for name in ("software", "sizes"):
+        with suppress(OSError):
+            (cache / name).unlink()
+            removed.append(str(cache / name))
+    for d in (cache / "du.lock", cache):
+        with suppress(OSError):
+            d.rmdir()
+    return removed
 
 
 def _fleet_files() -> list[Path]:

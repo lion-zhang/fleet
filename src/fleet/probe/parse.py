@@ -62,11 +62,16 @@ BORING_PORTS = frozenset({22, 53, 111, 631, 5353, 68, 67, 123})
 
 # What a command line must never carry out of the machine: a job started with
 # `--hf-token hf_...` would otherwise show its token to every agent that lists jobs.
+# A value is a word, or a quoted string whole: `--token "a b"` left `b"` showing.
+_VALUE = r"""("[^"]*"?|'[^']*'?|\S+)"""
 _SECRET_FLAG = re.compile(
-    r"(?i)(--?[\w-]*(?:token|secret|passw(?:or)?d|api[-_]?key|access[-_]?key|auth)[\w-]*"
-    r"(?:=|\s+))(\S+)")
+    r"(?i)(--?(?:[\w-]*(?:token|secret|passw(?:or)?d|api[-_]?key|access[-_]?key|auth)[\w-]*"
+    r"|(?:[\w-]*[-_])?key)"                  # --key, --hf-key; not --keyframes
+    r"(?:=|\s+))" + _VALUE)
 _SECRET_ENV = re.compile(r"(?i)\b([A-Z0-9_]*(?:TOKEN|SECRET|PASSWORD|API_KEY|ACCESS_KEY)"
-                         r"[A-Z0-9_]*=)(\S+)")
+                         r"[A-Z0-9_]*=)" + _VALUE)
+# The password in a URL: postgres://me:hunter2@db/...
+_URL_PASSWORD = re.compile(r"(\b[a-z][\w+.-]*://[^\s:/@]+:)([^\s@/]+)(@)", re.IGNORECASE)
 _SECRET_VALUE = re.compile(r"\b(?:hf_[A-Za-z0-9]{8,}|sk-[A-Za-z0-9_-]{8,}|gh[pousr]_[A-Za-z0-9]{8,}"
                            r"|xox[abprs]-[A-Za-z0-9-]{8,}|AKIA[0-9A-Z]{16}|AIza[0-9A-Za-z_-]{20,})")
 
@@ -75,6 +80,7 @@ def redact(cmdline: str) -> str:
     """The command line with every value that looks like a secret replaced by ***."""
     out = _SECRET_FLAG.sub(lambda m: m.group(1) + "***", cmdline or "")
     out = _SECRET_ENV.sub(lambda m: m.group(1) + "***", out)
+    out = _URL_PASSWORD.sub(lambda m: m.group(1) + "***" + m.group(3), out)
     return _SECRET_VALUE.sub("***", out)
 
 

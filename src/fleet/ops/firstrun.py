@@ -76,8 +76,21 @@ def maybe(command: str, say) -> bool:
         if _marker().exists():
             return False
         dev = add_this_machine()
-        taught = [] if command == "setup" else teach_agents()
+        taught, failed = [], ""
+        if command != "setup":
+            try:
+                taught = teach_agents()
+            except Exception as exc:      # noqa: BLE001 -- see below
+                # Teaching writes into other programs' files, and anything wrong with
+                # one of them raised out of here before the marker was written: the
+                # first run then ran, and failed, again on every command after.
+                failed = f"{type(exc).__name__}: {exc}"
         atomic_write(_marker(), "1\n", mode=0o644)
+    if failed:
+        from rich.markup import escape
+
+        say(f"could not teach this machine's agents fleet ({escape(failed)}); "
+            "fleet setup tries again", "warn")
     bits = ([f"recorded {dev.name}"] if dev else []) + (
         [f"taught {', '.join(taught)} to use it"] if taught else [])
     if bits:

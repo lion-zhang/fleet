@@ -83,7 +83,12 @@ def replace_file(path: Path, text: str) -> None:
     starting up at that moment could read it half-written, and two `fleet setup` runs at
     once could interleave -- leaving fragments outside fleet's marked region that
     nothing would ever clean up. New files get the usual 0644.
+
+    A symlink is written through, not replaced: people keep these files in a dotfiles
+    repo and link them in, and renaming over the link swapped it for a plain file that
+    the repo never saw again.
     """
+    path = Path(os.path.realpath(path))
     try:
         mode = Path(path).stat().st_mode & 0o777
     except OSError:

@@ -104,7 +104,7 @@ if ($env:FLEET_DISK_PATHS) {
     # Configured paths win outright, as they do on POSIX: the row is labelled with the
     # path asked about rather than whatever volume happens to hold it, because "819G
     # free on C:" answers a different question from "819G free where my data goes".
-    foreach ($path in ($env:FLEET_DISK_PATHS -split ' ' | Where-Object { $_ })) {
+    foreach ($path in ($env:FLEET_DISK_PATHS -split '\|' | Where-Object { $_ })) {
         if (-not (Test-Path -LiteralPath $path)) { continue }
         $root = [System.IO.Path]::GetPathRoot((Resolve-Path -LiteralPath $path).Path)
         $vol = Get-CimInstance Win32_LogicalDisk -Filter "DeviceID='$($root.TrimEnd('\'))'"
