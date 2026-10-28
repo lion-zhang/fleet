@@ -50,6 +50,10 @@ class NotesError(ValueError):
     pass
 
 
+class TooLong(NotesError):
+    """A new value past what readers keep: shorter is the fix, not another place."""
+
+
 def decode(b64: str) -> str:
     try:
         raw = base64.b64decode(b64.encode(), validate=False)
@@ -164,6 +168,31 @@ def from_probe(kv: dict[str, str]) -> tuple[dict, str]:
     return merge(*parts), "; ".join(errors)
 
 
+def _within_limits(data: dict, *, paths, tags_add, note) -> None:
+    """Refuse a new value the reader would cut: it was written whole under a ✓, and every
+    reader saw less -- a note's end gone, a tag `fleet ls --tag` no longer matched.
+    Only what this edit adds is checked, so a file trimmed by hand still takes edits."""
+    if note and len(" ".join(note.split())) > MAX_NOTE:
+        raise TooLong(f"a note is at most {MAX_NOTE} characters; this one is "
+                         f"{len(' '.join(note.split()))}")
+    for t in tags_add:
+        if len(t) > MAX_TAG:
+            raise TooLong(f"a tag is at most {MAX_TAG} characters: {t[:MAX_TAG]}…")
+    if tags_add and len(data.get("tags") or []) > MAX_TAGS:
+        raise TooLong(f"a machine keeps at most {MAX_TAGS} tags; this would make "
+                         f"{len(data['tags'])}")
+    for kind, value in (paths or {}).items():
+        if value is None:
+            continue
+        if len(value) > MAX_PATHS:
+            raise TooLong(f"at most {MAX_PATHS} folders of one kind; {kind} would have "
+                             f"{len(value)}")
+        for v in value:
+            if len(v) > MAX_PATH:
+                raise TooLong(f"a folder path is at most {MAX_PATH} characters: "
+                                 f"{v[:60]}…")
+
+
 def edit(text: str, *, paths: dict[str, list[str] | None] | None = None,
          cost: float | None = None, clear_cost: bool = False,
          tags_add: list[str] = (), tags_remove: list[str] = (),
@@ -222,6 +251,7 @@ def edit(text: str, *, paths: dict[str, list[str] | None] | None = None,
             data["notes"] = note
         else:
             data.pop("notes", None)
+    _within_limits(data, paths=paths, tags_add=tags_add, note=note)
     check(data)                       # never write what the next probe would reject
     body = untrusted.dump(data, sort_keys=False, default_flow_style=False,
                           allow_unicode=True) if data else ""

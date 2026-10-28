@@ -79,7 +79,8 @@ def test_the_cli_reports_it_in_one_line_and_as_json(tmp_path):
                        capture_output=True, text=True, timeout=60)
     assert p.returncode == 2
     assert json.loads(p.stdout) == {"ok": False,
-                                    "error": "device a in the inventory is malformed: "
+                                    "error": f"{tmp_path / 'c' / 'machines.yaml'}: device a "
+                                             "in the inventory is malformed: "
                                              "'laptop' is not a valid Kind"}
     assert "Traceback" not in p.stderr
 
@@ -198,3 +199,16 @@ def test_a_first_run_that_cannot_write_lets_the_command_run(monkeypatch):
 
     monkeypatch.setattr(writes, "_publish", read_only)
     assert firstrun.maybe("ls", lambda *a, **k: None) is False
+
+
+def test_an_entry_cut_off_mid_write_names_the_file_and_what_is_missing(tmp_path):
+    """"Device.__init__() missing 1 required positional argument: 'name'", of "the
+    inventory", was all a list cut off mid-write said."""
+    from fleet.state import inventory as inv
+    path = tmp_path / "machines.yaml"
+    path.write_text("devices:\n- id: a\n  name: box\n- id: linux:machine-i\n", encoding="utf-8")
+    with pytest.raises(inv.InventoryError) as exc:
+        inv.load(path)
+    assert str(exc.value).startswith(str(path))
+    assert "device #2" in str(exc.value) and "it has no name" in str(exc.value)
+    assert "__init__" not in str(exc.value)

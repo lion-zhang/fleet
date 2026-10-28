@@ -128,7 +128,11 @@ def load(path: Path | None = None) -> list[Device]:
                              f"{exc.start}") from exc
     except OSError as exc:
         raise InventoryError(f"{path} cannot be read: {exc.strerror or exc}") from exc
-    return _devices_from(raw)
+    try:
+        return _devices_from(raw)
+    except InventoryError as exc:
+        # "device #2 in the inventory is malformed" did not say which file that is.
+        raise InventoryError(f"{path}: {exc}") from exc
 
 
 def stamp(path: Path | None = None) -> tuple | None:
@@ -163,6 +167,11 @@ def _device_from(d) -> Device:
     if not isinstance(d, dict):
         raise TypeError("expected a mapping of fields")
     d = dict(d)
+    # A file cut off mid-write, or an entry typed by hand: "Device.__init__() missing 1
+    # required positional argument: 'name'" was the whole explanation.
+    for key in ("id", "name"):
+        if not d.get(key):
+            raise ValueError(f"it has no {key}; fix the entry by hand, or remove it")
     d["kind"] = Kind(d.get("kind", "permanent"))
     # `tags: gpu` -- no brackets -- is the likeliest typo in a file whose docstring
     # promises it stays fixable in vim, and without this it loads as the string

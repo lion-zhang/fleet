@@ -22,9 +22,12 @@ from ..ssh.cmd import (WINDOWS, Endpoint, build_argv, local_platform, local_shel
 
 DONE = "fleet-machinefile-done"
 
-# Where the user's file is. The probe reads the first of these that exists on macOS, so
-# writing the first is right everywhere: ~/.config/fleet is read before Library there.
-_POSIX = '"$HOME/.config/fleet/machine.yaml"'
+# Where the user's file is: the one the probe reads, the first of these that exists.
+# Always writing ~/.config hid a Mac's ~/Library/Application Support/fleet/machine.yaml
+# -- fleet's configuration folder there -- behind a new file holding only the edit.
+_POSIX = ('f="$HOME/.config/fleet/machine.yaml"; '
+          'g="$HOME/Library/Application Support/fleet/machine.yaml"; '
+          '[ -e "$f" ] || [ -L "$f" ] || [ ! -e "$g" ] || f=$g')
 _PS = "(Join-Path $env:LOCALAPPDATA 'fleet\\machine.yaml')"
 
 
@@ -38,7 +41,7 @@ def _read_script(platform: str) -> str:
                 "if(Test-Path -LiteralPath $f){[Convert]::ToBase64String("
                 "[IO.File]::ReadAllBytes($f))}\n"
                 f"'{DONE}'\n")
-    return (f'f={_POSIX}; [ -f "$f" ] && base64 < "$f" | tr -d "\\n"; echo; echo {DONE}')
+    return (f'{_POSIX}; [ -f "$f" ] && base64 < "$f" | tr -d "\\n"; echo; echo {DONE}')
 
 
 def _write_script(platform: str, old: bytes, new: str) -> str:
@@ -85,7 +88,16 @@ def _write_script(platform: str, old: bytes, new: str) -> str:
     # root's -- said so at once. The lock's mkdir failed for that reason too, and was
     # taken for somebody else's lock: twenty seconds of waiting, ten times over, and then
     # "the file kept changing", which sent the user looking for another writer.
-    return (f'f={_POSIX}; l="$f.lock"; d=$(dirname "$f"); mkdir -p "$d" || exit 1; '
+    #
+    # A machine.yaml kept in a dotfiles repo and linked in is written through the link,
+    # and keeps its permissions: renaming over the link swapped it for a plain file the
+    # repo never saw again, and a file made 0600 came back world-readable. readlink
+    # without -f, which old macOS lacks; the lock stays by the link, where every writer
+    # looks for it.
+    return (f'{_POSIX}; l="$f.lock"; d=$(dirname "$f"); mkdir -p "$d" || exit 1; '
+            'k=0; while [ -L "$f" ] && [ $k -lt 20 ]; do k=$((k+1)); r=$(readlink "$f"); '
+            'case $r in /*) f=$r ;; *) f=$(dirname "$f")/$r ;; esac; done; '
+            'd=$(dirname "$f"); '
             '[ -w "$d" ] || { echo "cannot write $d" >&2; exit 1; }; n=0; '
             'until mkdir "$l" 2>/dev/null; do '
             '[ -n "$(find "$l" -prune -mmin +1 2>/dev/null)" ] && rmdir "$l" 2>/dev/null; '
@@ -99,7 +111,8 @@ def _write_script(platform: str, old: bytes, new: str) -> str:
             # that failed for want of space blamed "invalid option -- 'D'" and left
             # the half-written copy behind, on a disk already full.
             't="$f.$$"; b=-d; base64 -d </dev/null >/dev/null 2>&1 || b=-D; '
-            f'if printf %s {b64} | base64 $b > "$t" && mv -f "$t" "$f"; then echo {DONE}; '
+            'if { [ ! -f "$f" ] || cp -p "$f" "$t"; } && '
+            f'printf %s {b64} | base64 $b > "$t" && mv -f "$t" "$f"; then echo {DONE}; '
             'else rm -f "$t"; exit 1; fi')
 
 
@@ -144,6 +157,14 @@ def change(ep: Endpoint | None, platform: str, **edits) -> tuple[str, str]:
         # header (`--untag x` where x never was) is litter on someone's machine.
         if new == old or (not old.strip() and not notes.parse(new)):
             return old, old
+        # The probe reads no file past this size, so writing one lost everything in it
+        # -- folders, tags, cost -- from every view, under a ✓. A file already too big
+        # may still be made smaller.
+        size = len(new.encode())
+        if size > notes.MAX_BYTES and size >= len(raw):
+            raise MachineFileError(
+                f"that would make it {(size + 1023) // 1024} KB, and fleet reads no "
+                f"machine.yaml over {notes.MAX_BYTES // 1024} KB, so nothing was changed")
         if "CHANGED" not in _run(ep, _write_script(platform, raw, new), platform):
             return old, new
     raise MachineFileError("the file kept changing while we wrote it; try again")
