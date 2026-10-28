@@ -81,6 +81,10 @@ def _clean(text: str) -> str:
 SLOW_TIMEOUT_S = 300
 
 
+# What run_on_machine hands back of a command's output: its end, where an error is.
+OUTPUT_KEPT = 8000
+
+
 def _exec(args: list[str], timeout: float | None = None):
     """Run one fleet command. Never on this server's own stdin: that is the protocol
     pipe, and a child reading it (an ssh session, a prompt) would eat the client's
@@ -340,8 +344,18 @@ def build_server():
                              "detached with nohup and a log"}
         except FileNotFoundError:
             return {"ok": False, "error": "fleet is not installed on this machine"}
-        return {"ok": p.returncode == 0, "exit_code": p.returncode,
-                "stdout": (p.stdout or "")[-8000:], "stderr": _clean(p.stderr)[-2000:]}
+        out, err = p.stdout or "", _clean(p.stderr)
+        result = {"ok": p.returncode == 0, "exit_code": p.returncode,
+                  "stdout": out[-OUTPUT_KEPT:], "stderr": err[-2000:]}
+        # Only the end is kept, and the agent was not told: the tail of a long listing
+        # read as the whole of it, starting halfway through a line.
+        if len(out) > OUTPUT_KEPT:
+            result["stdout_cut"] = (f"only the last {OUTPUT_KEPT} of {len(out)} characters "
+                                    "are here: write the output to a file there and read "
+                                    "the part you need (head, tail, grep)")
+        if len(err) > 2000:
+            result["stderr_cut"] = f"only the last 2000 of {len(err)} characters are here"
+        return result
 
     @server.tool(description="Add a machine from how the user connects to it: an ssh "
                              "command such as `ssh -p 40001 root@1.2.3.4`, or a name from "
