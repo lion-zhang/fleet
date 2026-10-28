@@ -43,9 +43,21 @@ def _fleet() -> str:
     all. `fleet_command()` is right for a skill, where an agent types into a shell, and
     exactly wrong here: every tool would answer "fleet is not installed on this machine"
     on a machine where it plainly is.
+
+    The fleet beside this server's own interpreter first: the tools are this server's,
+    and another fleet earlier on PATH (an older pip install, a checkout's venv) answered
+    for them with its own version -- a tag list it did not split, a field it did not
+    have -- while `restart` could never notice, since this server had not changed.
     """
+    import sys
+    from pathlib import Path
+
     from .agents import fleet_executable
 
+    here = Path(sys.executable).parent
+    for exe in (here / "fleet", here / "fleet.exe"):
+        if exe.is_file():
+            return str(exe)
     return fleet_executable()
 
 

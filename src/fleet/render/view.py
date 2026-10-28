@@ -578,8 +578,41 @@ def device_view(dev: Device, state: dict | None, snap: dict | None,
             "probe_policy": dev.probe_policy,
             "provider": dev.provider,
             "cost": cost,
+            "slurm": slurm_view(snap),
         }
     return out
+
+
+def slurm_view(snap: dict | None) -> dict[str, Any] | None:
+    """A shared host's SLURM reading -- your jobs and its partitions -- which the probe
+    takes in place of a process list. Read and stored, then shown nowhere: `fleet show`
+    on a cluster login said nothing about the one thing measured there instead."""
+    info = (snap or {}).get("slurm_info") or {}
+    if not info:
+        return None
+
+    def count(key: str) -> int | None:
+        try:
+            return int((info.get(key) or [""])[0])
+        except ValueError:
+            return None
+
+    parts = []
+    for line in info.get("partition") or []:
+        f = str(line).split()
+        if len(f) < 4:
+            continue
+        parts.append({"name": f[0].rstrip("*"), "default": f[0].endswith("*"),
+                      "avail": f[1], "nodes": _int_or_none(f[2]), "state": f[3]})
+    return {"my_jobs": count("my_jobs"), "my_running": count("my_running"),
+            "partitions": parts}
+
+
+def _int_or_none(text: str) -> int | None:
+    try:
+        return int(text)
+    except ValueError:
+        return None
 
 
 def connect_view(dev: Device, state: dict | None = None, *, here: bool = False) -> dict[str, Any]:

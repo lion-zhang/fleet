@@ -426,6 +426,13 @@ def render_device(row: dict[str, Any], live_within: int = 10) -> Table:
         t.add_row("[bold]models[/bold]",
                   f":{m.get('port')} {escape(', '.join(m.get('models') or []) or '-')}  "
                   f"[dim]{escape(m.get('framework') or '')}[/dim]")
+    if sl := row.get("slurm"):
+        # A shared host's stand-in for a process list, as in `fleet show`.
+        parts = ", ".join(f"{p['name']} {p['state']}" for p in sl.get("partitions") or [])
+        t.add_row("[bold]slurm[/bold]",
+                  (f"{sl['my_jobs']} job(s) of yours, {sl['my_running']} running"
+                   if sl.get("my_jobs") is not None else "your jobs unknown")
+                  + (f"  [dim]{escape(parts)}[/dim]" if parts else ""))
     for proc in (row.get("top_cpu") or [])[:5]:
         t.add_row("[dim]cpu proc[/dim]",
                   f"{proc.get('cpu_pct', 0):.0f}%  [dim]{escape(proc.get('comm') or '')}[/dim]")

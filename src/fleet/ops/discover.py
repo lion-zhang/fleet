@@ -13,6 +13,7 @@ from __future__ import annotations
 import glob
 import json
 import os
+import re
 import shutil
 import subprocess
 from dataclasses import asdict, dataclass
@@ -51,6 +52,27 @@ def _is_ip(value: str) -> bool:
     return True
 
 
+_LINE = re.compile(r"([^\s=]+)\s*(?:=\s*)?(.*)")
+
+
+def _args(rest: str) -> list[str]:
+    """An ssh config line's arguments, double quotes keeping a space inside one: `Host
+    "gpu"` named a machine `"gpu"`, which nothing could then add."""
+    out, cur, quoted, inside = [], "", False, False
+    for c in rest:
+        if c == '"':
+            quoted, inside = not quoted, True
+        elif c.isspace() and not quoted:
+            if cur or inside:
+                out.append(cur)
+            cur, inside = "", False
+        else:
+            cur += c
+    if cur or inside:
+        out.append(cur)
+    return [a for a in out if a]
+
+
 def _config_hosts(path: Path, seen: set[Path] | None = None) -> list[str]:
     """The literal `Host` names in an ssh config, following `Include`."""
     seen = seen if seen is not None else set()
@@ -67,12 +89,15 @@ def _config_hosts(path: Path, seen: set[Path] | None = None) -> list[str]:
         line = raw.split("#", 1)[0].strip()
         if not line:
             continue
-        key, _, rest = line.partition(" ")
-        if "=" in key:
-            key, _, rest = line.partition("=")
-        key, rest = key.strip().lower(), rest.strip()
+        # As ssh reads a line: the keyword ends at whitespace or at one "=", either
+        # way round. Splitting on a space alone missed `Host<TAB>gpu` and listed the
+        # "=" of `Host = gpu` as a machine.
+        m = _LINE.match(line)
+        if not m:
+            continue
+        key, rest = m.group(1).lower(), m.group(2).strip()
         if key == "include":
-            for pattern in rest.split():
+            for pattern in _args(rest):
                 pattern = os.path.expanduser(pattern)
                 if not os.path.isabs(pattern):
                     # Relative to ~/.ssh for the user's config -- the folder it is in.
@@ -80,9 +105,11 @@ def _config_hosts(path: Path, seen: set[Path] | None = None) -> list[str]:
                 for inc in sorted(glob.glob(pattern)):
                     out += _config_hosts(Path(inc), seen)
         elif key == "host":
-            for h in rest.split():
-                # Patterns describe many hosts and name none of them.
-                if not any(c in h for c in "*?!") and h.lower() != "localhost":
+            for h in _args(rest):
+                # Patterns describe many hosts and name none of them, and a name with a
+                # space in it is not one `fleet add` or a shell can be given.
+                if (not any(c in h for c in "*?!") and h.lower() != "localhost"
+                        and not any(c.isspace() for c in h)):
                     out.append(h)
     return list(dict.fromkeys(out))
 

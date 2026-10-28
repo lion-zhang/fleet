@@ -54,6 +54,27 @@ def test_the_fallback_does_not_resolve_out_of_its_own_directory(monkeypatch, tmp
     assert st.fleet_executable() == str(toolbin / "fleet")
 
 
+def test_the_server_runs_its_own_fleet_not_another_on_path(monkeypatch, tmp_path):
+    """Its tools are this server's. An older fleet earlier on PATH answered for them:
+    `fleet mcp` from 0.6.2 ran 0.6.1's `ls`, which did not split a tag list, and the
+    agent was told no machine had the tag."""
+    from fleet import mcpserver
+
+    older = tmp_path / "old" / "bin"
+    older.mkdir(parents=True)
+    (older / "fleet").write_text("#!/bin/sh\n")
+    (older / "fleet").chmod(0o755)
+    ours = tmp_path / "venv" / "bin"
+    ours.mkdir(parents=True)
+    (ours / "python3").write_text("")
+    (ours / "fleet").write_text("")
+    monkeypatch.setenv("PATH", str(older))
+    monkeypatch.setattr(sys, "prefix", str(tmp_path / "venv"))
+    monkeypatch.setattr(sys, "executable", str(ours / "python3"))
+
+    assert mcpserver._fleet() == str(ours / "fleet")
+
+
 # ------------------------------------------------------------- the config merge
 
 def test_our_entry_is_added_without_disturbing_other_servers():

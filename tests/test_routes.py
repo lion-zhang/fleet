@@ -66,3 +66,56 @@ def test_fleet_ssh_goes_by_the_route_that_answered(tmp_path, monkeypatch):
     monkeypatch.setattr(os, "execvp", lambda f, a: seen.append(a))
     CliRunner().invoke(cli.app, ["ssh", "gpubox"])
     assert seen and seen[-1][-1] == "me@gpubox.example.ts.net"
+
+
+def test_doctor_names_the_route_that_let_it_in(monkeypatch):
+    """`fleet doctor` said "✓ gpubox ok · ssh me@10.0.0.5" -- the route that was down."""
+    from fleet.ops import doctor
+    from fleet.probe import runner
+
+    dev = _two_routes()
+    second = inv.endpoints_of(dev)[1].name
+    monkeypatch.setattr(runner, "probe_endpoints", lambda eps, **kw: ProbeResult(
+        status=Status.OK, snapshot=Snapshot(), endpoint_used=second))
+    v = doctor.diagnose(dev, state=None, snap=None)
+    assert v.status == "ok" and "gpubox.example.ts.net" in v.route
+
+    failed = ProbeResult(status=Status.REFUSED, endpoint_used=second)
+    assert "gpubox.example.ts.net" in doctor.diagnose_result(dev, failed).route
+
+
+def _recorded_by_second_route() -> Device:
+    dev = _two_routes()
+    inv.save([dev])
+    conn = store.connect()
+    store.record(conn, dev.id, ProbeResult(status=Status.OK, snapshot=Snapshot(hostname="gpubox"),
+                                           endpoint_used=inv.endpoints_of(dev)[1].name))
+    conn.close()
+    return dev
+
+
+def test_edit_writes_machine_yaml_by_the_route_that_answered(monkeypatch):
+    """"Could not change gpubox's machine.yaml: ... Connection refused" on a machine
+    `fleet ls` showed up, by its other route."""
+    from fleet.ops import machinefile
+
+    _recorded_by_second_route()
+    went = []
+
+    def change(ep, platform, **kw):
+        went.append(ep.target)
+        return {}, {"notes": kw.get("note")}
+
+    monkeypatch.setattr(machinefile, "change", change)
+    CliRunner().invoke(cli.app, ["edit", "gpubox", "--note", "hi"])
+    assert went == ["gpubox.example.ts.net"]
+
+
+def test_install_and_update_go_by_the_route_that_answered(monkeypatch):
+    _recorded_by_second_route()
+    went = []
+    monkeypatch.setattr(cli, "run_installer",
+                        lambda ep, *a, **k: (went.append(ep.target), (0, ""))[1])
+    CliRunner().invoke(cli.app, ["install", "gpubox"])
+    CliRunner().invoke(cli.app, ["update", "gpubox"])
+    assert went == ["gpubox.example.ts.net"] * 2

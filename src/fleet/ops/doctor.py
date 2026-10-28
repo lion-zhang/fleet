@@ -91,11 +91,18 @@ def _key_lines(ep: Endpoint | None, *, windows: bool) -> list[str]:
     return lines + [keys.posix_install_line(pub)]
 
 
-def advise(dev: Device, status: str, detail: str, *, snap: dict | None = None,
-           server: str = "", verbose: str = "") -> Verdict:
-    """The verdict for one failed attempt, from what it said."""
+def _route(dev: Device, used: str = ""):
+    """The route the attempt went by: the one that answered, or the failure being
+    explained. The first by preference only when nothing says which -- "✓ ok · ssh -p
+    2299 ..." named a route that was down while the second one let us in."""
     eps = sorted(inv.endpoints_of(dev), key=lambda e: e.preference)
-    ep = eps[0] if eps else None
+    return next((e for e in eps if used and e.name == used), eps[0] if eps else None)
+
+
+def advise(dev: Device, status: str, detail: str, *, snap: dict | None = None,
+           server: str = "", verbose: str = "", used: str = "") -> Verdict:
+    """The verdict for one failed attempt, from what it said."""
+    ep = _route(dev, used)
     v = Verdict(name=dev.name, status=status, why="", server=server,
                 route=ep.ssh_command() if ep else "")
     text = f"{detail}\n{verbose}".lower()
@@ -172,7 +179,8 @@ def advise(dev: Device, status: str, detail: str, *, snap: dict | None = None,
 def diagnose_result(dev: Device, res: ProbeResult) -> Verdict:
     """The verdict for a probe that just failed, without dialling again."""
     snap = res.snapshot.to_dict() if res.snapshot is not None else None
-    return advise(dev, res.status.value, res.error_detail or res.stderr_tail or "", snap=snap)
+    return advise(dev, res.status.value, res.error_detail or res.stderr_tail or "", snap=snap,
+                  used=res.endpoint_used)
 
 
 def diagnose(dev: Device, *, state: dict | None, snap: dict | None) -> Verdict:
@@ -187,10 +195,10 @@ def diagnose(dev: Device, *, state: dict | None, snap: dict | None) -> Verdict:
     # answer for a machine that has since stopped letting us in.
     res = probe_endpoints(eps, mode=dev.probe_mode, timeout=20, multiplex=False)
     if res.ok:
-        return advise(dev, Status.OK.value, "", snap=snap)
+        return advise(dev, Status.OK.value, "", snap=snap, used=res.endpoint_used)
     server, verbose = ("", "")
-    if res.status is Status.AUTH_FAILED:
-        best = sorted(eps, key=lambda e: e.preference)[0]
+    if res.status is Status.AUTH_FAILED and (best := _route(dev, res.endpoint_used)):
         server, verbose = server_banner(best)
     return advise(dev, res.status.value, res.error_detail or "", snap=snap or (
-        res.snapshot.to_dict() if res.snapshot else None), server=server, verbose=verbose)
+        res.snapshot.to_dict() if res.snapshot else None), server=server, verbose=verbose,
+        used=res.endpoint_used)
