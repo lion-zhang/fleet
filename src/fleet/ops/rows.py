@@ -119,7 +119,8 @@ def snapshot(names: list[str] | None = None, *, refresh: bool = False,
         conn.close()
 
 
-def tick(conn, devices: list, schedule, cfg, detail: Detail) -> list[dict]:
+def tick(conn, devices: list, schedule, cfg, detail: Detail, *,
+         named: bool = False) -> list[dict]:
     """One frame of the live view: probe whatever the schedule says is due, then render.
 
     The connection and the device list are the caller's, because a live loop holds both
@@ -127,7 +128,11 @@ def tick(conn, devices: list, schedule, cfg, detail: Detail) -> list[dict]:
     question is the cost this signature exists to avoid.
     """
     me = identity.local_device_id()
-    due = [d for d in schedule.due(devices, time.monotonic()) if d.probeable]
+    # As in `snapshot`: naming a machine is asking about it. `fleet top login01` on a
+    # shared host never measured it at all, and its "2m old" only grew.
+    due = [d for d in schedule.due(devices, time.monotonic())
+           if d.probeable or (named and d.probe_policy != "never"
+                              and d.kind is not Kind.MOBILE)]
     if due:
         # Light: what the machines have cached, and nothing that waits on the network --
         # a frame every few seconds cannot afford to ask every LLM server for its models.

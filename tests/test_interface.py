@@ -37,6 +37,13 @@ def test_top_needs_a_positive_interval(runner):
     assert runner.invoke(cli.app, ["top", "-i", "0"]).exit_code == 2
 
 
+@pytest.mark.parametrize("odd", ["nan", "inf"])
+def test_top_refuses_an_interval_that_is_not_a_number_of_seconds(runner, odd):
+    """Both passed `interval <= 0` and came back as a traceback from the first tick."""
+    r = runner.invoke(cli.app, ["top", "-i", odd])
+    assert r.exit_code == 2 and "--interval" in r.output
+
+
 @pytest.mark.parametrize("gone", ["invite", "join", "sync", "access", "center", "service"])
 def test_the_access_commands_are_gone(runner, gone):
     """fleet manages no access any more: these are not hidden, they do not exist."""

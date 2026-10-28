@@ -7,6 +7,7 @@ import contextlib
 import dataclasses
 import copy
 import json as jsonlib
+import math
 import os
 import re
 import subprocess
@@ -391,6 +392,14 @@ def _print_show(r: dict) -> None:
         console.print("  [bold]top cpu[/bold]")
         for p in r["top_cpu"]:
             console.print(f"        {p['pid']:>8} {escape(p['user'] or '?'):<10} {p['cpu_pct']:>5}%  {escape(p['comm'] or '')}")
+    if sl := r.get("slurm"):
+        jobs = (f"{sl['my_jobs']} job(s) of yours, {sl['my_running']} running"
+                if sl.get("my_jobs") is not None else "your jobs unknown")
+        console.print(f"  [bold]slurm[/bold]  {jobs}")
+        for pt in sl.get("partitions") or []:
+            console.print(f"        {escape(pt['name']):<12} {escape(pt['avail']):<5} "
+                          f"{pt['nodes'] if pt['nodes'] is not None else '?':>4} node(s) "
+                          f"{escape(pt['state'])}" + ("  [dim]default[/dim]" if pt["default"] else ""))
     if r.get("services_detail"):
         console.print("  [bold]services[/bold]")
         for s in r["services_detail"]:
@@ -487,10 +496,10 @@ def _edit_machine_file(dev, json_out: bool, *, paths: list[str], endpoints: list
                               f"{items[i]}, {dev.name}'s own[/dim]")
     conn = store.connect()
     try:
-        _, snap = store.latest(conn, dev.id)
+        state, snap = store.latest(conn, dev.id)
     finally:
         conn.close()
-    eps = sorted(inv.endpoints_of(dev), key=lambda e: e.preference)
+    eps = inv.by_use(dev, state)
     if not here and not eps:
         err.print(f"[red]{dev.name} has no address to reach it at[/red]")
         raise typer.Exit(1)
@@ -1091,6 +1100,18 @@ def configured_repo() -> str:
     return f"{links.REPO}.git"
 
 
+def _routes(dev) -> list:
+    """The device's routes, the one that answered its last probe first. By preference
+    alone, install, update and edit went by a route that was down and failed on a
+    machine `fleet ls` showed up -- reached the other way."""
+    conn = store.connect()
+    try:
+        state, _ = store.latest(conn, dev.id)
+    finally:
+        conn.close()
+    return inv.by_use(dev, state)
+
+
 def _remote_platform_of(dev) -> str:
     """Which shell this device speaks, from the last probe.
 
@@ -1160,7 +1181,7 @@ def cmd_install(name: str = typer.Argument(None,
         # A fresh install clones from `url`; one that finds fleet from PyPI upgrades it
         # there and clones nothing, but that is only known on the far side.
         forward_agent = needs_agent(url)
-    code, output = run_installer(sorted(eps, key=lambda e: e.preference)[0],
+    code, output = run_installer(_routes(dev)[0],
                                  install_script(url, ref=ref, platform=platform,
                                                 from_git=from_git),
                                  forward_agent=forward_agent, platform=platform)
@@ -1298,7 +1319,7 @@ def cmd_update(name: str = typer.Argument(None, help="defaults to this machine")
     targets = [d for d in targets if d.id != me]
 
     for dev in targets:
-        eps = sorted(inv.endpoints_of(dev), key=lambda e: e.preference)
+        eps = _routes(dev)
         # Per device, because a fleet is not one platform. Building the script once and
         # sending it to everything handed the POSIX installer to a Windows machine, which
         # runs it under git's sh.exe far enough to break the installation it was meant
@@ -1417,7 +1438,9 @@ def cmd_top(name: str = typer.Argument(None, help="one device, instead of the wh
 
     [dim]Example:[/dim]  fleet top machine_A -i 1
     """
-    if interval <= 0:
+    # nan and inf passed the test below and came back as a traceback from the first
+    # schedule computed with them.
+    if not math.isfinite(interval) or interval <= 0:
         err.print("[red]--interval must be more than 0 seconds[/red]")
         raise typer.Exit(2)
     _first_run("top")
@@ -1436,7 +1459,7 @@ def cmd_top(name: str = typer.Argument(None, help="one device, instead of the wh
     live_within = max(int(interval * 3), 5)
 
     def frame():
-        rows = _live_tick(conn, devices, schedule, cfg, detail)
+        rows = _live_tick(conn, devices, schedule, cfg, detail, named=bool(name))
         if name:
             return render_device(rows[0], live_within)
         view = fleet_view(rows)
@@ -1576,14 +1599,13 @@ def cmd_probe(name: str = typer.Argument(None, help="defaults to this machine"),
     dev = inv.find(devices, name)
     if dev is None:
         _no_such(devices, name)
-    eps = inv.endpoints_of(dev)
     if raw:
-        argv = build_argv(sorted(eps, key=lambda e: e.preference)[0],
+        argv = build_argv(_routes(dev)[0],
                           remote="sh -s", env=probe_env(dev.probe_mode, dev.disk_paths))
         p = sshrun(argv, input=PAYLOAD.read_bytes())
         sys.stdout.write(p.stdout.decode(errors="replace"))
         raise typer.Exit(0 if p.returncode == 0 else 1)
-    res = run_probe(sorted(eps, key=lambda e: e.preference)[0], mode=dev.probe_mode,
+    res = run_probe(_routes(dev)[0], mode=dev.probe_mode,
                     disk_paths=dev.disk_paths)
     console.print_json(jsonlib.dumps(
         {"status": res.status.value, "latency_ms": res.latency_ms,
@@ -1605,7 +1627,12 @@ def cmd_ssh(ctx: typer.Context,
     dev = inv.find(devices, name)
     if dev is None:
         _no_such(devices, name)
-    eps = sorted(inv.endpoints_of(dev), key=lambda e: e.preference)
+    conn = store.connect()
+    try:
+        cached, snap = store.latest(conn, dev.id)
+    finally:
+        conn.close()
+    eps = inv.by_use(dev, cached)
     if not eps:
         if dev.id == identity.local_device_id():
             err.print(f"[red]{dev.name} is this machine[/red] -- run the command here, "
@@ -1615,11 +1642,6 @@ def cmd_ssh(ctx: typer.Context,
                       f"one: fleet edit {dev.name} --ssh \"ssh user@host\"[/dim]")
         raise typer.Exit(1)
     ep = eps[0]
-    conn = store.connect()
-    try:
-        cached, snap = store.latest(conn, dev.id)
-    finally:
-        conn.close()
     platform = remote_platform(snap)
     # A cached refusal is evidence only while it is fresh: you may have fixed it since,
     # and nothing tells fleet. Stale, we try -- a key that really is missing fails in

@@ -47,6 +47,15 @@ def test_hosts_are_read_from_ssh_config_with_includes_and_without_patterns(home)
     assert names == ["lab", "lab-alt", "vast-a100"]
 
 
+def test_host_lines_are_read_as_ssh_reads_them(home):
+    """A tab after `Host` hid the machine; the "=" of `Host = gpu` was listed as one;
+    `Host "gpu"` kept its quotes, and a quoted name with a space was split in two."""
+    (home / ".ssh" / "config").write_text(
+        'Host\ttabbed\nHost = eq\nHost=tight\nHost "quoted"\nHost "has space" ok\n')
+    assert [c.name for c in discover.ssh_config(home)] == ["tabbed", "eq", "tight",
+                                                           "quoted", "ok"]
+
+
 def test_an_include_that_includes_itself_is_read_once(home):
     (home / ".ssh" / "config").write_text("Include config\nHost a\n")
     assert [c.name for c in discover.ssh_config(home)] == ["a"]
