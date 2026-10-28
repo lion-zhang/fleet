@@ -172,7 +172,7 @@ fleet install machine_A
 |---|---|
 | `--repo` `URL` | git URL to clone; defaults to config or this checkout |
 | `--ref` | branch or tag to install (default: `main`) |
-| `--forward-agent`, `--no-forward-agent` | authenticate the clone as you, leaving no credential on the device |
+| `--forward-agent`, `--no-forward-agent` | authenticate the clone as you, leaving no credential on the device; by default only for a git URL over ssh |
 
 ## fleet update
 

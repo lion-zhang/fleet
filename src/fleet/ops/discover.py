@@ -41,6 +41,16 @@ class Candidate:
         return asdict(self)
 
 
+def _is_ip(value: str) -> bool:
+    import ipaddress
+
+    try:
+        ipaddress.ip_address(value)
+    except ValueError:
+        return False
+    return True
+
+
 def _config_hosts(path: Path, seen: set[Path] | None = None) -> list[str]:
     """The literal `Host` names in an ssh config, following `Include`."""
     seen = seen if seen is not None else set()
@@ -75,6 +85,24 @@ def _config_hosts(path: Path, seen: set[Path] | None = None) -> list[str]:
                 if not any(c in h for c in "*?!") and h.lower() != "localhost":
                     out.append(h)
     return list(dict.fromkeys(out))
+
+
+def _resolved(host: str, config: Path, timeout: float = 3.0) -> tuple[str, int] | None:
+    """Where ssh would dial `host`: its HostName and Port, by `ssh -G` and this config."""
+    try:
+        p = subprocess.run(["ssh", "-G", "-F", str(config), "--", host], capture_output=True,
+                           text=True, encoding="utf-8", errors="replace", timeout=timeout,
+                           stdin=subprocess.DEVNULL)
+    except (OSError, subprocess.TimeoutExpired):
+        return None
+    if p.returncode != 0:
+        return None
+    cfg: dict[str, str] = {}
+    for line in p.stdout.splitlines():
+        key, _, val = line.partition(" ")
+        cfg.setdefault(key.lower(), val.strip())
+    port = cfg.get("port", "22")
+    return cfg.get("hostname", host).lower(), int(port) if port.isdigit() else 22
 
 
 def ssh_config(home: Path | None = None) -> list[Candidate]:
@@ -164,12 +192,21 @@ def candidates(*, home: Path | None = None, status: dict | None = None,
     """Both sources, each machine once, marked with its name if it is already added."""
     devices = inv.live(inv.load())
     known: dict[str, str] = {}
+    # Where each added machine is dialled, so a Host alias for a machine added by its
+    # address (or by another alias) is not offered again as a new one.
+    dialled: dict[tuple[str, int], str] = {}
     for d in devices:
         for e in d.endpoints:
             known[str(e.get("target", "")).lower()] = d.name
             if e.get("host"):
                 known.setdefault(str(e["host"]).lower(), d.name)
+            port = str(e.get("port") or 22)
+            port = int(port) if port.isdigit() else 22
+            for addr in (e.get("target"), e.get("host")):
+                if addr:
+                    dialled.setdefault((str(addr).lower(), port), d.name)
         known.setdefault(d.name.lower(), d.name)
+    config = (home or Path.home()) / ".ssh" / "config"
     out: list[Candidate] = []
     seen: set[str] = set()
     skip = set() if include_hidden else hidden()
@@ -177,10 +214,15 @@ def candidates(*, home: Path | None = None, status: dict | None = None,
         if cand.name.lower() in skip or cand.target.lower() in skip:
             continue
         key = cand.target.lower()
-        short = key.split(".", 1)[0]
+        # An address's first part is not a name: "100" would make every tailnet peer
+        # listed by its 100.x address after the first one look like a duplicate.
+        short = key if _is_ip(key) else key.split(".", 1)[0]
         if key in seen or short in seen:
             continue
         seen.update({key, short})
         cand.added = known.get(key) or known.get(cand.name.lower()) or ""
+        if not cand.added and cand.source == "ssh-config" and dialled:
+            if where := _resolved(cand.target, config):
+                cand.added = dialled.get(where, "")
         out.append(cand)
     return out

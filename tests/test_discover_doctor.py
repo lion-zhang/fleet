@@ -30,8 +30,10 @@ STATUS = {"Peer": {
 
 
 @pytest.fixture
-def home(tmp_path):
+def home(tmp_path, monkeypatch):
     (tmp_path / ".ssh").mkdir()
+    # Where ssh would dial a Host is asked of `ssh -G`; no test here runs ssh.
+    monkeypatch.setattr(discover, "_resolved", lambda host, config, **k: None)
     return tmp_path
 
 
@@ -72,6 +74,28 @@ def test_a_machine_already_added_is_marked_with_its_name(home):
     assert [c.name for c in got].count("gpu-box") == 1
     by = {c.name: c for c in got}
     assert by["studio"].added == ""
+
+
+def test_a_host_that_dials_an_added_machine_is_not_offered_as_new(home, monkeypatch):
+    """`Host lab` pointing at 10.0.0.9:2222 is the machine added as `ssh -p 2222
+    me@10.0.0.9`. Matched by name alone, discover offered it as a machine to add."""
+    (home / ".ssh" / "config").write_text("Host lab\n  HostName 10.0.0.9\n  Port 2222\n"
+                                          "Host other\n  HostName 10.0.0.9\n")
+    inv.save([Device(id="id:l", name="box",
+                     endpoints=[{"target": "10.0.0.9", "user": "me", "port": 2222}])])
+    where = {"lab": ("10.0.0.9", 2222), "other": ("10.0.0.9", 22)}
+    monkeypatch.setattr(discover, "_resolved", lambda host, config, **k: where[host])
+    by = {c.name: c for c in discover.candidates(home=home, status={})}
+    assert by["lab"].added == "box"
+    assert by["other"].added == ""         # same address, another port: another machine
+
+
+def test_tailnet_peers_listed_by_address_are_not_one_machine(home):
+    """With no DNS name a peer is listed by its 100.x address, and the part before the
+    first dot -- "100" -- made every peer after the first look like a duplicate."""
+    status = {"Peer": {k: {**v, "DNSName": ""} for k, v in STATUS["Peer"].items()}}
+    assert {c.target for c in discover.candidates(home=home, status=status)} == {
+        "100.64.0.5", "100.64.0.7"}
 
 
 def test_ls_discover_lists_them_as_json(home, monkeypatch):

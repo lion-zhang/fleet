@@ -91,33 +91,63 @@ def parse_ssh_command(cmd: str) -> ParsedSsh:
     out = ParsedSsh()
     rest: list[str] = []
     i = 0
+    # As ssh reads it: options before the host and straight after it (`ssh root@h -p 2222
+    # -L 8080:localhost:8080`, as rental providers write it), then the first other word
+    # starts the remote command, whose own flags are not ssh's. Reading on past it took
+    # `nvidia-smi -i 0` for a key named "0".
     while i < len(tokens):
         tok = tokens[i]
-        if tok.startswith("-") and len(tok) > 1 and not out.target:
-            flag, inline = tok[1], tok[2:]
-            if flag in _VALUE_FLAGS:
-                val = inline or (tokens[i + 1] if i + 1 < len(tokens) else "")
-                if not inline:
-                    i += 1
-                match flag:
-                    case "p":
-                        out.port = int(val) if val.isdigit() else None
-                    case "i":
-                        out.identity = val
-                    case "J":
-                        out.jump = val
-                    case "l":
-                        out.user = val
-                    case "o":
-                        out.options.append(val)
+        if tok == "--":
+            rest += tokens[i + 1:]
+            break
+        if not (tok.startswith("-") and len(tok) > 1) or len(rest) > 1:
+            rest.append(tok)
+            if len(rest) > 1:
+                rest += tokens[i + 1:]
+                break
             i += 1
             continue
-        rest.append(tok)
+        j = 1
+        while j < len(tok):                 # `-4A`, `-Ap 2222`: grouped switches
+            flag = tok[j]
+            if flag not in _VALUE_FLAGS:
+                j += 1
+                continue
+            val = tok[j + 1:]
+            if not val:
+                i += 1
+                val = tokens[i] if i < len(tokens) else ""
+            if not val:
+                raise ValueError(f"-{flag} needs a value")
+            match flag:
+                case "p":
+                    # A typo here (`-p 22x`) used to dial port 22 and report "no ssh
+                    # server is listening on that port" about the right machine.
+                    if not val.isdigit() or not 0 < int(val) < 65536:
+                        raise ValueError(f"-p {val!r} is not a port")
+                    out.port = int(val)
+                case "i":
+                    out.identity = val
+                case "J":
+                    out.jump = val
+                case "l":
+                    out.user = val
+                case "o":
+                    out.options.append(val)
+                    # `-o IdentityFile=~/.ssh/k` is the same key as `-i ~/.ssh/k`;
+                    # without this it was used to resolve the address and then left
+                    # out of the record, so fleet never offered it.
+                    key, _, ident = val.replace("=", " ", 1).partition(" ")
+                    if key.strip().lower() == "identityfile" and ident.strip():
+                        out.identity = out.identity or ident.strip()
+            break
         i += 1
 
     if rest:
         out.target = rest[0]
         out.remote_command = " ".join(rest[1:])
+    if not out.target:
+        raise ValueError(f"no address in {cmd.strip()!r}")
     for value in (out.target, out.jump or ""):
         if value.startswith("-"):
             raise ValueError(f"not an address: {value!r}")

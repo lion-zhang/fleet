@@ -95,9 +95,12 @@ fleet update                   # update this machine
 `fleet install` needs a machine's name: the one you run it on already has fleet, and
 `fleet update` updates it.
 It installs from git: a checkout of the repository's `main` branch in
-`~/.local/share/fleet`, or `--repo URL` and `--ref BRANCH` (a branch or a tag). It
-forwards your SSH agent for the clone, so the machine fetches as you and no credential
-is left on it (`--no-forward-agent` turns that off).
+`~/.local/share/fleet`, or `--repo URL` and `--ref BRANCH` (a branch or a tag). When the
+repository's URL is an ssh one (`git@github.com:you/fleet.git`), it forwards your SSH
+agent for the clone, so the machine fetches as you and no credential is left on it. An
+https URL needs nothing of yours, so the agent is not forwarded: whoever is root on the
+machine could use it while the install runs. `--forward-agent` and `--no-forward-agent`
+decide it either way.
 
 A machine with fleet on it starts with its own empty list: it watches the machines *its*
 ssh reaches, which you add there. To give it the same list as this one, copy

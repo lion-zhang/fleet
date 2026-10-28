@@ -33,7 +33,7 @@ from .agents import (MCP_CLIENTS, TARGETS, config_command, detect_mcp_clients,
                      stale_mcp_clients, stale_targets, uninstall, uninstall_mcp)
 from .config import INVENTORY_PATH, load_config
 from .edit import apply_edits, check_name
-from .install import (NOTHING_TO_UPDATE, build_install_argv, install_script,
+from .install import (NOTHING_TO_UPDATE, build_install_argv, install_script, needs_agent,
                       install_source,
                       local_install_argv, payload_for)
 from .mcpserver import McpUnavailable, serve as serve_mcp
@@ -246,6 +246,18 @@ def _print_discovered(json_out: bool, *, hide: list[str] = (), unhide: list[str]
     """`fleet ls --discover`: what your ssh config and tailnet know that fleet does not."""
     from .ops import discover
 
+    for n in [*hide, *unhide]:
+        # The list is one name a line, and a line starting with `#` is a comment: a
+        # name with a newline in it hid two, and one starting with `#` hid nothing,
+        # both under a ✓-less silence that read as done.
+        if not n.strip() or any(c.isspace() for c in n.strip()) or n.strip().startswith("#"):
+            err.print(f"[red]{escape(repr(n))} is not a name --discover offers[/red]")
+            raise typer.Exit(2)
+    hide = [n.strip() for n in hide]
+    unhide = [n.strip() for n in unhide]
+    if unhide and (unknown := [n for n in unhide if n.lower() not in discover.hidden()]):
+        err.print(f"[yellow]not hidden: {escape(', '.join(unknown))}[/yellow]  "
+                  "[dim](fleet ls --discover --all lists what is)[/dim]")
     if hide:
         discover.set_hidden(list(hide), hide=True)
     if unhide:
@@ -571,8 +583,15 @@ def cmd_add(ssh_command: str = typer.Argument(None, help='e.g. "ssh -p 58418 roo
         dev, res = onboard_self(name=name, kind=kind, alias=alias, taken_names=taken)
     else:
         ssh_command = _discovered_command(ssh_command)
-        dev, res = onboard(ssh_command, name=name, kind=kind, alias=alias,
-                           taken_names=taken)
+        try:
+            dev, res = onboard(ssh_command, name=name, kind=kind, alias=alias,
+                               taken_names=taken)
+        except ValueError as exc:
+            # An address ssh itself refuses (`-o Port=abc`, a host that begins with
+            # `-`) was a traceback; the words are the whole answer.
+            if not _emit({"ok": False, "error": str(exc)}, json_out):
+                err.print(f"[red]{escape(str(exc))}[/red]")
+            raise typer.Exit(2)
         if res.status is Status.AUTH_FAILED and not json_out and not dry_run:
             dev, res = _offer_copy_id(ssh_command, dev, res, name=name, kind=kind,
                                       alias=alias, taken=taken)
@@ -921,7 +940,11 @@ def cmd_edit(name: str = typer.Argument(None, help="defaults to this machine"),
             return
         tag, untag, cost = here_tag, here_untag, here_cost
 
-    endpoint = resolve_command(ssh_command) if ssh_command else None
+    try:
+        endpoint = resolve_command(ssh_command) if ssh_command else None
+    except ValueError as exc:
+        err.print(f"[red]{escape(str(exc))}[/red]")
+        raise typer.Exit(2)
     paths = [] if clear_disk_paths else (list(disk_path) if disk_path else None)
     old_name, dev_id = dev.name, dev.id
 
@@ -1037,9 +1060,11 @@ def cmd_install(name: str = typer.Argument(None,
                 repo: str = typer.Option(None, "--repo", metavar="URL",
                                          help="git URL to clone; defaults to config or this checkout"),
                 ref: str = typer.Option("main", "--ref", help="branch or tag to install"),
-                forward_agent: bool = typer.Option(True, "--forward-agent/--no-forward-agent",
+                forward_agent: bool = typer.Option(None, "--forward-agent/--no-forward-agent",
                                                    help="authenticate the clone as you, "
-                                                        "leaving no credential on the device")):
+                                                        "leaving no credential on the device; "
+                                                        "by default only for a git URL "
+                                                        "over ssh")):
     """Install fleet on a device, so you and its agents can use fleet from there too.
 
     A machine fleet only looks at needs nothing installed; this is for one you also work
@@ -1072,9 +1097,14 @@ def cmd_install(name: str = typer.Argument(None,
     platform = _remote_platform_of(dev)
 
     console.print(f"[dim]installing fleet on {dev.name} from {url} ({ref})[/dim]")
+    from_git = bool(repo) or ref != "main"
+    if forward_agent is None:
+        # A fresh install clones from `url`; one that finds fleet from PyPI upgrades it
+        # there and clones nothing, but that is only known on the far side.
+        forward_agent = needs_agent(url)
     code, output = run_installer(sorted(eps, key=lambda e: e.preference)[0],
                                  install_script(url, ref=ref, platform=platform,
-                                                from_git=bool(repo) or ref != "main"),
+                                                from_git=from_git),
                                  forward_agent=forward_agent, platform=platform)
     if code != 0:
         err.print(f"[red]Install failed[/red] (exit {code})\n{output.strip()[-600:]}")
@@ -1220,7 +1250,7 @@ def cmd_update(name: str = typer.Argument(None, help="defaults to this machine")
         code, output = run_installer(eps[0],
                                      install_script(url, ref=ref, platform=platform,
                                                     update_only=True, from_git=from_git),
-                                     platform=platform)
+                                     forward_agent=needs_agent(url), platform=platform)
         if code == 0 and (kept := _kept(output)):
             console.print(f"[dim]·[/dim] {dev.name}: {escape(kept)}")
             skipped += 1
