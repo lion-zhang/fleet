@@ -235,6 +235,7 @@ def parse_payload(stdout: str) -> Snapshot:
             vram_free_mib=_int(f[5]) or 0, util_pct=_int(f[6]) or 0,
             temp_c=_int(f[7]) if len(f) > 7 else None,
             power_w=_float(f[8]) if len(f) > 8 else None,
+            shared_memory=_int(f[3]) is None and "n/a" in f[3].lower(),
         )
         snap.gpus.append(gpu)
         by_uuid[gpu.uuid] = gpu

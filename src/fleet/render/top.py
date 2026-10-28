@@ -181,6 +181,7 @@ def gpu_cells(row: dict[str, Any]) -> tuple[str, str, str]:
         return "-", "-", "-"
     utils = "\n".join(f"{g.get('util_pct') or 0}%" for g in gpus)
     vram = "\n".join(
+        "shared" if g.get("shared_memory") else
         escape(meter(g.get("vram_total_mib", 0) - g.get("vram_free_mib", 0),
                      g.get("vram_total_mib", 0), 6))
         + f" {g.get('vram_free_mib', 0) / 1024:.1f}G"
@@ -199,7 +200,7 @@ def gpu_cells_compact(row: dict[str, Any]) -> tuple[str, str]:
     if not gpus:
         return "-", "-"
     vram = "\n".join(
-        f"{g.get('vram_free_mib', 0) / 1024:.1f}G "
+        ("shared " if g.get("shared_memory") else f"{g.get('vram_free_mib', 0) / 1024:.1f}G ")
         + ("[red]busy[/red]" if g.get("busy") else "[green]idle[/green]")
         for g in gpus)
     return _models(gpus), vram
@@ -403,8 +404,9 @@ def render_device(row: dict[str, Any], live_within: int = 10) -> Table:
     for gpu in row.get("gpus") or []:
         used = gpu.get("vram_total_mib", 0) - gpu.get("vram_free_mib", 0)
         t.add_row(f"[bold]gpu{gpu.get('idx', 0)}[/bold]",
-                  f"{escape(meter(used, gpu.get('vram_total_mib', 0), 20))} "
-                  f"{gpu.get('vram_free_mib', 0) / 1024:.1f}G free  "
+                  ("memory shared with the cpu: ram above  " if gpu.get("shared_memory") else
+                   f"{escape(meter(used, gpu.get('vram_total_mib', 0), 20))} "
+                   f"{gpu.get('vram_free_mib', 0) / 1024:.1f}G free  ") +
                   f"[dim]{gpu.get('util_pct', 0)}% util  {escape(gpu.get('name') or '')}[/dim]")
     for disk in row.get("disks") or []:
         # A read-only mount cannot fill: drawn as a bar it read as a full disk, as it did
@@ -541,7 +543,9 @@ def render_ps(view: dict[str, Any]) -> list:
         out.append("[dim]No jobs on any GPU.[/dim]")
     if view["idle"]:
         out.append("\n[green]idle[/green]  " + "  ".join(
-            f"{escape(i['machine'])} gpu{i['gpu']} [dim]({i['vram_free_mib'] / 1024:.0f}G free)[/dim]"
+            f"{escape(i['machine'])} gpu{i['gpu']} [dim]"
+            + ("(memory shared)" if i.get("shared_memory") else f"({i['vram_free_mib'] / 1024:.0f}G free)")
+            + "[/dim]"
             for i in view["idle"]))
     if view["not_read"]:
         out.append(f"[yellow]![/yellow] [dim]not read just now: "

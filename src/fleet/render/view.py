@@ -39,6 +39,7 @@ def _gpu_view(g: dict) -> dict:
         "util_pct": g["util_pct"],
         "temp_c": g.get("temp_c"),
         "busy": g["util_pct"] >= 10 or compute >= 1024,
+        "shared_memory": bool(g.get("shared_memory")),
     }
 
 
@@ -501,7 +502,8 @@ def device_view(dev: Device, state: dict | None, snap: dict | None,
         "telemetry_age_s": age_s(state),
         "gpus": [{"name": g["name"], "vram_total_mib": g["vram_total_mib"],
                   "vram_free_mib": g["vram_free_mib"], "util_pct": g["util_pct"],
-                  "busy": g["busy"]} for g in gpus] if detail is Detail.COMPACT else gpus,
+                  "busy": g["busy"], "shared_memory": g["shared_memory"]}
+                 for g in gpus] if detail is Detail.COMPACT else gpus,
         "gpu_count": len(gpus),
         "free_vram_mib": max((g["vram_free_mib"] for g in gpus), default=0),
         "ssh_auth": auth_of(dev, state),
@@ -662,7 +664,8 @@ def jobs_view(rows: list[dict]) -> dict:
                 jobs.append({"machine": r["name"], "gpu": g["idx"], "gpu_name": g["name"], **j})
             if not g.get("jobs") and not g.get("busy"):
                 idle.append({"machine": r["name"], "gpu": g["idx"], "gpu_name": g["name"],
-                             "vram_free_mib": g["vram_free_mib"]})
+                             "vram_free_mib": g["vram_free_mib"],
+                             "shared_memory": bool(g.get("shared_memory"))})
     return {"jobs": jobs, "idle": idle,
             "not_read": [r["name"] for r in rows if r["status"] != "ok" and r["gpu_count"]]}
 

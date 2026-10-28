@@ -16,7 +16,7 @@ never stored, so they cannot go stale. `fleet ls --tag WORD` matches facts and
 | `rocm` | `amd-smi` or `rocm-smi` lists at least one AMD GPU |
 | `multi-gpu` | more than one GPU is listed |
 | `metal` | macOS on Apple silicon (no VRAM figure: its memory is shared) |
-| `vram-Ng` | its **largest single card** has at least N GiB (see the steps below) |
+| `vram-Ng` | its **largest single card** has at least N GiB (see the steps below). A card that shares the machine's memory, like DGX Spark's GB10, has no VRAM figure: it shows `shared`, and `RAM FREE` is what it can use |
 | `cores-N` | at least N logical CPUs (a 16-core CPU with hyperthreading has 32) |
 | `ram-Ng` | at least N GiB of memory |
 | `storage-Nt` | its largest writable volume holds at least N TiB in total |
