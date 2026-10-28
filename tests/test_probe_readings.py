@@ -320,3 +320,26 @@ def test_the_models_table_says_what_it_left_out():
     for part in render_models({"servers": [sv], "model_folders": []}):
         c.print(part)
     assert "and 280 more" in c.export_text()
+
+
+def test_servers_that_never_answer_do_not_hold_the_probe_past_its_limit(tmp_path, bin_):
+    """Each was asked twice, two seconds each time, and eight of them held the probe for
+    32 seconds: past the 20 fleet waits, so a healthy machine read as unreachable."""
+    import time
+    socks = []
+    for _ in range(8):
+        s = socket.socket()
+        s.bind(("127.0.0.1", 0))
+        s.listen(16)            # takes the connection, never answers
+        socks.append(s)
+    lines = "".join(f"echo 'LISTEN 0 128 127.0.0.1:{s.getsockname()[1]} *:* "
+                    f"users:((\"vllm\",pid={i + 1},fd=3))'\n" for i, s in enumerate(socks))
+    _stub(bin_, "ss", lines)
+    _stub(bin_, "lsof", "exit 1\n")
+    try:
+        t = time.monotonic()
+        _probe(tmp_path)
+        assert time.monotonic() - t < 18
+    finally:
+        for s in socks:
+            s.close()
