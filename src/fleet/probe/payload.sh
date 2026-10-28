@@ -685,7 +685,9 @@ if [ -n "$paths" ] && [ -n "$CACHE" ] && [ "${FLEET_LIGHT:-}" != "1" ]; then
         tmp="$sizes.$$"
         got=$(printf '%s' "$want" | tr '|' '\n' | while IFS= read -r p; do
           [ -n "$p" ] && [ -e "$p" ] || continue
-          kb=$($T du -sk "$p" 2>/dev/null | tail -1 | cut -f1)
+          # -H: a folder that is a link (~/models -> /mnt/nvme/models) measured as 0,
+          # the size of the link. Links inside it are still not followed.
+          kb=$({ $T du -H -sk "$p" 2>/dev/null || $T du -sk "$p" 2>/dev/null; } | tail -1 | cut -f1)
           [ -n "$kb" ] && printf '%s|%s\n' "$p" "$kb"
         done)
         # Kept only when all of it was written: on a disk that filled up, the sizes it

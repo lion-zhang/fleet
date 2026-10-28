@@ -215,6 +215,26 @@ def test_a_folder_with_a_space_in_its_name_is_measured(tmp_path):
     assert store.size_kb and store.size_kb >= 290
 
 
+def test_a_folder_that_is_a_link_is_measured_by_what_it_holds(tmp_path):
+    """~/models -> /mnt/nvme/models: du measured the link, and the folder read as 0."""
+    import time
+
+    home = tmp_path / "home"
+    (home / ".config" / "fleet").mkdir(parents=True)
+    (home / ".config" / "fleet" / "machine.yaml").write_text("paths:\n  models: ~/models\n")
+    (tmp_path / "nvme").mkdir()
+    (tmp_path / "nvme" / "w.bin").write_bytes(b"x" * 300_000)
+    (home / "models").symlink_to(tmp_path / "nvme")
+    (tmp_path / "bin").mkdir()
+    _probe(tmp_path)
+    for _ in range(100):
+        if any((home / ".cache" / "fleet").glob("*/sizes")):
+            break
+        time.sleep(0.05)
+    [store] = parse_payload(_probe(tmp_path)).storage
+    assert store.size_kb and store.size_kb >= 290
+
+
 # ------------------------------------------------------------------ redaction
 @pytest.mark.parametrize("line, secret", [
     ("python run.py --key=abc123", "abc123"),
