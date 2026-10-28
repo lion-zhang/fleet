@@ -375,3 +375,17 @@ def test_a_machine_with_many_containers_says_how_many(tmp_path, bin_):
     _stub(bin_, "docker", 'case "$1" in --version) echo "Docker version 27.0.1" ;; esac\n')
     snap = parse_payload(_probe(tmp_path))
     assert snap.containers == [] and snap.containers_total == 0
+
+
+@linux
+def test_a_network_share_that_hangs_does_not_hold_the_probe(tmp_path, bin_):
+    """A stale NFS mount makes `df` wait for ever: the probe ran past its limit and the
+    machine read as unreachable. Local disks are still listed."""
+    import time
+    real = shutil.which("df")
+    # Every filesystem at once waits on the share; one named local disk does not.
+    _stub(bin_, "df", f'[ "$*" = "-Pk" ] && exec sleep 120\nexec {real} "$@"\n')
+    t = time.monotonic()
+    snap = parse_payload(_probe(tmp_path))
+    assert time.monotonic() - t < 18
+    assert any(d.mount == "/" for d in snap.disks)
