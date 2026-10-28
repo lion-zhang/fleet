@@ -512,3 +512,30 @@ def test_the_probe_spools_in_a_folder_nobody_else_can_reach(tmp_path):
     assert mode == "drwx------", p.stdout + p.stderr
     assert sorted(files) == ["probe", "probe.err", "probe.out"]
     assert list(tmp_path.iterdir()) == [], "and nothing is left behind"
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="the far side's sh")
+@pytest.mark.parametrize("says", ["Illegal variable name.",
+                                  "fish: Unsupported use of '='. In fish, please use 'set d'."])
+def test_a_login_shell_that_is_not_sh_gets_the_probe_inside_sh(monkeypatch, says):
+    """ssh hands the remote command to the user's own shell: tcsh on many clusters,
+    fish on many laptops. The probe's sh code failed there on its first `$(`, and the
+    machine read as broken. It goes again inside `sh -c`, which every shell reads."""
+    from fleet.probe import runner
+    from fleet.ssh.cmd import Endpoint
+
+    calls = []
+
+    def spawn(argv, payload, timeout, popen_kw):
+        calls.append(argv[-1])
+        if len(calls) == 1:
+            return 1, b"", says.encode()
+        assert "!" not in argv[-1], "csh would read it as history"
+        p = subprocess.run(["sh", "-c", argv[-1]], input=payload, capture_output=True,
+                           timeout=60)
+        return p.returncode, p.stdout, p.stderr
+
+    monkeypatch.setattr(runner, "_spawn", spawn)
+    res = runner.run_probe(Endpoint(target="box", user="me"), mode="light")
+    assert res.ok, res
+    assert calls[1].startswith("sh -c '") and not calls[0].startswith("sh -c")

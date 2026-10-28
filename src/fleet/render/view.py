@@ -456,7 +456,10 @@ def _alerts(dev: Device, snap: dict | None, state: dict | None) -> list[str]:
                 out.append(f"{st.get('kind')} folder {st.get('path')} does not exist there")
     if dev.kind is Kind.SHARED:
         out.append("shared multi-user host -- not claimable")
-    if dev.kind is Kind.RENTAL and snap:
+    # Only from a reading that just came in. The snapshot outlives the machine: a rental
+    # stopped on its provider's page kept saying it was idle and costing money, from its
+    # last reading, while the summary rightly counted it as not running.
+    if dev.kind is Kind.RENTAL and snap and (state or {}).get("status") == "ok":
         gpus = [_gpu_view(g) for g in snap.get("gpus", [])]
         if gpus and not any(g["busy"] for g in gpus):
             out.append("RENTAL is idle -- this is costing money")

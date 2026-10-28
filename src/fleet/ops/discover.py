@@ -73,9 +73,14 @@ def _args(rest: str) -> list[str]:
     return [a for a in out if a]
 
 
-def _config_hosts(path: Path, seen: set[Path] | None = None) -> list[str]:
+def _config_hosts(path: Path, seen: set[Path] | None = None,
+                  base: Path | None = None) -> list[str]:
     """The literal `Host` names in an ssh config, following `Include`."""
     seen = seen if seen is not None else set()
+    # ssh reads a relative Include against ~/.ssh -- the folder of the config it started
+    # from -- however deep the file naming it is: one in config.d/ naming `work/*` means
+    # ~/.ssh/work/*, which was looked for in config.d/work/ and its hosts never listed.
+    base = base or path.parent
     try:
         path = path.resolve()
         if path in seen:
@@ -100,10 +105,9 @@ def _config_hosts(path: Path, seen: set[Path] | None = None) -> list[str]:
             for pattern in _args(rest):
                 pattern = os.path.expanduser(pattern)
                 if not os.path.isabs(pattern):
-                    # Relative to ~/.ssh for the user's config -- the folder it is in.
-                    pattern = str(path.parent / pattern)
+                    pattern = str(base / pattern)
                 for inc in sorted(glob.glob(pattern)):
-                    out += _config_hosts(Path(inc), seen)
+                    out += _config_hosts(Path(inc), seen, base)
         elif key == "host":
             for h in _args(rest):
                 # Patterns describe many hosts and name none of them, and a name with a

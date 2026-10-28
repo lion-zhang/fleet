@@ -290,11 +290,31 @@ def run_probe(ep: Endpoint, *, mode: str = "full", timeout: float = 20.0,
     res = _run_probe_once(ep, mode=mode, timeout=timeout, connect_timeout=connect_timeout,
                           multiplex=multiplex, disk_paths=disk_paths, light=light,
                           refresh=refresh)
-    if res.ok or not _looks_like_cmd_exe(res):
+    if res.ok:
+        return res
+    again = {"windows": True} if _looks_like_cmd_exe(res) else \
+        {"in_sh": True} if _looks_like_another_shell(res) else None
+    if again is None:
         return res
     return _run_probe_once(ep, mode=mode, timeout=timeout, connect_timeout=connect_timeout,
                            multiplex=multiplex, disk_paths=disk_paths, light=light,
-                           refresh=refresh, windows=True)
+                           refresh=refresh, **again)
+
+
+# What a login shell that is not sh says to the probe's sh code -- ssh hands a command to
+# the user's own shell, and on a cluster that is often tcsh, on a laptop often fish.
+_NOT_SH = ("illegal variable name",           # csh, tcsh: `$(`
+           "variable syntax",                 # csh, tcsh
+           "unsupported use of '='",          # fish: `d=...`
+           "fish: ")
+
+
+def _looks_like_another_shell(res: ProbeResult) -> bool:
+    """Whether the login shell is one that cannot read sh, so the probe goes again
+    inside `sh -c`. Not done the first time: a Windows host that happens to have an
+    `sh` on its PATH would be handed a quoted string cmd.exe does not unquote."""
+    haystack = f"{res.error_detail} {res.stderr_tail}".lower()
+    return any(sig in haystack for sig in _NOT_SH)
 
 
 def _looks_like_cmd_exe(res: ProbeResult) -> bool:
@@ -313,7 +333,8 @@ def _looks_like_cmd_exe(res: ProbeResult) -> bool:
 def _run_probe_once(ep: Endpoint, *, mode: str = "full", timeout: float = 20.0,
                     connect_timeout: int = 8, multiplex: bool = True,
                     disk_paths: list[str] | None = None, light: bool = False,
-                    refresh: bool = False, windows: bool = False) -> ProbeResult:
+                    refresh: bool = False, windows: bool = False,
+                    in_sh: bool = False) -> ProbeResult:
     env = probe_env(mode, disk_paths, light=light, refresh=refresh)
     if windows:
         # PowerShell reads the script from stdin with a trailing `-`, the same shape as
@@ -332,8 +353,13 @@ def _run_probe_once(ep: Endpoint, *, mode: str = "full", timeout: float = 20.0,
                           remote="powershell -NoProfile -Command -", env=None)
     else:
         payload = PAYLOAD.read_text(encoding="utf-8")
+        remote = _posix_remote(env)
+        if in_sh:
+            # One line in single quotes reads the same to csh, fish and sh: no `$`
+            # or `{` inside them means anything to any of the three.
+            remote = f"sh -c {shlex.quote(remote)}"
         argv = build_argv(ep, connect_timeout=connect_timeout, multiplex=multiplex,
-                          remote=_posix_remote(env), env=None)
+                          remote=remote, env=None)
     started = time.monotonic()
     # Bytes, not text. `text=True` wraps stdin in a TextIOWrapper with newline=None,
     # which rewrites every \n to \r\n on Windows -- so a POSIX center sent payload.sh

@@ -56,6 +56,18 @@ def test_host_lines_are_read_as_ssh_reads_them(home):
                                                            "quoted", "ok"]
 
 
+def test_a_relative_include_in_an_included_file_is_read_from_dot_ssh(home):
+    """ssh reads `Include work/*` against ~/.ssh wherever the line is; fleet read it
+    against the folder of the file holding it, and listed none of those hosts."""
+    ssh = home / ".ssh"
+    (ssh / "config").write_text("Include conf.d/*\n")
+    (ssh / "conf.d").mkdir()
+    (ssh / "conf.d" / "all").write_text("Include work/*\n")
+    (ssh / "work").mkdir()
+    (ssh / "work" / "boxes").write_text("Host work-gpu\n")
+    assert [c.name for c in discover.ssh_config(home)] == ["work-gpu"]
+
+
 def test_an_include_that_includes_itself_is_read_once(home):
     (home / ".ssh" / "config").write_text("Include config\nHost a\n")
     assert [c.name for c in discover.ssh_config(home)] == ["a"]
@@ -185,6 +197,19 @@ def test_no_key_at_all_says_to_make_one_first(monkeypatch):
 ])
 def test_every_other_failure_has_its_own_answer(status, word):
     assert word in doctor.advise(_dev(), status, "").why
+
+
+@pytest.mark.parametrize("port,fix", [
+    (22, "ssh-keygen -R 10.0.0.5"),
+    (40001, "ssh-keygen -R '[10.0.0.5]:40001'"),
+])
+def test_a_changed_host_key_is_removed_for_that_port_alone(port, fix):
+    """On any port but 22 known_hosts keeps the key as [host]:port; the bare host is the
+    sshd on port 22 -- a provider's gateway, the box itself. The fix removed that key
+    too, and the next connection there took whatever key it was shown."""
+    dev = _dev(endpoints=[{"target": "10.0.0.5", "user": "me", "port": port}])
+    (line,) = doctor.advise(dev, Status.HOST_KEY_MISMATCH.value, "").fix
+    assert line.endswith(fix) and line.count("ssh-keygen") == 1
 
 
 def test_doctor_changes_nothing_and_answers_as_json(monkeypatch, mykey):

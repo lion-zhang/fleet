@@ -514,6 +514,8 @@ def build_argv(ep: Endpoint, *, connect_timeout: int = 8, multiplex: bool = True
         argv += ["-o", "ControlMaster=auto", "-o", f"ControlPath={cdir}/%C",
                  "-o", "ControlPersist=120"]
     argv += ["--", f"{ep.user}@{ep.target}" if ep.user else ep.target]
+    # Through `env`, which every login shell runs: `KEY=value cmd` is sh's syntax, and
+    # tcsh -- the shell on many clusters -- answered "KEY=value: Command not found".
     prefix = " ".join(f"{k}={shlex.quote(v)}" for k, v in (env or {}).items())
-    argv.append(f"{prefix} {remote}".strip())
+    argv.append(f"env {prefix} {remote}" if prefix else remote)
     return argv
