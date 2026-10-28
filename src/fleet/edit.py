@@ -149,6 +149,11 @@ def apply_edits(dev: Device, *, endpoint: Endpoint | None = None,
     if endpoint is not None:
         _replace_primary(dev, endpoint, out)
         _migrate_identity(dev, endpoint, out)
+    if disk_paths and not all(str(p).strip() for p in disk_paths):
+        # Recorded as a path of "" and shown as ['']: the probe watched no folder, and
+        # nothing said which. Back to every disk has its own flag.
+        raise ValueError("--disk-path needs a folder; --clear-disk-paths watches every "
+                         "disk again")
     if disk_paths is not None and list(disk_paths) != list(dev.disk_paths):
         before = list(dev.disk_paths) or ["auto"]
         dev.disk_paths = list(disk_paths)

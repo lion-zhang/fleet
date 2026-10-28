@@ -18,6 +18,7 @@ from rich.markup import escape
 from rich.table import Table
 
 from ..models import Device, Kind
+from .view import usd
 
 # Block characters, not "#": rich parses a leading "#" inside brackets as a hex colour
 # tag and silently eats the whole bar. Every meter is also escape()d at the render site,
@@ -502,7 +503,7 @@ def _ls_table(rows: list[dict[str, Any]], gave_up: set[str]) -> Table:
                  "GPU": gpu, "VRAM FREE": vram, "CPU": str(r["cpu_cores"] or "-"),
                  "RAM FREE": f"{r['ram_free_gb']:.0f}G" if r["ram_free_gb"] is not None else "-",
                  "DISK FREE": disk_cell(r),
-                 "$/HR": f"${r['usd_per_hour']:.2f}" if r["usd_per_hour"] else "-",
+                 "$/HR": usd(r["usd_per_hour"]) if r["usd_per_hour"] else "-",
                  "AGE": age, "NOTE": note}
         t.add_row(*(cells[col] for col, _ in columns if shown.get(col, True)))
     return t

@@ -209,7 +209,7 @@ def cmd_ls(names: list[str] = typer.Argument(None, help="only these devices"),
         console.print(f"[yellow]![/yellow] [dim]{note}[/dim]")
     s = view["summary"]
     console.print(f"\n[dim]{s['online']}/{s['total']} online · {s['gpus_free']} free GPU(s)"
-                  + (f" · ${s['hourly_burn']:.2f}/hr burning" if s["hourly_burn"] else "") + "[/dim]")
+                  + (f" · {view_mod.usd(s['hourly_burn'])}/hr burning" if s["hourly_burn"] else "") + "[/dim]")
 
 
 def _rescanned(names: list[str] | None, *, refresh: bool, rescan: bool, wait: int,
@@ -548,7 +548,16 @@ def _edit_machine_file(dev, json_out: bool, *, paths: list[str], endpoints: list
             _emit(doc, True)
         return doc
     if before == after:
-        console.print(f"[dim]· {dev.name}'s machine.yaml already says that.[/dim]")
+        # With more to do here (a tag kept with --local, being removed), the answer is
+        # what that changed: "machine.yaml already says that" read as nothing done.
+        if not emit:
+            return doc
+        if tags_remove and not (paths or endpoints or tags_add or note is not None
+                                or cost is not None):
+            console.print(f"[dim]· {dev.name} has no tag "
+                          f"{escape(', '.join(tags_remove))}.[/dim]")
+        else:
+            console.print(f"[dim]· {dev.name}'s machine.yaml already says that.[/dim]")
         return doc
     for kind in wanted:
         items = result.get("paths", {}).get(kind)
@@ -563,7 +572,7 @@ def _edit_machine_file(dev, json_out: bool, *, paths: list[str], endpoints: list
                       f"{escape(' '.join(map(str, result.get('tags', [])))) or '-'}")
     if cost is not None:
         c = (result.get("cost") or {}).get("usd_per_hour")
-        console.print(f"[green]✓[/green] {dev.name} cost: " + (f"${c:.2f}/hr" if c else "cleared"))
+        console.print(f"[green]✓[/green] {dev.name} cost: " + (f"{view_mod.usd(c)}/hr" if c else "cleared"))
     if note is not None:
         console.print(f"[green]✓[/green] {dev.name} note: " + escape(result.get("notes") or "cleared"))
     console.print("  [dim]kept in machine.yaml on the machine itself, so everyone who looks "
@@ -759,8 +768,14 @@ def cmd_add(ssh_command: str = typer.Argument(None, help='e.g. "ssh -p 58418 roo
         elif action == "unchanged":
             console.print(f"[dim]· {dev.name} {what} already recorded with this endpoint.[/dim]")
         if action != "added" and name and name != dev.name:
-            console.print(f"  [dim]it keeps its name; to rename it: [bold]fleet edit "
-                          f"{dev.name} --name {asked}[/bold][/dim]")
+            # Offering a rename to a name another machine has sent people to a command
+            # that only said no.
+            if asked in inv.handles(devices, excluding=dev.id):
+                console.print(f"  [dim]it keeps its name; another machine already answers "
+                              f"to {asked!r}[/dim]")
+            else:
+                console.print(f"  [dim]it keeps its name; to rename it: [bold]fleet edit "
+                              f"{dev.name} --name {asked}[/bold][/dim]")
         if action == "added":
             console.print(f"[green]✓[/green] added [bold]{dev.name}[/bold] {what}")
             if not name:
@@ -824,7 +839,7 @@ def _usable_names(**given: str | None) -> None:
             try:
                 check_name(value, what)
             except ValueError as exc:
-                err.print(f"[red]{exc}[/red]")
+                err.print(f"[red]{escape(str(exc))}[/red]")
                 raise typer.Exit(2)
 
 
@@ -1029,7 +1044,7 @@ def cmd_edit(name: str = typer.Argument(None, help="defaults to this machine"),
     except ValueError as exc:
         # apply_edits refuses in words -- a clashing alias, a name already taken -- and
         # those words are the whole answer. A traceback around them was not.
-        err.print(f"[red]{exc}[/red]")
+        err.print(f"[red]{escape(str(exc))}[/red]")
         raise typer.Exit(2)
     if not result.changes:
         if _emit({**(on_machine_doc or {}), "name": dev.name, "changes": []}, json_out):
@@ -1053,7 +1068,7 @@ def cmd_edit(name: str = typer.Argument(None, help="defaults to this machine"),
     try:
         _, (dev, result) = inv.update(_apply)
     except ValueError as exc:
-        err.print(f"[red]{exc}[/red]")
+        err.print(f"[red]{escape(str(exc))}[/red]")
         raise typer.Exit(2)
     if result.previous_id:
         # the cache is keyed by id; without this the device looks brand new
@@ -1499,7 +1514,7 @@ def cmd_top(name: str = typer.Argument(None, help="one device, instead of the wh
         s = view["summary"]
         return Group(table, Text.from_markup(
             f"\n[dim]{s['online']}/{s['total']} online · {s['gpus_free']} free GPU(s)"
-            + (f" · ${s['hourly_burn']:.2f}/hr" if s["hourly_burn"] else "")
+            + (f" · {view_mod.usd(s['hourly_burn'])}/hr" if s["hourly_burn"] else "")
             + ("  ·  q quit   r refresh" if keys else "") + "[/dim]"))
 
     # A live loop in a pipe would spin forever, and an agent is exactly what would run
