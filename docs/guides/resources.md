@@ -90,6 +90,7 @@ Environments are looked for in the usual places: the system Python, conda, minif
 mamba installs and their `envs/`, `~/.venvs/*`, `~/venv*`, `~/.venv`, `.venv` and `venv`
 one folder below your home, pyenv versions, and `/workspace/.venv` on rentals. To add an
 environment fleet does not find, name it in the machine's `machine.yaml` under `envs`.
+Up to 40 environments are read on each machine, the ones named there first.
 
 **Packages are read from the names of their install folders, never by importing them.**
 Importing torch takes seconds and can start a CUDA context on a GPU somebody else is

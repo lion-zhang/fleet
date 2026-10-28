@@ -646,6 +646,9 @@ scan_site() {  # env-label python-version site-packages-dir
     }'
 }
 env_roots() {
+  # Named ones first: the list is cut at 40, and those came last, so on a machine with
+  # that many of its own the very environment you named to be found never was.
+  printf '%s\n' "$paths" | awk -F'|' '$1=="envs"{print $2}'
   for d in "$HOME/miniconda3" "$HOME/anaconda3" "$HOME/miniforge3" "$HOME/mambaforge" \
            "$HOME/micromamba" "$HOME/.conda" /opt/conda /opt/miniconda3; do
     [ -d "$d" ] || continue
@@ -656,7 +659,6 @@ env_roots() {
            "$HOME"/.pyenv/versions/* /workspace/.venv /workspace/*/.venv; do
     [ -d "$d/lib" ] && echo "$d"
   done
-  printf '%s\n' "$paths" | awk -F'|' '$1=="envs"{print $2}'
 }
 software_scan() {
   echo "#SOFTWARE key|value"

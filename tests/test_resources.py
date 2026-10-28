@@ -171,6 +171,19 @@ def test_python_packages_are_read_from_their_folders_not_imported(tmp_path):
 
 
 @posix
+def test_an_environment_named_in_machine_yaml_is_read_on_a_machine_with_many(tmp_path):
+    """The list is cut at 40, and the ones you name came last: on a machine with that
+    many of its own, the environment named to be found never was."""
+    home = make_home(tmp_path, "paths:\n  envs: ~/special/env\n")
+    for i in range(45):
+        venv(home, f"e{i:02d}", "3.11", "torch-2.0.0")
+    site = home / "special" / "env" / "lib" / "python3.12" / "site-packages"
+    (site / "vllm-0.6.0.dist-info").mkdir(parents=True)
+    got = {(p.env, p.package) for p in parse_payload(probe(home)).pyenvs}
+    assert ("~/special/env", "vllm") in got
+
+
+@posix
 def test_the_software_scan_is_cached_and_a_light_probe_never_rebuilds_it(tmp_path):
     home = make_home(tmp_path)
     venv(home, "a", "3.11", "torch-2.0.0")
