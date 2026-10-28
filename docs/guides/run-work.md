@@ -49,8 +49,10 @@ longer.
 
 fleet has no copy command. Get code onto a machine the way you would by hand: clone it
 there (`fleet ssh gpu-box -- 'git clone …'`), or pull from wherever your data lives.
-`scp` and `rsync` work as they always do: fleet's machines are reached with your ssh, so
-any route it uses, they can use too.
+`scp` and `rsync` work as they always do, given the machine's address: `fleet show NAME`
+prints the ssh command fleet uses under `connect` (`ssh -p 40001 root@1.2.3.4`), and
+its user, address and port are what they take (`scp -P 40001 file root@1.2.3.4:`). A
+machine you added by a `Host` name from `~/.ssh/config` is reached by that name.
 
 ## When a machine refuses
 
