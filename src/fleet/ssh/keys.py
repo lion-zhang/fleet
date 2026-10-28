@@ -86,10 +86,10 @@ def remote_device_id_command(device_id: str, *, host: str = "",
     where fleet on that machine looks (`identity.DEVICE_ID_FILE`) and where the probe
     reads it, so every fleet that looks at it, and every later probe, agree.
 
-    On Linux and macOS the line names the host it is for, and the lines for other hosts
-    are kept: clones that share a home -- containers on one volume, nodes on one NFS
-    home -- share the file too, and the one id in it was read by all of them, so the
-    next `fleet add` took one clone for the other.
+    On Linux and macOS it also goes in `device-id.HOST`, which is read first: clones that
+    share a home -- containers on one volume, nodes on one NFS home -- share the folder,
+    and the one id in `device-id` was read by all of them, so the next `fleet add` took
+    one clone for the other. `device-id` stays as it was, for a fleet older than this.
     """
     if not re.fullmatch(r"[A-Za-z0-9:._-]{1,200}", device_id):
         raise ValueError(f"not a device id: {device_id!r}")
@@ -103,8 +103,6 @@ def remote_device_id_command(device_id: str, *, host: str = "",
     return ('case "$(uname -s)" in '
             'Darwin) d="$HOME/Library/Application Support/fleet" ;; '
             '*) d="$HOME/.config/fleet" ;; '
-            'esac; mkdir -p "$d" && f="$d/device-id" && '
-            + (f"{{ awk -v h={host} 'NF >= 2 && $2 != h' \"$f\" 2>/dev/null; "
-               f'echo {device_id} {host}; }} > "$f.$$" && mv -f "$f.$$" "$f"' if host
-               else f'echo {device_id} > "$f"')
+            f'esac; mkdir -p "$d" && echo {device_id} > "$d/device-id"'
+            + (f' && echo {device_id} > "$d/device-id.{host}"' if host else "")
             + ' && echo ok')

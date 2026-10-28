@@ -156,13 +156,14 @@ def test_clones_that_share_a_home_each_read_their_own_id(tmp_path, monkeypatch):
     home = tmp_path / "home"
     home.mkdir()
     env = {**os.environ, "HOME": str(home)}
-    for host in ("node8", "node9", "node8"):     # node8 written again: still one line
+    for host in ("node8", "node9", "node8"):
         p = subprocess.run(["sh", "-c", remote_device_id_command(f"{BASE}:{host}", host=host)],
                            capture_output=True, text=True, env=env)
         assert p.stdout.strip() == "ok", p.stderr
     folder = home / ("Library/Application Support/fleet" if sys.platform == "darwin"
                      else ".config/fleet")
-    assert len((folder / "device-id").read_text().splitlines()) == 2
+    assert (folder / "device-id.node9").read_text().strip() == f"{BASE}:node9"
+    assert (folder / "device-id").read_text() == f"{BASE}:node8\n", "as an older fleet reads it"
 
     def probed_as(host: str) -> str:
         bin_ = tmp_path / host

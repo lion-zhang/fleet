@@ -92,12 +92,15 @@ def _fleet_files() -> list[Path]:
     folder (`.NAME.queue`) goes with it.
     """
     from ..state import store
+    import socket
+
     from ..state import inventory as inv
     from . import identity
 
     cfg, st = config.CONFIG_DIR, config.STATE_DIR
     named = [
         inv.INVENTORY_PATH, config.CONFIG_PATH, identity.device_id_file(),
+        identity.device_id_file().with_name(f"device-id.{socket.gethostname()}"),
         cfg / "discover-hidden.txt",
         st / "first-run-done",
         store.DB_PATH, store.DB_PATH.with_name(store.DB_PATH.name + "-wal"),

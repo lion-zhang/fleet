@@ -48,19 +48,19 @@ def assigned_id(base: str) -> str:
     """
     import socket
 
+    path = device_id_file()
+    # This host's own file first: clones that share a home share the folder. Where
+    # others have one and this host has none, the plain file is a copy of theirs.
+    mine = path.with_name(f"{path.name}.{socket.gethostname()}")
     try:
-        lines = device_id_file().read_text(encoding="utf-8").splitlines()
+        text = mine.read_text(encoding="utf-8").strip()
     except OSError:
-        return ""
-    # Lines that name a host are for that host (clones sharing a home share the file);
-    # one that names none is for whoever reads it.
-    here, text = socket.gethostname(), ""
-    for words in (line.split() for line in lines):
-        if len(words) >= 2 and words[1] == here:
-            text = words[0]
-            break
-        if len(words) == 1 and not text:
-            text = words[0]
+        if any(path.parent.glob(f"{path.name}.*")):
+            return ""
+        try:
+            text = path.read_text(encoding="utf-8").strip()
+        except OSError:
+            return ""
     return text if base and text.startswith(base + ":") else ""
 
 
