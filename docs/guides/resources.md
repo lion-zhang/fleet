@@ -85,7 +85,7 @@ A declared server is asked on every probe, listed by `fleet models` with `"sourc
   sglang, mlx, mlx-lm, omlx, jax, tensorflow, flash-attn, xformers, triton, bitsandbytes,
   peft, trl, unsloth, llama-cpp-python, onnxruntime, tensorrt and ray.
 - **Containers:** the running Docker containers and their images, when Docker answers
-  without `sudo`.
+  without `sudo`: the first 20, and `containers_total` in `--json` says how many run.
 
 Environments are looked for in the usual places: the system Python, conda, miniforge and
 mamba installs and their `envs/`, `~/.venvs/*`, `~/venv*`, `~/.venv`, `.venv` and `venv`
