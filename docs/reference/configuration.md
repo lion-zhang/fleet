@@ -87,7 +87,8 @@ longer needed, and ignore it.
 ## On the machines you watch
 
 fleet keeps nothing about access there. The probe reads each machine's own
-`machine.yaml` — `/etc/fleet/machine.yaml`, then `~/.config/fleet/machine.yaml`
+`machine.yaml` — `/etc/fleet/machine.yaml`, then `~/.config/fleet/machine.yaml` (on a Mac
+without one, `~/Library/Application Support/fleet/machine.yaml`)
 (Windows: `%ProgramData%\fleet\machine.yaml`, then `%LOCALAPPDATA%\fleet\machine.yaml`) —
 and on Linux and macOS keeps a cache in `~/.cache/fleet`. The full list is in
 [What fleet changes](../guides/what-fleet-changes.md); the file's format is in

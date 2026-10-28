@@ -360,9 +360,10 @@ def _show_unrecorded_self() -> dict:
 
 
 def _print_show(r: dict) -> None:
+    # A machine never reached has no OS or arch yet: "timeout · ? · " ended on nothing.
+    head = [r["kind"], r["status"], r.get("os") or "", r.get("arch") or ""]
     console.print(f"\n{_DOT.get(r['status'],'?')} [bold]{escape(r['name'])}[/bold]  "
-                  f"[dim]{escape(r['kind'])} · {r['status']} · {escape(r.get('os') or '?')} · "
-                  f"{escape(r.get('arch') or '')}[/dim]")
+                  f"[dim]{escape(' · '.join(h for h in head if h))}[/dim]")
     if r.get("error"):
         console.print(f"  [red]{r['error']['class']}[/red]: {escape(r['error']['detail'] or '')}")
     if r.get("cpu_model"):
@@ -526,11 +527,12 @@ def _edit_machine_file(dev, json_out: bool, *, paths: list[str], endpoints: list
             tags_add=tags_add, tags_remove=tags_remove,
             cost=cost if cost else None, clear_cost=cost == 0)
     except (machinefile.MachineFileError, notes_mod.NotesError) as exc:
-        if not _emit({"ok": False, "name": dev.name, "error": str(exc),
-                      "hint": "--local keeps tags and cost in this machine's own list"},
-                     json_out):
+        hint = ({} if isinstance(exc, notes_mod.TooLong) else
+                {"hint": "--local keeps tags and cost in this machine's own list"})
+        if not _emit({"ok": False, "name": dev.name, "error": str(exc), **hint}, json_out):
             err.print(f"[red]Could not change {dev.name}'s machine.yaml:[/red] {escape(str(exc))}")
-            if tags_add or tags_remove or cost is not None:
+            if (tags_add or tags_remove or cost is not None) and not isinstance(
+                    exc, notes_mod.TooLong):
                 err.print("  [dim]to keep tags or cost here instead: add --local[/dim]")
         raise typer.Exit(1)
     result = notes_mod.parse(after)

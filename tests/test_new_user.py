@@ -273,3 +273,16 @@ def test_a_job_the_login_cannot_see_has_no_runtime_in_json():
 
     (job,) = jobs_view([_hidden_job_row()])["jobs"]
     assert job["pid"] == 7919 and job["runtime_s"] is None
+
+
+def test_show_of_a_machine_never_reached_ends_on_what_it_knows(capsys):
+    """A machine that never answered has no OS or arch yet: its header read
+    "permanent · timeout · ? · " and stopped there."""
+    from fleet.render.view import Detail, device_view
+
+    dev = Device(id="id:quiet", name="quiet", kind=Kind.PERMANENT,
+                 endpoints=[{"target": "quiet", "user": "me", "port": 22}])
+    row = device_view(dev, {"status": "timeout", "last_probe_at": 1}, None, Detail.FULL)
+    cli._print_show(row)
+    (head,) = [ln for ln in capsys.readouterr().out.splitlines() if "quiet" in ln][:1]
+    assert head.rstrip().endswith("permanent · timeout")

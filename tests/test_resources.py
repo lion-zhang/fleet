@@ -578,6 +578,65 @@ def test_a_file_saved_with_a_bom_is_still_one_we_can_change(tmp_path, monkeypatc
 
 
 @posix
+def test_a_machine_file_linked_from_dotfiles_is_written_through_the_link(tmp_path, monkeypatch):
+    """`fleet edit` renamed its copy over the link: the dotfiles repo never saw the change,
+    the link was gone, and a file kept 0600 came back world-readable."""
+    from fleet.ops import machinefile
+
+    monkeypatch.setenv("HOME", str(tmp_path))
+    kept = tmp_path / "dotfiles" / "machine.yaml"
+    kept.parent.mkdir()
+    kept.write_text("cost: 1\n")
+    kept.chmod(0o600)
+    link = tmp_path / ".config" / "fleet" / "machine.yaml"
+    link.parent.mkdir(parents=True)
+    link.symlink_to(Path("..", "..", "dotfiles", "machine.yaml"))
+    machinefile.change(None, "posix", tags_add=["mine"])
+    assert link.is_symlink()
+    assert notes.parse(kept.read_text())["tags"] == ["mine"]
+    assert kept.stat().st_mode & 0o777 == 0o600
+    assert sorted(p.name for p in link.parent.iterdir()) == ["machine.yaml"]
+    assert sorted(p.name for p in kept.parent.iterdir()) == ["machine.yaml"]
+
+
+@posix
+def test_a_macs_machine_file_in_application_support_is_the_one_changed(tmp_path, monkeypatch):
+    """The probe reads ~/Library/Application Support/fleet/machine.yaml when ~/.config has
+    none; `fleet edit` wrote a new ~/.config one holding only the edit, which the probe
+    then read instead, so the machine's folders and notes were gone from every view."""
+    from fleet.ops import machinefile
+
+    monkeypatch.setenv("HOME", str(tmp_path))
+    mac = tmp_path / "Library" / "Application Support" / "fleet" / "machine.yaml"
+    mac.parent.mkdir(parents=True)
+    mac.write_text("paths:\n  models: [/m]\n")
+    machinefile.change(None, "posix", tags_add=["mine"])
+    assert not (tmp_path / ".config").exists()
+    assert notes.parse(mac.read_text()) == {"paths": {"models": ["/m"]}, "tags": ["mine"]}
+    assert notes.parse(machinefile.read(None, "posix"))["tags"] == ["mine"]
+
+
+@posix
+def test_an_edit_that_would_make_the_file_too_big_to_read_changes_nothing(tmp_path, monkeypatch):
+    """The probe reads no machine.yaml past 8 KB. Long folder lists wrote one anyway,
+    printed their ✓, and the machine's folders, tags and cost were gone from every view."""
+    from fleet.ops import machinefile
+
+    monkeypatch.setenv("HOME", str(tmp_path))
+    f = tmp_path / ".config" / "fleet" / "machine.yaml"
+    f.parent.mkdir(parents=True)
+    f.write_text("paths:\n  models: [/m]\n")
+    many = {f"kind{k}": [f"/{'p' * 280}/{i}" for i in range(10)] for k in range(4)}
+    with pytest.raises(machinefile.MachineFileError, match="over 8 KB"):
+        machinefile.change(None, "posix", paths=many)
+    assert f.read_text() == "paths:\n  models: [/m]\n"
+    # One already over the limit can still be made smaller, and readable again.
+    f.write_text("paths:\n  models: [/m]\nnotes: " + "y" * 9000 + "\n")
+    machinefile.change(None, "posix", note="short")
+    assert notes.parse(f.read_text())["notes"] == "short"
+
+
+@posix
 def test_edits_made_at_the_same_time_are_all_kept(tmp_path, monkeypatch):
     """Two edits that read the same file both passed the check and both replaced it: eight
     `fleet edit --tag` run at once each printed their ✓ and the file kept four tags."""
@@ -858,3 +917,22 @@ def test_the_windows_write_says_when_it_could_not_write(tmp_path):
                        capture_output=True, timeout=120, env=env)
     assert machinefile.DONE in p.stdout, p.stderr
     assert (local / "fleet" / "machine.yaml").read_text() == "cost: 1\n"
+
+
+@pytest.mark.parametrize("edit, said", [
+    ({"note": "word " * 300}, "a note is at most 1000 characters"),
+    ({"tags_add": ["t" * 60]}, "a tag is at most 40 characters"),
+    ({"tags_add": [f"t{i}" for i in range(33)]}, "at most 32 tags"),
+    ({"paths": {"models": [f"/m{i}" for i in range(11)]}}, "at most 10 folders"),
+    ({"paths": {"models": ["/" + "m" * 400]}}, "a folder path is at most 300"),
+])
+def test_an_edit_the_reader_would_cut_is_refused_not_cut(edit, said):
+    """Written whole under a ✓, then cut by every reader: the end of a note gone, and a
+    long tag that `fleet ls --tag` no longer matched."""
+    with pytest.raises(notes.TooLong, match=said):
+        notes.edit("cost: 1\n", **edit)
+
+
+def test_a_file_already_past_a_limit_by_hand_still_takes_other_edits():
+    text = "notes: " + "x " * 800 + "\n"
+    assert notes.parse(notes.edit(text, cost=2.0))["cost"] == {"usd_per_hour": 2.0}

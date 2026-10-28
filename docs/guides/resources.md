@@ -133,6 +133,7 @@ reads:
 |---|---|
 | `/etc/fleet/machine.yaml` | the whole machine, whoever logs in; written by its admin |
 | `~/.config/fleet/machine.yaml` | the user fleet logs in as; this is the one `fleet edit --path` writes |
+| `~/Library/Application Support/fleet/machine.yaml` | the same, on a Mac with no `~/.config/fleet/machine.yaml`; `fleet edit` then writes this one |
 | `%ProgramData%\fleet\machine.yaml`, `%LOCALAPPDATA%\fleet\machine.yaml` | the same two, on Windows |
 
 The user's file is laid over the machine's: a field in it replaces the same field, and
