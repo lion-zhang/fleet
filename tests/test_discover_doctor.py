@@ -47,6 +47,16 @@ def test_hosts_are_read_from_ssh_config_with_includes_and_without_patterns(home)
     assert names == ["lab", "lab-alt", "vast-a100"]
 
 
+def test_where_git_is_pushed_is_not_offered_as_a_machine(home):
+    """`fleet ls --discover` listed github.com, and a second GitHub account's alias,
+    as machines to add: ssh there has no shell to give."""
+    (home / ".ssh" / "config").write_text(
+        "Host github.com\n  User git\nHost github-work\n  HostName github.com\n"
+        "  IdentityFile ~/.ssh/work\nHost gitlab.corp.example\n  User git\n"
+        "Host hf.co\nHost lab\n  HostName 10.0.0.9\n  User me\n")
+    assert [c.name for c in discover.ssh_config(home)] == ["lab"]
+
+
 def test_host_lines_are_read_as_ssh_reads_them(home):
     """A tab after `Host` hid the machine; the "=" of `Host = gpu` was listed as one;
     `Host "gpu"` kept its quotes, and a quoted name with a space was split in two."""
