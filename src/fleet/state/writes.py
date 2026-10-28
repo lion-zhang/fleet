@@ -215,10 +215,17 @@ def _owner_of(path: Path) -> dict | None:
 def _publish(qdir: Path, name: str) -> Path:
     """Write the owner into `name` whole: a hidden temporary file, then a rename."""
     fd, tmp = tempfile.mkstemp(dir=str(qdir), prefix=".tmp-")
-    with os.fdopen(fd, "w") as fh:
-        json.dump(_me(), fh)
     dest = qdir / name
-    os.replace(tmp, dest)
+    try:
+        with os.fdopen(fd, "w") as fh:
+            json.dump(_me(), fh)
+        os.replace(tmp, dest)
+    except BaseException:
+        # A full disk failed the write and left the temporary file, one per command
+        # that tried, in a folder nothing else ever tidies.
+        with contextlib.suppress(OSError):
+            os.unlink(tmp)
+        raise
     return dest
 
 

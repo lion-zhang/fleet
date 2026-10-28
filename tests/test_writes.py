@@ -100,3 +100,19 @@ def test_a_reader_never_sees_a_partial_file(tmp_path):
         seen += 1
     p.join()
     assert p.exitcode == 0 and seen > 0
+
+
+def test_a_ticket_that_cannot_be_written_leaves_nothing_in_the_queue(tmp_path, monkeypatch):
+    """On a full disk each command that tried left an empty temporary file in the queue,
+    and nothing ever tidied them."""
+    path = tmp_path / "machines.yaml"
+
+    def full(*a, **k):
+        raise OSError(28, "No space left on device")
+
+    monkeypatch.setattr(writes.json, "dump", full)
+    for _ in range(3):
+        with pytest.raises(writes.CannotWrite, match="No space left"):
+            with writes.turn(path):
+                pass
+    assert os.listdir(tmp_path / ".machines.yaml.queue") == []
