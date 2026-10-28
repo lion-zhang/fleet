@@ -184,6 +184,7 @@ class Snapshot:
     processes: list[Process] = field(default_factory=list)
     services: list[Service] = field(default_factory=list)
     disks: list[Disk] = field(default_factory=list)
+    missing_disk_paths: list[str] = field(default_factory=list)   # watched, but not there
     slurm_info: dict[str, list[str]] = field(default_factory=dict)
     # What the machine says about itself in its own machine.yaml, checked (notes.py).
     notes: dict = field(default_factory=dict)

@@ -35,7 +35,7 @@ def test_payload_reports_a_configured_path_with_a_space_in_it(tmp_path):
     spaced = tmp_path / "My Data"
     spaced.mkdir()
     rows = _disk_rows(_run_payload(FLEET_DISK_PATHS=f"/definitely/not/here|{spaced}"))
-    assert [r.split("|")[0] for r in rows] == [str(spaced)]
+    assert [r.split("|")[0] for r in rows if not r.endswith("|missing")] == [str(spaced)]
 
 
 def test_probe_env_omits_disk_paths_when_the_device_has_none():
@@ -76,10 +76,21 @@ def test_payload_reports_the_requested_path_even_when_it_is_not_a_mount_point(tm
 
 
 @pytest.mark.skipif(sys.platform == "win32", reason="payload is POSIX sh")
-def test_payload_ignores_a_configured_path_that_does_not_exist():
-    """A stale setting must not break the probe or emit a garbage row."""
-    rows = _disk_rows(_run_payload(FLEET_DISK_PATHS="/definitely/not/here"))
-    assert rows == []
+def test_a_configured_path_that_does_not_exist_is_said_so():
+    """A stale or mistyped setting must not break the probe or read as a disk. Dropped
+    without a word, the machine showed no disk at all and nothing said why."""
+    from fleet.models import Device, Kind
+    from fleet.probe.parse import parse_payload
+    from fleet.render.view import Detail, device_view
+
+    out = _run_payload(FLEET_DISK_PATHS="/definitely/not/here")
+    assert _disk_rows(out) == ["/definitely/not/here|0|0|0|missing"]
+    snap = parse_payload(out)
+    assert snap.disks == [] and snap.missing_disk_paths == ["/definitely/not/here"]
+    v = device_view(Device(id="x", name="box", kind=Kind.PERMANENT),
+                    {"status": "ok", "last_probe_at": 1, "last_ok_at": 1},
+                    snap.to_dict(), Detail.COMPACT)
+    assert any("/definitely/not/here is not there" in a for a in v["alerts"])
 
 
 @pytest.mark.skipif(sys.platform == "win32", reason="payload is POSIX sh")

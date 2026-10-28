@@ -87,13 +87,14 @@ A name may be omitted where the obvious subject is the machine you are on.
     unusual port, an unrecognised program); `NAME=` removes it. Never put a key here
   - A machine that cannot be reached cannot be written to; `--local` keeps tags and cost
     in this machine's own list instead
-- `{cmd} rm NAME` -- stop watching a machine. Nothing on it changes
+- `{cmd} rm NAME --yes` -- stop watching a machine (it asks first, and you have no terminal
+  to answer). Nothing on it changes
 - `{cmd} top` -- live view; needs a terminal, so not for an agent
 - `{cmd} install NAME` -- put fleet on a machine that has none, for agents there
 - `{cmd} update [NAME]` / `--all` -- deploy the newest fleet. It also rewrites this
   description on each machine, so what you read here stays current;
   `{cmd} setup --refresh` does just that part
-- `{cmd} uninstall` -- only when the user asks to remove fleet from this machine: removes
+- `{cmd} uninstall --yes` -- only when the user asks to remove fleet from this machine: removes
   fleet from the agents here (this skill included); `--purge` deletes fleet's files too.
   It prints the last step -- removing the program -- for the user to run
 - `{cmd} paths` -- where fleet keeps its list of machines and its cache here

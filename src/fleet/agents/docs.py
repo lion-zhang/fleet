@@ -265,7 +265,8 @@ def uninstall(root: Path, targets: list[str], *,
             continue
         seen.add(path)
         if not path.exists():
-            changes.append(Change(target, path, "unchanged"))
+            # "unchanged" beside a path read as fleet having failed to remove it.
+            changes.append(Change(target, path, "not there"))
             # Its current copy is gone, but one where it used to be looked for may not
             # be: that is the copy this agent may still be reading.
             changes += _drop_legacy(root, target, seen, dry_run=dry_run)

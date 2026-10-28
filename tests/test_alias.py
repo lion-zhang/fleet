@@ -448,3 +448,26 @@ def test_a_new_machine_keeps_the_tags_it_was_added_with(tmp_path, monkeypatch):
                                 "--tag", "GPU"])
     assert r.exit_code == 0 and "added box" in r.output, r.output
     assert inv.find_exact(inv.load(), "box").tags == ["training", "gpu"]
+
+
+def test_rm_without_a_terminal_says_how_to_go_ahead(tmp_path, monkeypatch):
+    """From a script the prompt read nothing and printed only "Aborted."."""
+    runner = _cli(tmp_path, monkeypatch, [
+        Device(id="linux:machine-id:box", name="box", kind=Kind.PERMANENT,
+               endpoints=[{"target": "10.0.0.5", "user": "root", "port": 22}])])
+    r = runner.invoke(cli.app, ["rm", "box"])
+    assert r.exit_code == 2 and "--yes" in r.output
+    assert [d.name for d in inv.load()] == ["box"]
+
+
+def test_clearing_disk_paths_and_naming_new_ones_keeps_the_new_ones(tmp_path, monkeypatch):
+    """`--clear-disk-paths --disk-path /data` cleared, dropped /data and said "-> auto"."""
+    runner = _cli(tmp_path, monkeypatch, [
+        Device(id="linux:machine-id:box", name="box", kind=Kind.PERMANENT,
+               endpoints=[{"target": "10.0.0.5", "user": "root", "port": 22}],
+               disk_paths=["/old"])])
+    r = runner.invoke(cli.app, ["edit", "box", "--clear-disk-paths", "--disk-path", "/data"])
+    assert r.exit_code == 0, r.output
+    assert inv.load()[0].disk_paths == ["/data"]
+    assert runner.invoke(cli.app, ["edit", "box", "--clear-disk-paths"]).exit_code == 0
+    assert inv.load()[0].disk_paths == []

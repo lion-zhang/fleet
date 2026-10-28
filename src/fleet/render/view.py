@@ -468,6 +468,9 @@ def _alerts(dev: Device, snap: dict | None, state: dict | None) -> list[str]:
             if dv["writable"] and dv["use_pct"] >= DISK_ALERT_PCT:
                 out.append(f"disk {dv['mount']}: {dv['use_pct']}% full, "
                            f"{dv['free_gb']}G left -- a long job will die on this")
+        for path in snap.get("missing_disk_paths") or []:
+            out.append(f"disk path {path} is not there -- "
+                       f"`fleet edit {dev.name} --disk-path` with the right one")
         if snap.get("gpu_present") == "err":
             if snap.get("gpu_vendor") == "amd":
                 out.append(snap.get("gpu_error", "")[:120] or "an AMD GPU tool is here but read no GPU")

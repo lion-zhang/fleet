@@ -90,6 +90,8 @@ def _config_hosts(path: Path, seen: set[Path] | None = None,
     except OSError:
         return []
     out: list[str] = []
+    block: list[str] = []
+    forges: set[str] = set()
     for raw in text.splitlines():
         line = raw.split("#", 1)[0].strip()
         if not line:
@@ -109,13 +111,33 @@ def _config_hosts(path: Path, seen: set[Path] | None = None,
                 for inc in sorted(glob.glob(pattern)):
                     out += _config_hosts(Path(inc), seen, base)
         elif key == "host":
+            block = []
             for h in _args(rest):
                 # Patterns describe many hosts and name none of them, and a name with a
                 # space in it is not one `fleet add` or a shell can be given.
                 if (not any(c in h for c in "*?!") and h.lower() != "localhost"
                         and not any(c.isspace() for c in h)):
                     out.append(h)
-    return list(dict.fromkeys(out))
+                    block.append(h)
+                    if _is_forge(h):
+                        forges.add(h)
+        elif key == "match":
+            block = []
+        # Where git is pushed, not a machine: `ssh github.com` has no shell to give, and
+        # `Host github-work` with `HostName github.com` is how a second account is kept.
+        elif (key == "hostname" and _is_forge(next(iter(_args(rest)), ""))) or (
+                key == "user" and next(iter(_args(rest)), "") == "git"):
+            forges.update(block)
+    return [h for h in dict.fromkeys(out) if h not in forges]
+
+
+_FORGES = ("github.com", "gitlab.com", "bitbucket.org", "codeberg.org", "sr.ht",
+           "gitee.com", "dev.azure.com", "visualstudio.com", "huggingface.co", "hf.co")
+
+
+def _is_forge(host: str) -> bool:
+    host = host.lower()
+    return any(host == d or host.endswith("." + d) for d in _FORGES)
 
 
 def _resolved(host: str, config: Path, timeout: float = 3.0) -> tuple[str, int] | None:
