@@ -720,7 +720,10 @@ fi
 # so a server that only listens on localhost answers too. Two seconds each, eight at most.
 if [ "${FLEET_LIGHT:-}" != "1" ] && { [ -n "$listen" ] || [ -n "$declared" ]; } \
      && { have curl || have wget || have_python; }; then
-  body=$(mktemp 2>/dev/null || echo "/tmp/.fleet-llm.$$")
+  # Without mktemp, beside the script -- the probe's own folder -- not at a name in /tmp
+  # anyone could make first.
+  case "$0" in */*) here=${0%/*} ;; *) here=. ;; esac
+  body=$(mktemp 2>/dev/null || echo "$here/.fleet-llm.$$")
   get() {  # url -> "code seconds"; body in $body
     if have curl; then
       curl -s -m 2 -o "$body" -w '%{http_code} %{time_total}' "$1" 2>/dev/null || echo "000 0"

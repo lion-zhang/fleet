@@ -494,3 +494,21 @@ def test_a_windows_host_is_still_detected_when_cmd_exe_exits_zero():
                         error_detail="payload produced no '#END' sentinel",
                         stderr_tail="sh: 1: df: not found")
     assert not _looks_like_cmd_exe(posix)
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="the far side's sh")
+def test_the_probe_spools_in_a_folder_nobody_else_can_reach(tmp_path):
+    """The script and its output sat in /tmp at names anyone on a shared host could
+    see ($f.out beside a file /tmp lists) and make first: a link there, and the probe
+    truncated whatever it pointed at."""
+    import subprocess
+
+    from fleet.probe.runner import _posix_remote
+
+    script = 'ls -ld "${0%/*}" | cut -c1-10; ls -A "${0%/*}"\n'
+    p = subprocess.run(["sh", "-c", _posix_remote(None)], input=script, text=True,
+                       capture_output=True, env={**os.environ, "TMPDIR": str(tmp_path)})
+    mode, *files = p.stdout.split()
+    assert mode == "drwx------", p.stdout + p.stderr
+    assert sorted(files) == ["probe", "probe.err", "probe.out"]
+    assert list(tmp_path.iterdir()) == [], "and nothing is left behind"

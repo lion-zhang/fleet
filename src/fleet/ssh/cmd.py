@@ -151,11 +151,35 @@ def parse_ssh_command(cmd: str) -> ParsedSsh:
     for value in (out.target, out.jump or ""):
         if value.startswith("-"):
             raise ValueError(f"not an address: {value!r}")
-    if "@" in out.target:
+    if out.target.lower().startswith("ssh://"):
+        _uri(out)
+    elif "@" in out.target:
         user, _, host = out.target.rpartition("@")
         out.user = out.user or user
         out.target = host
     return out
+
+
+def _uri(out: ParsedSsh) -> None:
+    """`ssh://user@host:port`, which ssh takes as a destination. Split on the last `@`
+    like any other, it left `ssh://root` as the user and `host:2222` as the address,
+    and the machine read as off: "DNS lookup failed"."""
+    rest = out.target[len("ssh://"):].rstrip("/")
+    user, _, host = rest.rpartition("@")
+    port = ""
+    if host.startswith("["):                       # ssh://[::1]:2222
+        host, _, after = host[1:].partition("]")
+        port = after[1:] if after.startswith(":") else ""
+    elif host.count(":") == 1:
+        host, _, port = host.partition(":")
+    if not host:
+        raise ValueError(f"no address in {out.target!r}")
+    if port:
+        if not port.isdigit() or not 0 < int(port) < 65536:
+            raise ValueError(f"{port!r} in {out.target!r} is not a port")
+        out.port = out.port or int(port)
+    out.user = out.user or user or None
+    out.target = host
 
 
 def resolve(parsed: ParsedSsh, *, timeout: float = 10.0) -> Endpoint:

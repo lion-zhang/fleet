@@ -191,7 +191,7 @@ they are slow to work out:
 |---|---|---|
 | a probe reading: free GPUs, jobs, servers and their models | 60 seconds, here | `-r` on `fleet ls`, `ps` and `models`; `fleet show` measures by default; `r` in `fleet top` |
 | software versions | 6 hours on the machine, or until the GPU driver changes | `--rescan` on `fleet ls`, `show` and `models` |
-| folder sizes | 6 hours on the machine, or until the folders change | `--rescan` starts measuring in the background; add `--wait 60` to wait for the result |
+| folder sizes | 6 hours on the machine, or until the folders change | `--rescan` starts measuring in the background; add `--wait 60` to wait for the result (the MCP tools wait 45 seconds) |
 
 In JSON, `observed_at` gives the time of the probe and of the software list, and each
 folder's `sized_at` when it was measured.

@@ -1380,7 +1380,7 @@ def cmd_update(name: str = typer.Argument(None, help="defaults to this machine")
 
 
 def _named_rows(names: list[str] | None, json_out: bool, *, refresh: bool,
-                detail: Detail, rescan: bool = False) -> list[dict]:
+                detail: Detail, rescan: bool = False, wait: int = 0) -> list[dict]:
     """The rows for `ps` and `models`: every machine, or the named ones, as `ls` gets them."""
     _first_run("ls")
     unknown = [n for n in (names or []) if inv.find(inv.load(), n) is None]
@@ -1390,8 +1390,8 @@ def _named_rows(names: list[str] | None, json_out: bool, *, refresh: bool,
             err.print(f"[red]No machine named {', '.join(repr(n) for n in unknown)}[/red] "
                       "[dim]-- `fleet ls` lists them all[/dim]")
         raise typer.Exit(1)
-    return _rows(list(names) if names else None, refresh=refresh, detail=detail,
-                 rescan=rescan)
+    return _rescanned(list(names) if names else None, refresh=refresh, rescan=rescan,
+                      wait=wait, detail=detail)
 
 
 @app.command("ps")
@@ -1414,12 +1414,15 @@ def cmd_ps(names: list[str] = typer.Argument(None, help="only these machines"),
 def cmd_models(names: list[str] = typer.Argument(None, help="only these machines"),
                json_out: bool = typer.Option(False, "--json", help="print JSON instead of a table, for scripts and agents"),
                refresh: bool = typer.Option(False, "--refresh", "-r", help="force a live probe"),
-               rescan: bool = typer.Option(False, "--rescan", help="also re-measure the model folders, which machines otherwise cache for 6 hours")):
+               rescan: bool = typer.Option(False, "--rescan", help="also re-measure the model folders, which machines otherwise cache for 6 hours"),
+               wait: int = typer.Option(0, "--wait", metavar="SECONDS",
+                                        help="with --rescan: wait up to this long for the folder sizes it started measuring")):
     """Every model being served across the fleet: which server, where, and how to reach it.
 
     [dim]Example:[/dim]  fleet models --json
     """
-    rows = _named_rows(names, json_out, refresh=refresh, detail=Detail.FULL, rescan=rescan)
+    rows = _named_rows(names, json_out, refresh=refresh, detail=Detail.FULL, rescan=rescan,
+                       wait=wait)
     view = view_mod.models_view(rows)
     if _emit(view, json_out):
         return

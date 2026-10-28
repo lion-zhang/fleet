@@ -141,3 +141,17 @@ def test_a_proxycommand_is_refused_rather_than_dropped(command, monkeypatch):
     monkeypatch.setattr(cmd.subprocess, "run", lambda *a, **k: pytest.fail("ssh was run"))
     with pytest.raises(ValueError, match="ProxyCommand.*~/.ssh/config"):
         cmd.resolve(parse_ssh_command(command))
+
+
+@pytest.mark.parametrize("command,user,target,port", [
+    ("ssh ssh://root@1.2.3.4:40001", "root", "1.2.3.4", 40001),
+    ("ssh://root@1.2.3.4", "root", "1.2.3.4", None),
+    ("ssh://box.example:2222/", None, "box.example", 2222),
+    ("ssh://me@[2001:db8::7]:2222", "me", "2001:db8::7", 2222),
+    ("ssh -p 22 ssh://me@h:2222", "me", "h", 22),
+])
+def test_an_ssh_uri_is_read_as_ssh_reads_it(command, user, target, port):
+    """ssh takes `ssh://user@host:port`. Split on its last `@` like a plain
+    destination, the user came out as `ssh://root` and the address as `host:2222`."""
+    p = parse_ssh_command(command)
+    assert (p.user, p.target, p.port) == (user, target, port)

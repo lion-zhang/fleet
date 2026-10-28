@@ -274,8 +274,8 @@ def test_an_app_can_set_the_disks_to_watch(monkeypatch):
     server = mcpserver.build_server()
     asyncio.run(server.call_tool("edit_machine", {"name": "gpu", "disk_paths": ["/workspace"]}))
     asyncio.run(server.call_tool("edit_machine", {"name": "gpu", "autodetect_disks": True}))
-    assert ran == [["edit", "gpu", "--json", "--disk-path", "/workspace"],
-                   ["edit", "gpu", "--json", "--clear-disk-paths"]]
+    assert ran == [["edit", "--json", "--disk-path", "/workspace", "--", "gpu"],
+                   ["edit", "--json", "--clear-disk-paths", "--", "gpu"]]
 
 
 def test_an_argument_a_tool_does_not_take_is_an_error(monkeypatch):
@@ -344,3 +344,104 @@ def test_a_server_older_than_the_installed_fleet_says_to_restart(monkeypatch):
     monkeypatch.setattr(mcpserver, "_STARTED_AS", "0.5.3")
     out = mcpserver._run(["ls", "--json"])
     assert "0.6.2" in out["restart"] and "0.5.3" in out["restart"], out
+
+
+def test_a_message_is_not_broken_across_lines_when_columns_is_set(monkeypatch):
+    """The server runs fleet with COLUMNS=200, and a console with no terminal then broke
+    a long message mid-list: `notes` came back with a line break between two field
+    names. COLUMNS sets how wide a table may be, not where a sentence ends."""
+    import io
+
+    from fleet import ui
+
+    monkeypatch.setenv("COLUMNS", "40")
+    buf = io.StringIO()
+    c = ui._console(stderr=True, file=buf, color_system=None)
+    c.print("--fields: no such field: nope  fields: " + ", ".join(f"f{i}" for i in range(40)))
+    assert "\n" not in buf.getvalue().rstrip("\n")
+
+
+@pytest.mark.parametrize("tool,args,value", [
+    ("show_machine", {"name": "--help"}, "--help"),
+    ("list_machines", {"names": ["--rescan"]}, "--rescan"),
+    ("list_gpu_jobs", {"names": ["--refresh"]}, "--refresh"),
+    ("list_models", {"names": ["--rescan"]}, "--rescan"),
+    ("doctor_machine", {"name": "--help"}, "--help"),
+    ("add_machine", {"ssh_command": "--help"}, "--help"),
+    ("edit_machine", {"name": "--untag", "add_tags": ["x"]}, "--untag"),
+    ("set_machine_paths", {"machine": "--help", "kind": "models", "paths": ["/m"]}, "--help"),
+    ("set_machine_endpoint", {"machine": "--help", "name": "x", "port": 9000}, "--help"),
+])
+def test_a_name_is_never_read_as_an_option(monkeypatch, tool, args, value):
+    """A machine name or ssh command went into the command line where fleet reads
+    options, so `show_machine(name="--help")` answered with help text and
+    `list_machines(names=["--rescan"])` rescanned every machine."""
+    import asyncio
+
+    from fleet import mcpserver
+
+    ran = []
+    monkeypatch.setattr(mcpserver, "_run", lambda a, *t: ran.append(a) or {"ok": True})
+    asyncio.run(mcpserver.build_server().call_tool(tool, args))
+    (argv,) = ran
+    assert argv[argv.index("--") + 1:] == [value]
+
+
+def test_an_endpoint_path_without_a_slash_is_still_a_path(monkeypatch):
+    """`path="v2"` became `x=8001v2`, refused as not a port, in words the agent never
+    wrote."""
+    import asyncio
+
+    from fleet import mcpserver
+
+    ran = []
+    monkeypatch.setattr(mcpserver, "_run", lambda a, *t: ran.append(a) or {"ok": True})
+    asyncio.run(mcpserver.build_server().call_tool(
+        "set_machine_endpoint", {"machine": "gpu", "name": "x", "port": 8001, "path": "v2"}))
+    assert "x=8001/v2" in ran[0]
+
+
+def test_run_on_machine_never_reads_the_machine_as_an_option(monkeypatch):
+    """`run_on_machine(machine="--help")` printed fleet ssh's help with exit 0: the
+    agent read that as its command having run."""
+    import asyncio
+
+    from fleet import mcpserver
+
+    ran = []
+    monkeypatch.setattr(mcpserver, "_exec", lambda a, *t: ran.append(a) or
+                        __import__("subprocess").CompletedProcess(a, 0, "", ""))
+    asyncio.run(mcpserver.build_server().call_tool(
+        "run_on_machine", {"machine": "--help", "command": "git log -- README.md"}))
+    assert ran == [["ssh", "--", "--help", "git log -- README.md"]]
+
+
+@pytest.mark.parametrize("tool,args", [
+    ("show_machine", {"name": "gpu", "rescan": True}),
+    ("list_machines", {"rescan": True}),
+    ("list_models", {"rescan": True}),
+])
+def test_a_rescan_waits_for_the_folder_sizes_it_starts(monkeypatch, tool, args):
+    """The sizes come from a `du` the probe starts and never waits on, so
+    `rescan=True` -- which the tools say to pass after filling a folder -- answered
+    with the size from before it was filled."""
+    import asyncio
+
+    from fleet import mcpserver
+
+    ran = []
+    monkeypatch.setattr(mcpserver, "_run", lambda a, *t: ran.append(a) or {"ok": True})
+    asyncio.run(mcpserver.build_server().call_tool(tool, args))
+    argv = ran[0]
+    assert "--rescan" in argv and argv[argv.index("--wait") + 1] == str(mcpserver.RESCAN_WAIT_S)
+
+
+def test_fleet_models_can_wait_for_the_folders_it_rescans(monkeypatch):
+    from typer.testing import CliRunner
+
+    from fleet import cli
+
+    seen = {}
+    monkeypatch.setattr(cli, "_rescanned", lambda names, **kw: seen.update(kw) or [])
+    CliRunner().invoke(cli.app, ["models", "--rescan", "--wait", "30", "--json"])
+    assert seen["rescan"] and seen["wait"] == 30
