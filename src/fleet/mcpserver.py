@@ -133,7 +133,7 @@ def _run(args: list[str], timeout: float | None = None) -> Any:
         return {"ok": False, "error": f"`fleet {' '.join(args)}` exceeded "
                                       f"{int(timeout or TIMEOUT_S)}s and was stopped; part "
                                       "of it may already have been applied -- check with "
-                                      "list_machines or show_access before trying again"}
+                                      "list_machines or show_machine before trying again"}
     out, notes = (p.stdout or "").strip(), _clean(p.stderr)[-2000:]
     try:
         data = json.loads(out) if out else {}

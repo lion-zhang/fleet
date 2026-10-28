@@ -403,3 +403,18 @@ def test_a_machine_that_did_not_answer_is_not_called_live():
     c.print(render_fleet([row], {"online": 0, "total": 1, "gpus_free": 0,
                                  "hourly_burn": 0}, 10))
     assert "live" not in c.export_text()
+
+
+def test_one_device_is_headed_by_its_fleet_name():
+    """`fleet top gpu-box` headed "vm-2", whatever the image set as its hostname."""
+    from rich.console import Console
+    from fleet.render.top import render_device
+
+    def shown(row):
+        c = Console(width=120, record=True)
+        c.print(render_device(row))
+        return c.export_text()
+
+    out = shown({"name": "gpu-box", "hostname": "vm-2", "os": "linux"})
+    assert "gpu-box (vm-2)" in out
+    assert "(gpu-box)" not in shown({"name": "gpu-box", "hostname": "gpu-box"})

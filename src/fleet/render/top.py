@@ -336,8 +336,13 @@ def render_device(row: dict[str, Any], live_within: int = 10) -> Table:
     t.add_column(no_wrap=True)
     t.add_column(overflow="ellipsis")
     stale = staleness(row, live_within)
+    # The name you asked for it by. The hostname alone is whatever the image set -- a
+    # rental's `C.12345678` -- and `fleet top gpu-box` headed "vm" read as the wrong box.
+    host = row.get("hostname") or ""
     t.add_row("[bold]host[/bold]",
-              f"{row.get('hostname') or row['name']}  [dim]{row.get('os', '')}[/dim]  "
+              f"{escape(row['name'])}"
+              + (f" [dim]({escape(host)})[/dim]" if host and host != row["name"] else "")
+              + f"  [dim]{row.get('os', '')}[/dim]  "
               + (f"[dim]{stale} old[/dim]" if stale else "[green]live[/green]"))
     pct = cpu_pct(row)
     t.add_row("[bold]cpu[/bold]",

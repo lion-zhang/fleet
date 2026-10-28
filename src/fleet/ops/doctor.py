@@ -112,8 +112,9 @@ def advise(dev: Device, status: str, detail: str, *, snap: dict | None = None,
     if status == Status.HOST_KEY_MISMATCH.value:
         v.why = ("its host key changed. A rental's port given to someone else does this, "
                  "and so does a reinstall -- but so would someone in the middle")
-        v.fix = [f"if you know why it changed:  ssh-keygen -R {ep.target}"
-                 + (f" && ssh-keygen -R '[{ep.target}]:{ep.port}'" if ep.port != 22 else "")]
+        # known_hosts holds the HostName, not an ssh config alias that points at it.
+        v.fix = [f"if you know why it changed:  ssh-keygen -R {ep.address}"
+                 + (f" && ssh-keygen -R '[{ep.address}]:{ep.port}'" if ep.port != 22 else "")]
         return v
     if status in (Status.TIMEOUT.value, Status.UNREACHABLE.value):
         v.why = ("nothing answered at that address: it is off, asleep, or not on a network "

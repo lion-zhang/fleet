@@ -167,6 +167,8 @@ def candidates(*, home: Path | None = None, status: dict | None = None,
     for d in devices:
         for e in d.endpoints:
             known[str(e.get("target", "")).lower()] = d.name
+            if e.get("host"):
+                known.setdefault(str(e["host"]).lower(), d.name)
         known.setdefault(d.name.lower(), d.name)
     out: list[Candidate] = []
     seen: set[str] = set()

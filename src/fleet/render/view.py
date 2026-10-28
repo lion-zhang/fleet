@@ -273,7 +273,9 @@ def gpu_jobs(snap: dict | None) -> dict[str, list[dict]]:
 def _host_of(dev: Device) -> str:
     from ..state.inventory import endpoints_of
     eps = sorted(endpoints_of(dev), key=lambda e: e.preference)
-    return eps[0].target if eps else ""
+    # The address, not an ssh config alias: the URL is for an HTTP client, which has
+    # never heard of ~/.ssh/config.
+    return eps[0].address if eps else ""
 
 
 def model_servers(dev: Device, snap: dict | None, *, here: bool = False) -> list[dict]:
