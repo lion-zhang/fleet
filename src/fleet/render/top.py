@@ -416,9 +416,12 @@ def render_device(row: dict[str, Any], live_within: int = 10) -> Table:
                   f"{escape(meter(disk.get('use_pct', 0), 100, 20))} "
                   f"{_gb(disk.get('free_gb', 0))} free  [dim]{escape(str(disk.get('mount', '')))}[/dim]")
     for proc in (row.get("processes") or [])[:8]:
+        what = proc.get("args") or proc.get("comm") or ""
+        if not proc.get("user") and not what:
+            what = f"pid {proc.get('pid', '?')}, not visible from this login (a container?)"
         t.add_row("[dim]gpu job[/dim]",
                   f"{proc.get('vram_mib', 0)} MiB  {escape(proc.get('user') or '?')}  "
-                  f"[dim]{escape(short_command(proc.get('args') or proc.get('comm', ''), 60))}[/dim]")
+                  f"[dim]{escape(short_command(what, 60))}[/dim]")
     for m in row.get("models") or []:
         t.add_row("[bold]models[/bold]",
                   f":{m.get('port')} {escape(', '.join(m.get('models') or []) or '-')}  "

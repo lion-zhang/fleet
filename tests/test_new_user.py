@@ -241,3 +241,35 @@ def test_a_new_address_that_is_down_or_reaches_the_machine_is_taken(monkeypatch,
     r = CliRunner().invoke(cli.app, ["edit", "gpubox", "--ssh", "ssh -p 2222 me@10.0.0.9"])
     assert r.exit_code == 0, r.output
     assert inv.load()[0].endpoints[0]["target"] == "10.0.0.9"
+
+
+def _hidden_job_row() -> dict:
+    from fleet.render.view import Detail, device_view
+
+    body = ("#FLEET v1\nhost.hostname=gpubox\n"
+            "#GPU idx|uuid|name|total_mib|used_mib|free_mib|util_pct|temp_c|power_w\n"
+            "0|GPU-0|NVIDIA GeForce RTX 4090|24564|20100|4464|97|60|300\n"
+            "#GPUPROC gpu_uuid|pid|vram_mib|user|etimes|comm|args\n"
+            "GPU-0|7919|20000||||\n#END rc=0\n")
+    dev = Device(id="id:gpubox", name="gpubox", kind=Kind.PERMANENT,
+                 endpoints=[{"target": "gpubox", "user": "me", "port": 22}])
+    return device_view(dev, {"status": "ok", "last_probe_at": 1},
+                       parse_payload(body).to_dict(), Detail.FULL)
+
+
+def test_show_and_top_say_a_job_cannot_be_seen_rather_than_that_it_just_started(capsys):
+    """`fleet show` and `fleet top NAME` drew the same container job as `fleet ps` did:
+    "?", "0m" and nothing."""
+    row = _hidden_job_row()
+    cli._print_show(row)
+    shown = capsys.readouterr().out
+    (line,) = [ln for ln in shown.splitlines() if "7919" in ln]
+    assert "not visible from this login" in line and "0m" not in line
+    assert "pid 7919, not visible from this login" in _text(render_device(row))
+
+
+def test_a_job_the_login_cannot_see_has_no_runtime_in_json():
+    from fleet.render.view import jobs_view
+
+    (job,) = jobs_view([_hidden_job_row()])["jobs"]
+    assert job["pid"] == 7919 and job["runtime_s"] is None

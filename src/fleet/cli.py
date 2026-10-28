@@ -377,6 +377,12 @@ def _print_show(r: dict) -> None:
     if r.get("processes"):
         console.print("  [bold]gpu compute[/bold]")
         for p in r["processes"]:
+            # As in `fleet ps`: a job in a container shows no user, age or command from
+            # here, and "0m" with a blank said it had just started and was nothing.
+            if not p["user"] and not (p.get("args") or p.get("comm")):
+                console.print(f"        {p['pid']:>8} {'?':<10} {p['vram_mib']:>6} MiB  {'-':>6}  "
+                              "[dim]not visible from this login (a container?)[/dim]")
+                continue
             console.print(f"        {p['pid']:>8} {escape(p['user'] or '?'):<10} {p['vram_mib']:>6} MiB  "
                           f"{runtime_text(p.get('etimes', 0)):>6}  {escape((p.get('args') or p['comm'])[:90])}")
     elif r["gpus"]:

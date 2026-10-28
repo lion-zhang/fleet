@@ -278,10 +278,14 @@ def gpu_jobs(snap: dict | None) -> dict[str, list[dict]]:
     for p in (snap or {}).get("processes", []):
         if p.get("scope") != "gpu" or p.get("klass") != "compute":
             continue
+        command = p.get("args") or p.get("comm", "")
         out.setdefault(p.get("gpu_uuid", ""), []).append({
             "pid": p.get("pid"), "user": p.get("user", ""),
-            "vram_mib": p.get("vram_mib", 0), "runtime_s": p.get("etimes", 0),
-            "command": p.get("args") or p.get("comm", ""),
+            # None, not 0, for a job this login cannot see into (one in a container): an
+            # agent read 0 as a job that had just started.
+            "vram_mib": p.get("vram_mib", 0),
+            "runtime_s": p.get("etimes", 0) if p.get("user") or command else None,
+            "command": command,
         })
     for jobs in out.values():
         jobs.sort(key=lambda j: -j["vram_mib"])
