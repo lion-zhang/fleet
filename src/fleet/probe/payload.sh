@@ -155,16 +155,41 @@ emit mem.avail_kb "$mem_avail"
 
 # ---------------------------------------------------------------- gpu
 gpu_present=0; gpu_driver=""; gpu_err=""; gpu_vendor=""; amd_out=""
+# nvidia-smi with a time limit. A card that fell off the bus leaves it hanging rather
+# than failing, and the probe ran out its time on it: the machine read as off, "nothing
+# answered at that address". Waited for in the background, not under `timeout`, which
+# cannot return while the process is stuck in the driver. 124 when it did not finish.
+if sleep 0.1 2>/dev/null; then NV_STEP=0.1 NV_STEPS=80; else NV_STEP=1 NV_STEPS=8; fi
+# NV_ALL=1: its errors too, which a broken driver writes on stderr.
+nvsmi() {
+  nv_out=$(mktemp "${TMPDIR:-/tmp}/fleet-nvsmi.XXXXXX" 2>/dev/null)
+  if [ -z "$nv_out" ]; then nvidia-smi "$@" 2>/dev/null; return; fi
+  if [ -n "${NV_ALL:-}" ]; then nvidia-smi "$@" >"$nv_out" 2>&1 </dev/null &
+  else nvidia-smi "$@" >"$nv_out" 2>/dev/null </dev/null &
+  fi
+  nv_pid=$! nv_i=0
+  while kill -0 "$nv_pid" 2>/dev/null; do
+    if [ "$nv_i" -ge "$NV_STEPS" ]; then
+      kill -9 "$nv_pid" 2>/dev/null; rm -f "$nv_out"; return 124
+    fi
+    sleep "$NV_STEP"; nv_i=$((nv_i + 1))
+  done
+  wait "$nv_pid"; nv_rc=$?
+  cat "$nv_out"; rm -f "$nv_out"
+  return "$nv_rc"
+}
 if have nvidia-smi; then
   gpu_vendor=nvidia
-  gpu_driver=$(nvidia-smi --query-gpu=driver_version --format=csv,noheader 2>/dev/null | head -1 | clean)
+  gpu_driver=$(nvsmi --query-gpu=driver_version --format=csv,noheader)
+  [ $? -eq 124 ] && gpu_driver="nvidia-smi did not answer within 8s"
+  gpu_driver=$(printf '%s\n' "$gpu_driver" | head -1 | clean)
   # A broken driver answers on stdout -- "Failed to initialize NVML: Driver/library
   # version mismatch" -- so anything that is not a version number is the error, not a
   # driver: read as one, the GPU table was made of that sentence.
   case $gpu_driver in
     [0-9]*) gpu_present=1 ;;
     *) gpu_present=err
-       gpu_err=${gpu_driver:-$(nvidia-smi 2>&1 | grep . | head -1 | clean)}
+       gpu_err=${gpu_driver:-$(NV_ALL=1 nvsmi | grep . | head -1 | clean)}
        gpu_driver="" ;;
   esac
 fi
@@ -468,8 +493,8 @@ if [ "$gpu_present" = "1" ]; then
   if [ "$gpu_vendor" = "amd" ]; then
     printf '%s\n' "$amd_out" | sed '/^--$/,$d'
   else
-    nvidia-smi --query-gpu=index,uuid,name,memory.total,memory.used,memory.free,utilization.gpu,temperature.gpu,power.draw \
-      --format=csv,noheader,nounits 2>/dev/null \
+    nvsmi --query-gpu=index,uuid,name,memory.total,memory.used,memory.free,utilization.gpu,temperature.gpu,power.draw \
+      --format=csv,noheader,nounits \
       | sed 's/, */|/g' | sed 's/ *|/|/g; s/| */|/g'
   fi
 fi
@@ -478,7 +503,7 @@ gpu_apps() {
   if [ "$gpu_vendor" = "amd" ]; then
     printf '%s\n' "$amd_out" | sed '1,/^--$/d'
   else
-    nvidia-smi --query-compute-apps=gpu_uuid,pid,used_memory --format=csv,noheader,nounits 2>/dev/null \
+    nvsmi --query-compute-apps=gpu_uuid,pid,used_memory --format=csv,noheader,nounits \
       | sed 's/, */|/g'
   fi
 }
@@ -693,7 +718,7 @@ software_scan() {
   echo "#SOFTWARE key|value"
   printf 'scanned_at|%s\n' "$NOW"
   if [ "$gpu_present" = "1" ]; then
-    printf 'cuda|%s\n' "$(nvidia-smi 2>/dev/null | sed -n 's/.*CUDA Version: *\([0-9.]*\).*/\1/p' | head -1)"
+    printf 'cuda|%s\n' "$(nvsmi | sed -n 's/.*CUDA Version: *\([0-9.]*\).*/\1/p' | head -1)"
   fi
   nvcc_bin=$(command -v nvcc 2>/dev/null); [ -n "$nvcc_bin" ] || { [ -x /usr/local/cuda/bin/nvcc ] && nvcc_bin=/usr/local/cuda/bin/nvcc; }
   [ -n "$nvcc_bin" ] && printf 'nvcc|%s\n' "$("$nvcc_bin" --version 2>/dev/null | sed -n 's/.*release \([0-9.]*\).*/\1/p' | head -1)"
