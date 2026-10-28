@@ -107,8 +107,10 @@ def change(ep: Endpoint | None, platform: str, **edits) -> tuple[str, str]:
         raw = read_bytes(ep, platform)
         old = raw.decode("utf-8-sig", errors="replace")
         new = notes.edit(old, **edits)
-        if new == old:
-            return old, new
+        # Nothing to say on a machine with no file: creating one that holds only the
+        # header (`--untag x` where x never was) is litter on someone's machine.
+        if new == old or (not old.strip() and not notes.parse(new)):
+            return old, old
         if "CHANGED" not in _run(ep, _write_script(platform, raw, new), platform):
             return old, new
     raise MachineFileError("the file kept changing while we wrote it; try again")

@@ -284,3 +284,20 @@ def test_a_timeout_stops_everything_the_command_started(monkeypatch, tmp_path):
         time.sleep(0.1)
     else:
         pytest.fail("the grandchild outlived the timeout")
+
+
+def test_a_server_older_than_the_installed_fleet_says_to_restart(monkeypatch):
+    """Claude Desktop kept a `fleet mcp` from before the 0.6 upgrade running for days: its
+    center_status called a CLI with no `center` command, and nothing said why."""
+    import subprocess
+
+    from fleet import agents, mcpserver
+
+    monkeypatch.setattr(mcpserver, "_exec", lambda args, timeout=None:
+                        subprocess.CompletedProcess(args, 0, '{"devices": []}', ""))
+    monkeypatch.setattr(agents, "package_version", lambda: "0.6.2")
+    monkeypatch.setattr(mcpserver, "_STARTED_AS", "0.6.2")
+    assert "restart" not in mcpserver._run(["ls", "--json"])
+    monkeypatch.setattr(mcpserver, "_STARTED_AS", "0.5.3")
+    out = mcpserver._run(["ls", "--json"])
+    assert "0.6.2" in out["restart"] and "0.5.3" in out["restart"], out

@@ -57,7 +57,8 @@ def _name_candidates(snap: Snapshot | None, ep: Endpoint):
     box), for localhost, or for an address, which is the last resort.
     """
     if snap and snap.vast_label:
-        yield snap.vast_label, "its vast.ai label"
+        # Not a hostname: `C.12345678` cut at its first dot named every vast box `c`.
+        yield snap.vast_label.replace(".", "-"), "its vast.ai label"
     target = ep.target or ""
     if (target and not _is_address(target) and any(c.isalpha() for c in target)
             and target.lower() not in ("localhost", "localhost.localdomain")

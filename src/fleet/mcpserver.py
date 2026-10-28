@@ -147,7 +147,26 @@ def _run(args: list[str], timeout: float | None = None) -> Any:
             data["error"] = notes or f"exit {p.returncode}"
     if notes and "error" not in data:
         data["notes"] = notes
+    if stale := _stale():
+        data["restart"] = stale
     return data
+
+
+# The version this server started as. A client keeps `fleet mcp` running for days, and an
+# upgrade underneath it left 0.5's tools (center_status, grant_access) calling a 0.6 CLI
+# that has no such commands: "No such command 'center'", with nothing saying why.
+_STARTED_AS = ""
+
+
+def _stale() -> str:
+    from .agents import package_version
+
+    now = package_version()
+    if not _STARTED_AS or now == _STARTED_AS:
+        return ""
+    return (f"fleet was updated to {now} after this MCP server started as {_STARTED_AS}, "
+            "so its tools may not match fleet any more. Tell the user to restart this "
+            "app (or its MCP servers) to load the new ones.")
 
 
 def build_server():
@@ -163,6 +182,8 @@ def build_server():
 
     from .agents import package_version
 
+    global _STARTED_AS
+    _STARTED_AS = package_version()
     server = MCPServer(
         name="fleet",
         version=package_version(),

@@ -332,3 +332,64 @@ def test_runpod_and_autodl_are_known_providers_too():
     assert rental_provider(Snapshot(ts=1, runpod_id="abc")) == "runpod"
     assert rental_provider(Snapshot(ts=1, autodl=True)) == "autodl"
     assert rental_provider(Snapshot(ts=1)) == ""
+
+
+def test_a_dry_run_on_a_known_machine_answers_as_the_real_add_would(tmp_path, monkeypatch):
+    """`fleet add "ssh root@cloud-1" --dry-run` said `"name": "cloud-1-2"` -- the name a
+    new machine would get -- while the real add left `cloud-1` unchanged."""
+    import json
+
+    runner = _cli(tmp_path, monkeypatch, [
+        Device(id="linux:machine-id:box", name="box", kind=Kind.PERMANENT,
+               endpoints=[{"target": "10.0.0.5", "user": "root", "port": 22}])])
+    _readd(monkeypatch)
+    real = cli.onboard
+    monkeypatch.setattr(cli, "onboard", lambda cmd, **k: real(cmd, **{**k, "name": "box-2"}))
+    r = runner.invoke(cli.app, ["add", "ssh root@10.0.0.5", "--dry-run"])
+    assert r.exit_code == 0, r.output
+    out = json.loads(r.stdout)
+    assert (out["action"], out["name"]) == ("unchanged", "box"), out
+
+
+def test_adding_a_known_machine_does_not_also_say_it_was_added(tmp_path, monkeypatch):
+    runner = _cli(tmp_path, monkeypatch, [
+        Device(id="linux:machine-id:box", name="box", kind=Kind.PERMANENT,
+               endpoints=[{"target": "10.0.0.5", "user": "root", "port": 22}])])
+    _readd(monkeypatch)
+    r = runner.invoke(cli.app, ["add", "ssh root@10.0.0.5"])
+    assert "already recorded" in r.output and "added" not in r.output, r.output
+    assert runner.invoke(cli.app, ["rm", "box", "--yes"]).exit_code == 0
+    r = runner.invoke(cli.app, ["add", "ssh root@10.0.0.5", "--name", "other"])
+    assert "restored box" in r.output and "added" not in r.output, r.output
+    assert "fleet edit box --name other" in r.output, "it comes back as box, and says so"
+
+
+def test_untag_removes_a_tag_that_add_kept_here(tmp_path, monkeypatch):
+    """`add --tag web` keeps the tag in this machine's list; `edit --untag web` only
+    edited the machine's own file, said "already says that", and `ls` still showed it."""
+    from fleet.ops import machinefile
+
+    runner = _cli(tmp_path, monkeypatch, [
+        Device(id="id:box", name="box", kind=Kind.PERMANENT, tags=["web"],
+               endpoints=[{"target": "10.0.0.5", "user": "root", "port": 22}])])
+    monkeypatch.setattr(machinefile, "change", lambda *a, **k: ("", ""))
+    r = runner.invoke(cli.app, ["edit", "box", "--untag", "web"])
+    assert r.exit_code == 0, r.output
+    assert inv.find_exact(inv.load(), "box").tags == []
+
+
+def test_a_prefix_that_fits_several_machines_says_which(tmp_path, monkeypatch):
+    runner = _cli(tmp_path, monkeypatch, [
+        Device(id="id:1", name="cloud-1", kind=Kind.PERMANENT),
+        Device(id="id:2", name="cloud-2", kind=Kind.PERMANENT)])
+    r = runner.invoke(cli.app, ["ssh", "cloud", "--", "true"])
+    assert r.exit_code == 1 and "did you mean: cloud-1, cloud-2" in r.output, r.output
+
+
+def test_a_field_that_does_not_exist_is_said_to_not_exist(tmp_path, monkeypatch):
+    """`ls --json --fields nosuchfield` came back as rows holding only `name`, which
+    reads as "no machine has it" rather than "you mistyped it"."""
+    runner = _cli(tmp_path, monkeypatch)
+    r = runner.invoke(cli.app, ["ls", "--json", "--fields", "alias,nosuchfield"])
+    assert r.exit_code == 0, r.output
+    assert "no such field: nosuchfield " in " ".join(r.stderr.split()), r.stderr
