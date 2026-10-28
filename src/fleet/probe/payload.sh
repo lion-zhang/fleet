@@ -440,11 +440,15 @@ if have df; then
     # usual case, and it alerted forever.
     # The mount point is everything after the capacity column: $6 alone cut
     # "/Volumes/My Passport" to "/Volumes/My", which df then could not find again.
+    # Twenty are kept: / and then the biggest. Cut by name, twenty shares under /mnt
+    # left out /workspace -- the 8 TB volume a rental is for, and its storage facts.
     df -Pk 2>/dev/null | awk 'NR>1 && $2+0>0 {
       m=$0; sub(/^.* [0-9]+% +/, "", m)
       if (m=="/" || m ~ /^\/(workspace|data|mnt|home|srv|opt|Volumes|scratch)/)
         printf "%s|%s|%s|%s\n", m, $2, $3, $4
-    }' | sort -u | head -20 | while IFS='|' read -r m tot used avail; do
+    }' | sort -u \
+      | awk -F'|' '{ print ($1 == "/" ? 0 : 1) "|" $0 }' | sort -t'|' -k1,1n -k3,3nr \
+      | head -20 | cut -d'|' -f2- | sort | while IFS='|' read -r m tot used avail; do
       rw=$(writable "$m")
       printf '%s|%s|%s|%s|%s\n' "$m" "$tot" "$used" "$avail" "$rw"
     done

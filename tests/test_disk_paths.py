@@ -539,3 +539,22 @@ def test_a_login_shell_that_is_not_sh_gets_the_probe_inside_sh(monkeypatch, says
     res = runner.run_probe(Endpoint(target="box", user="me"), mode="light")
     assert res.ok, res
     assert calls[1].startswith("sh -c '") and not calls[0].startswith("sh -c")
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="payload is POSIX sh")
+def test_the_biggest_volume_is_kept_when_there_are_many(tmp_path):
+    """Twenty are reported, and they were cut by name: twenty-five shares under /mnt left
+    out /workspace -- the 8 TB volume a rental is for -- and / stays whatever its size."""
+    bin_ = tmp_path / "bin"
+    bin_.mkdir()
+    rows = ["Filesystem 1024-blocks Used Available Capacity Mounted on",
+            "/dev/vda 100000000 50000000 50000000 50% /"]
+    rows += [f"nas:/s{i} {9000000000 + i} 1000 {8999999000 + i} 1% /mnt/share{i:02d}"
+             for i in range(25)]
+    rows += ["/dev/nvme1n1 9999999999 1000 9999998999 1% /workspace"]
+    (bin_ / "df").write_text("#!/bin/sh\ncat <<'X'\n" + "\n".join(rows) + "\nX\n")
+    (bin_ / "df").chmod(0o755)
+    got = [r.split("|")[0] for r in _disk_rows(_run_payload(
+        PATH=f"{bin_}:/usr/bin:/bin:/usr/sbin:/sbin", HOME=str(tmp_path)))]
+    assert len(got) == 20 and "/workspace" in got and "/" in got
+    assert not {f"/mnt/share{i:02d}" for i in range(7)} & set(got), "the smallest go"
