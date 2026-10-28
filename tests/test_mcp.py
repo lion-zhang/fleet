@@ -445,3 +445,23 @@ def test_fleet_models_can_wait_for_the_folders_it_rescans(monkeypatch):
     monkeypatch.setattr(cli, "_rescanned", lambda names, **kw: seen.update(kw) or [])
     CliRunner().invoke(cli.app, ["models", "--rescan", "--wait", "30", "--json"])
     assert seen["rescan"] and seen["wait"] == 30
+
+
+def test_a_command_that_outlasts_the_wait_is_not_called_stopped(monkeypatch):
+    """Past two minutes only the connection was dropped: a quiet command went on running
+    on the machine, and "start it detached" had the agent start a second copy."""
+    import asyncio
+    import json
+    import subprocess
+
+    from fleet import mcpserver
+
+    def slow(args, *t):
+        raise subprocess.TimeoutExpired(args, mcpserver.TIMEOUT_S)
+
+    monkeypatch.setattr(mcpserver, "_exec", slow)
+    out = asyncio.run(mcpserver.build_server().call_tool(
+        "run_on_machine", {"machine": "gpu", "command": "python train.py"}))
+    text = json.dumps([getattr(c, "text", str(c)) for c in
+                       (out[0] if isinstance(out, tuple) else out)])
+    assert "still_running" in text and "may still be running on gpu" in text, text

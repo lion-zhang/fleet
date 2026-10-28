@@ -43,7 +43,8 @@ fleet ssh gpu-box -- 'tail -n 20 ~/proj/train.log'     # later: how is it going
 
 A `tmux` or `screen` session works as well. Apps that use fleet through MCP give each
 command two minutes, so for them starting detached is the only way to run anything
-longer.
+longer. Past two minutes fleet stops waiting, not the command: one that prints nothing
+may still be running there, so check before starting it again.
 
 ## Code and data
 
