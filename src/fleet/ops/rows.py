@@ -15,6 +15,7 @@ batch is fatal. Everything between those is shared.
 
 from __future__ import annotations
 
+import threading
 import time
 
 from ..state import inventory as inv
@@ -117,6 +118,81 @@ def snapshot(names: list[str] | None = None, *, refresh: bool = False,
         return _render(conn, devices, detail, me)
     finally:
         conn.close()
+
+
+def render(conn, devices: list, detail: Detail) -> list[dict]:
+    """Every device as the store has it, probing nothing."""
+    return _render(conn, devices, detail, identity.local_device_id())
+
+
+class Background:
+    """The live view's probing, off the thread that draws and reads keys.
+
+    Done inside each frame, the frame waited for every machine due: one switched off
+    held it for the whole probe timeout, and a list with dozens of them left `fleet top`
+    a blank screen for a minute that `q` could not end. Here each machine is asked on
+    its own, up to `max_workers` at once, so one that answers is redrawn as soon as it
+    has, and the window shows what the store already knows from the first frame.
+    Threads are daemons: quitting does not wait for a host that never answers.
+    """
+
+    def __init__(self, devices: list, new_schedule, cfg, *, named: bool = False):
+        self._devices, self._new, self._cfg, self._named = devices, new_schedule, cfg, named
+        self.schedule = new_schedule()
+        self._busy: set[str] = set()
+        self._lock = threading.Lock()
+        self._slots = threading.BoundedSemaphore(max(1, int(cfg.max_workers)))
+        self._stop, self._wake = threading.Event(), threading.Event()
+        self._me = identity.local_device_id()
+        self._thread = threading.Thread(target=self._run, name="fleet-top", daemon=True)
+
+    def start(self) -> Background:
+        self._thread.start()
+        return self
+
+    def again(self) -> None:
+        """Everything due at once (the `r` key)."""
+        with self._lock:
+            self.schedule = self._new()
+        self._wake.set()
+
+    def stop(self) -> None:
+        self._stop.set()
+        self._wake.set()
+
+    def _run(self) -> None:
+        while not self._stop.is_set():
+            with self._lock:
+                schedule = self.schedule
+                due = [d for d in schedule.due(self._devices, time.monotonic())
+                       if d.id not in self._busy and (
+                           d.probeable or (self._named and d.probe_policy != "never"
+                                           and d.kind is not Kind.MOBILE))]
+                self._busy.update(d.id for d in due)
+            for d in due:
+                self._slots.acquire()
+                if self._stop.is_set():
+                    return
+                threading.Thread(target=self._one, args=(d, schedule), daemon=True).start()
+            self._wake.wait(0.5)
+            self._wake.clear()
+
+    def _one(self, dev, schedule) -> None:
+        try:
+            conn = store.connect()
+            try:
+                # Light, as in `tick`: a frame every few seconds cannot afford to ask
+                # every LLM server for its models.
+                _probe(conn, [dev], self._cfg, me=self._me, schedule=schedule,
+                       tolerant=True, light=True)
+            finally:
+                conn.close()
+        except Exception:       # noqa: BLE001 - one machine must not end the live view
+            schedule.record(dev.id, ok=False, now=time.monotonic())
+        finally:
+            with self._lock:
+                self._busy.discard(dev.id)
+            self._slots.release()
 
 
 def tick(conn, devices: list, schedule, cfg, detail: Detail, *,

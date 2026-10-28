@@ -427,15 +427,22 @@ def probe_many(jobs: dict[str, list[Endpoint]], *, max_workers: int = 8,
     results: dict[str, ProbeResult] = {}
     if not jobs:
         return results
+
+    def one(eps: list[Endpoint]) -> ProbeResult:
+        try:
+            return probe_endpoints(eps, **kw)
+        except Exception as exc:          # a bug here must not take down the whole sweep
+            return ProbeResult(status=Status.PROBE_ERROR, error_class="internal",
+                               error_detail=f"{type(exc).__name__}: {exc}"[:200])
+
+    if len(jobs) == 1:
+        # In the caller's thread. A pool's worker is joined when Python exits, so `q` in
+        # `fleet top` -- whose machines are each asked on a thread of their own -- waited
+        # out the probe of a host that never answers.
+        ((name, eps),) = jobs.items()
+        return {name: one(eps)}
     with concurrent.futures.ThreadPoolExecutor(max_workers=min(max_workers, len(jobs))) as pool:
-        futures = {pool.submit(probe_endpoints, eps, **kw): name
-                   for name, eps in jobs.items()}
+        futures = {pool.submit(one, eps): name for name, eps in jobs.items()}
         for fut in concurrent.futures.as_completed(futures):
-            name = futures[fut]
-            try:
-                results[name] = fut.result()
-            except Exception as exc:      # a bug here must not take down the whole sweep
-                results[name] = ProbeResult(
-                    status=Status.PROBE_ERROR, error_class="internal",
-                    error_detail=f"{type(exc).__name__}: {exc}"[:200])
+            results[futures[fut]] = fut.result()
     return results

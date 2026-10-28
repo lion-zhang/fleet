@@ -43,6 +43,7 @@ from .onboard import derive_id, onboard, onboard_self
 from .ops import FleetError, identity
 from .ops.names import canonical as _canonical
 from .ops.remote import run_script as _run_script
+from .ops import rows as rows_mod
 from .ops.rows import snapshot as _rows, tick as _live_tick
 from .probe.runner import PAYLOAD, probe_env, probe_many, run_probe, run_probe_local
 from .render import view as view_mod
@@ -1468,8 +1469,9 @@ def cmd_top(name: str = typer.Argument(None, help="one device, instead of the wh
     detail = Detail.FULL
     live_within = max(int(interval * 3), 5)
 
-    def frame(keys: bool = True):
-        rows = _live_tick(conn, devices, schedule, cfg, detail, named=bool(name))
+    def frame(keys: bool = True, probe: bool = True):
+        rows = (_live_tick(conn, devices, schedule, cfg, detail, named=bool(name)) if probe
+                else rows_mod.render(conn, devices, detail))
         if name:
             return render_device(rows[0], live_within)
         view = fleet_view(rows)
@@ -1494,20 +1496,26 @@ def cmd_top(name: str = typer.Argument(None, help="one device, instead of the wh
         conn.close()
         return
 
+    # The window draws what the store has while the machines are asked in the
+    # background, so it is there at once and `q` always answers.
+    probes = rows_mod.Background(devices, lambda: Schedule(
+        interval=interval, shared_interval=float(cfg.shared_min_interval_s)),
+        cfg, named=bool(name)).start()
     try:
-        with _raw_stdin(), Live(frame(), console=console, screen=True,
+        with _raw_stdin(), Live(frame(probe=False), console=console, screen=True,
                                 refresh_per_second=8) as live:
             while True:
-                key = _key_pressed(interval)
+                # At least once a second, so a machine that just answered shows up.
+                key = _key_pressed(min(interval, 1.0))
                 if key in ("q", "Q", "\x03", "\x04"):
                     break
                 if key in ("r", "R"):
-                    schedule = Schedule(interval=interval,      # everything due at once
-                                        shared_interval=float(cfg.shared_min_interval_s))
-                live.update(frame())
+                    probes.again()
+                live.update(frame(probe=False))
     except KeyboardInterrupt:
         pass
     finally:
+        probes.stop()
         conn.close()
 
 
