@@ -86,7 +86,8 @@ fleet edit gpu-box --clear-disk-paths                     # back to detecting th
 ```
 
 A path can be a mount point or any directory; fleet measures the disk that holds it and
-labels it with the path you gave. A path that does not exist on the machine is skipped.
+labels it with the path you gave. A path that does not exist on the machine is not
+measured, and `fleet ls` says so in its NOTE column, so a typo does not go unseen.
 `fleet show gpu-box` lists the disks as fleet now sees them, and the 90%-full alert and
 the `storage-Nt` fact follow the paths you set.
 

@@ -466,7 +466,10 @@ if have df; then
     # the user asked about rather than whatever filesystem happens to hold it. They
     # come separated by "|", not spaces, which cut "/mnt/My Data" in two.
     printf '%s\n' "$FLEET_DISK_PATHS" | tr '|' '\n' | while IFS= read -r p; do
-      [ -n "$p" ] && [ -e "$p" ] || continue
+      [ -n "$p" ] || continue
+      # A path that is not there (mistyped, or not mounted yet) is said so: dropped,
+      # the machine showed no disk at all and nothing said why.
+      [ -e "$p" ] || { printf '%s|0|0|0|missing\n' "$p"; continue; }
       rw=$(writable "$p")
       dfk -Pk "$p" 2>/dev/null | awk -v p="$p" -v rw="$rw" 'NR>1 && $2+0>0 {
         printf "%s|%s|%s|%s|%s\n", p, $2, $3, $4, rw

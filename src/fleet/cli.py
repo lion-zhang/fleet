@@ -1005,7 +1005,8 @@ def cmd_edit(name: str = typer.Argument(None, help="defaults to this machine"),
     except ValueError as exc:
         err.print(f"[red]{escape(str(exc))}[/red]")
         raise typer.Exit(2)
-    paths = [] if clear_disk_paths else (list(disk_path) if disk_path else None)
+    # Both at once: start again from these. Clearing first dropped the new paths too.
+    paths = list(disk_path) if disk_path else ([] if clear_disk_paths else None)
     old_name, dev_id = dev.name, dev.id
 
     def _edit(target, current):
