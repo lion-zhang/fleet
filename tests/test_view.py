@@ -6,6 +6,8 @@ from __future__ import annotations
 import json
 import pathlib
 
+import pytest
+
 from fleet.models import Device, Kind
 from fleet.probe.parse import parse_payload
 from fleet.render.view import Detail, auth_of, connect_view, device_view, fleet_view
@@ -90,6 +92,15 @@ def test_idle_rental_is_flagged_as_burning_money():
                     STATE_OK, snap_of("gpu-box"), Detail.COMPACT)
     assert any("costing money" in a for a in v["alerts"])
     assert v["usd_per_hour"] == 1.20
+
+
+@pytest.mark.parametrize("status", ["timeout", "unreachable", "refused", "auth_failed"])
+def test_a_rental_that_did_not_answer_is_not_called_idle(status):
+    """Its last reading outlives it: a rental stopped on the provider's page went on
+    "idle -- this is costing money" while the summary counted it as not running."""
+    v = device_view(make("blackwell", Kind.RENTAL, cost={"usd_per_hour": 1.20}),
+                    {**STATE_OK, "status": status}, snap_of("gpu-box"), Detail.COMPACT)
+    assert not any("costing money" in a for a in v["alerts"])
 
 
 def test_busy_rental_is_not_flagged():

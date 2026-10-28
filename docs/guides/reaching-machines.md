@@ -194,7 +194,7 @@ thing to do:
 | Tailscale SSH wants a browser sign-in (`check`) | make the rule `accept`, or sign in once |
 | ssh offered too many keys and the server gave up | name the key: `fleet edit NAME --ssh "ssh ... -i ~/.ssh/THE_KEY"` |
 | nothing listens on the ssh port | how to start sshd on Linux, macOS and Windows |
-| the host key changed | `ssh-keygen -R HOST`, once you know why it changed |
+| the host key changed | `ssh-keygen -R HOST`, or `ssh-keygen -R '[HOST]:PORT'` on a port other than 22, once you know why it changed |
 | nothing answered | check it is on and connected; `fleet edit NAME --ssh` if it moved |
 
 It **changes nothing**: it only tells you. Applying the fix is up to you, because it is

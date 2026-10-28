@@ -18,7 +18,7 @@ for those there is one command: `fleet doctor NAME` says why, and what to do.
 |---|---|
 | `NAME refused us — auth_failed` | The machine is up and does not accept you. Nothing was recorded. The lines under it are the fix — usually your key on the machine, your provider's key page, or a Tailscale SSH rule. Then run the same `fleet add` again. [Reaching your machines](reaching-machines.md) has each case. |
 | `NAME did not answer — timeout`, `unreachable`, `refused` or `closed` | Nothing was recorded. Check the address, that the machine is on, and that sshd runs there; on a VPN or tailnet, that both ends are connected. |
-| `NAME did not answer — host_key_mismatch` | Its host key changed: a rental's port given to someone else, or a reinstall — or someone in the middle. If you know why, `ssh-keygen -R HOST` and add it again. |
+| `NAME did not answer — host_key_mismatch` | Its host key changed: a rental's port given to someone else, or a reinstall — or someone in the middle. If you know why, `ssh-keygen -R HOST` (on a port other than 22, `ssh-keygen -R '[HOST]:PORT'`; `fleet doctor NAME` prints the line) and add it again. |
 | `NAME does not accept your key yet. Put your key on it with …?` | fleet offers `ssh-copy-id`, which asks for the machine's password once and puts your key there. Say yes, or no and fix it another way. |
 | `you have no ssh key yet` | Make one: `ssh-keygen -t ed25519`, then `fleet doctor NAME` for the line that puts it on the machine. |
 | `it keeps its name; to rename it: fleet edit NAME --name …` | That machine was already known; the new address was added to it under its old name. |

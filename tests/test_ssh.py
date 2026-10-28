@@ -183,3 +183,12 @@ def test_nothing_is_said_when_nothing_was_expanded_or_it_cannot_matter():
     assert expanded_here(["dir", home], home=home, here_windows=True, there_windows=True) == ""
     assert expanded_here(["ls", "/home/me"], home="/home/me", here_windows=False,
                          there_windows=False) == ""
+
+
+def test_the_environment_is_set_in_a_way_every_login_shell_reads():
+    """`KEY=value cmd` is sh's syntax; tcsh, on many clusters, said "Command not found"."""
+    from fleet.ssh.cmd import Endpoint, build_argv
+
+    argv = build_argv(Endpoint(target="h"), remote="sh -s", env={"FLEET_MODE": "full"})
+    assert argv[-1] == "env FLEET_MODE=full sh -s"
+    assert build_argv(Endpoint(target="h"), remote="sh -s")[-1] == "sh -s"

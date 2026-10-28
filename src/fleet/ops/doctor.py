@@ -128,9 +128,12 @@ def advise(dev: Device, status: str, detail: str, *, snap: dict | None = None,
     if status == Status.HOST_KEY_MISMATCH.value:
         v.why = ("its host key changed. A rental's port given to someone else does this, "
                  "and so does a reinstall -- but so would someone in the middle")
-        # known_hosts holds the HostName, not an ssh config alias that points at it.
-        v.fix = [f"if you know why it changed:  ssh-keygen -R {ep.address}"
-                 + (f" && ssh-keygen -R '[{ep.address}]:{ep.port}'" if ep.port != 22 else "")]
+        # known_hosts holds the HostName, not an ssh config alias that points at it --
+        # and on any port but 22 as [host]:port alone. The bare host is the sshd on port
+        # 22 (a rental provider's gateway, the box itself): removing its key as well left
+        # that one to be taken on trust, whatever key it showed, next time.
+        v.fix = [f"if you know why it changed:  ssh-keygen -R {ep.address}" if ep.port in (22, None)
+                 else f"if you know why it changed:  ssh-keygen -R '[{ep.address}]:{ep.port}'"]
         return v
     if status == Status.TIMEOUT.value and "never speaks ssh" in text:
         v.why = ("something takes the connection on that port, but never speaks ssh: "
