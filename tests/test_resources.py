@@ -147,6 +147,25 @@ def test_a_machine_whose_home_cannot_be_written_still_reports_its_software(tmp_p
     assert any(p.package == "torch" for p in parse_payload(probe(home)).pyenvs)
 
 
+@posix
+@pytest.mark.skipif(hasattr(os, "geteuid") and os.geteuid() == 0,
+                    reason="root may write any folder")
+def test_a_cache_folder_it_may_not_write_still_lets_it_report_its_software(tmp_path):
+    # Left by a `sudo` run, or on a home that is read-only: the folder is there, so the
+    # mkdir passed, but every write in it failed and the list came back empty each time.
+    home = make_home(tmp_path)
+    venv(home, "a", "3.11", "torch-2.0.0")
+    cache = home / ".cache" / "fleet"
+    cache.mkdir(parents=True)
+    cache.chmod(0o555)
+    try:
+        assert any(p.package == "torch" for p in parse_payload(probe(home)).pyenvs)
+        assert any(p.package == "torch"
+                   for p in parse_payload(probe(home, FLEET_REFRESH="1")).pyenvs)
+    finally:
+        cache.chmod(0o755)
+
+
 # ---------------------------------------------------------------- model servers
 class _Stub(http.server.BaseHTTPRequestHandler):
     mode = "openai"

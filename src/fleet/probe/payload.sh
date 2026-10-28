@@ -573,7 +573,10 @@ fi
 # installed), so they are worked out now and then and kept here, on the machine. Every
 # viewer then pays only for reading a file, and `fleet top` never pays at all.
 CACHE="${XDG_CACHE_HOME:-$HOME/.cache}/fleet"
-mkdir -p "$CACHE" 2>/dev/null || CACHE=""
+# A folder that is there and may not be written -- made by a `sudo` run, on a read-only
+# home -- is no place to keep them: every write failed, and the software list came back
+# empty on every probe, cuda and python and torch with it.
+{ mkdir -p "$CACHE" && [ -w "$CACHE" ]; } 2>/dev/null || CACHE=""
 age_ok() {  # file max_age_s: does the file exist and say it was written recently enough?
   [ -n "$CACHE" ] && [ -r "$1" ] || return 1
   t=$(head -1 "$1" 2>/dev/null | awk '{print $2}')
@@ -611,7 +614,7 @@ fi
 echo "#STORE kind|path|exists|avail_kb|size_kb|sized_at"
 if [ -n "$paths" ]; then
   # Read once: the background `du` may replace the file while this loop runs.
-  known=$(cat "$sizes" 2>/dev/null)
+  known=; [ -n "$CACHE" ] && known=$(cat "$sizes" 2>/dev/null)
   sized_at=$(printf '%s\n' "$known" | head -1 | awk '{print $2}')
   printf '%s\n' "$paths" | while IFS='|' read -r k p; do
     if [ -e "$p" ]; then
@@ -699,11 +702,13 @@ if [ -n "$CACHE" ] && [ "${FLEET_REFRESH:-}" != "1" ] && age_ok "$sw" 21600 \
      && [ "$(sed -n '1s/^#v1 [0-9]* //p' "$sw")" = "$gpu_driver" ]; then
   tail -n +2 "$sw"
 elif [ "${FLEET_LIGHT:-}" = "1" ]; then
-  [ -r "$sw" ] && tail -n +2 "$sw"       # stale is better than slow in `fleet top`
-elif [ -n "$CACHE" ]; then
-  { echo "#v1 $NOW $gpu_driver"; software_scan; } > "$sw.$$" 2>/dev/null && mv -f "$sw.$$" "$sw"
+  [ -n "$CACHE" ] && [ -r "$sw" ] && tail -n +2 "$sw"   # stale beats slow in `fleet top`
+elif [ -n "$CACHE" ] && { echo "#v1 $NOW $gpu_driver"; software_scan; } > "$sw.$$" 2>/dev/null \
+     && mv -f "$sw.$$" "$sw"; then
   tail -n +2 "$sw"
 else
+  # Not kept (a disk that filled up): read now, as with no cache at all.
+  [ -n "$CACHE" ] && rm -f "$sw.$$" 2>/dev/null
   software_scan
 fi
 
