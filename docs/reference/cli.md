@@ -248,6 +248,7 @@ fleet models --json
 | `--json` | print JSON instead of a table, for scripts and agents |
 | `--refresh`, `-r` | force a live probe |
 | `--rescan` | also re-measure the model folders, which machines otherwise cache for 6 hours |
+| `--wait` `SECONDS` | with --rescan: wait up to this long for the folder sizes it started measuring |
 
 ## fleet top
 

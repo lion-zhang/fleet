@@ -55,8 +55,11 @@ def _console(**kw) -> Console:
         tty = stream.isatty()
     except (AttributeError, ValueError):
         tty = False
-    if not tty and not os.environ.get("COLUMNS"):
-        kw.setdefault("width", 200)
+    if not tty:
+        # COLUMNS says how wide a table may be, not where to break a sentence: fleet's
+        # own MCP server sets it, and its notes came back broken mid-list.
+        if not os.environ.get("COLUMNS"):
+            kw.setdefault("width", 200)
         kw.setdefault("soft_wrap", True)
     return Console(**kw)
 

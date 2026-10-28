@@ -29,7 +29,8 @@ fleet add gpu                            # the same
 Anything ssh would use works: your ssh-agent, a key file named with `-i` (any kind — a
 `.pem` from a cloud provider, an `id_ed25519`), and a `Host` entry in `~/.ssh/config` with
 its user, port, key and `ProxyJump`. From a pasted command fleet keeps the address,
-user, port, `-i` key and `-J` jump host; a `-o ProxyCommand=...` is refused, so put it in
+user, port, `-i` key and `-J` jump host (an `ssh://user@host:port` address works too);
+a `-o ProxyCommand=...` is refused, so put it in
 a `Host` block of `~/.ssh/config` and add that name. fleet then:
 
 1. **connects** with that, in batch mode — it never prompts for a password;

@@ -29,6 +29,10 @@ import subprocess
 from typing import Any
 
 TIMEOUT_S = 120
+# `rescan` measures folders with a `du` in the background, which the probe never waits
+# on: the answer to `rescan=True` was the size from before, for the folder just filled.
+# Waited for here, within the time a tool call has.
+RESCAN_WAIT_S = 45
 
 
 class McpUnavailable(RuntimeError):
@@ -246,18 +250,18 @@ def build_server():
         """`refresh` measures now instead of using a reading up to a minute old; `rescan`
         also re-reads software versions and folder sizes, cached on each machine for
         hours. `fields` returns only those keys of each machine (name always)."""
-        args = ["ls", "--json", *(names or [])]
+        args = ["ls", "--json"]
         if fields:
             args += ["--fields", ",".join(fields)]
         if rescan:
-            args.append("--rescan")
+            args += ["--rescan", "--wait", str(RESCAN_WAIT_S)]
         for t in tag or []:
             args += ["--tag", t]
         if online:
             args.append("--online")
         if refresh:
             args.append("--refresh")
-        return _run(args)
+        return _run([*args, "--", *(names or [])])
 
     @server.tool(description="Full detail for one machine: CPU, RAM, every GPU and its "
                              "jobs, mounts, listening services, the models its servers "
@@ -267,16 +271,17 @@ def build_server():
                              "name means the machine fleet is running on.")
     def show_machine(name: str | None = None, refresh: bool = True,
                      rescan: bool = False) -> Any:
-        """`rescan` re-reads software versions and folder sizes now (cached for hours)."""
-        return _run(["show", *( [name] if name else [] ), "--json",
-                     "--refresh" if refresh else "--no-refresh",
-                     *(["--rescan"] if rescan else [])])
+        """`rescan` re-reads software versions and folder sizes now (cached for hours);
+        a folder still being measured after a while keeps its old `sized_at`."""
+        return _run(["show", "--json", "--refresh" if refresh else "--no-refresh",
+                     *(["--rescan", "--wait", str(RESCAN_WAIT_S)] if rescan else []),
+                     "--", *([name] if name else [])])
 
     @server.tool(description="Every job on every GPU across the fleet -- who runs it, "
                              "how much VRAM, for how long, the command -- and which GPUs "
                              "are idle. A GPU with jobs is someone's: ask before using it.")
     def list_gpu_jobs(names: list[str] | None = None, refresh: bool = False) -> Any:
-        return _run(["ps", "--json", *(names or []), *(["--refresh"] if refresh else [])])
+        return _run(["ps", "--json", *(["--refresh"] if refresh else []), "--", *(names or [])])
 
     @server.tool(description="Every model being served across the fleet: machine, server, "
                              "url, and for a server that only listens on its own machine "
@@ -286,8 +291,9 @@ def build_server():
     def list_models(names: list[str] | None = None, refresh: bool = False,
                     rescan: bool = False) -> Any:
         """`refresh` asks the servers again now; `rescan` also re-measures model folders."""
-        return _run(["models", "--json", *(names or []),
-                     *(["--refresh"] if refresh else []), *(["--rescan"] if rescan else [])])
+        return _run(["models", "--json", *(["--refresh"] if refresh else []),
+                     *(["--rescan", "--wait", str(RESCAN_WAIT_S)] if rescan else []),
+                     "--", *(names or [])])
 
     @server.tool(description="Record where a machine keeps things, in its own "
                              "machine.yaml: kind is models, datasets, media, scratch, envs "
@@ -295,10 +301,10 @@ def build_server():
                              "an empty list clears it. Ask the user where before "
                              "recording a folder they did not name.")
     def set_machine_paths(machine: str, kind: str, paths: list[str]) -> Any:
-        args = ["edit", machine, "--json"]
+        args = ["edit", "--json"]
         for p in paths or [""]:
             args += ["--path", f"{kind}={p}"]
-        return _run(args)
+        return _run([*args, "--", machine])
 
     @server.tool(description="Declare a model server the probe would not find by itself "
                              "(an unusual port, a program it does not recognise), in the "
@@ -307,8 +313,10 @@ def build_server():
                              "wants one is shown as wanting one.")
     def set_machine_endpoint(machine: str, name: str, port: int | None = None,
                              path: str = "") -> Any:
+        if path and not path.startswith("/"):
+            path = "/" + path          # "v2" is the path /v2, not a port of 8000v2
         spec = f"{name}=" if port is None else f"{name}={port}{path}"
-        return _run(["edit", machine, "--endpoint", spec, "--json"])
+        return _run(["edit", "--endpoint", spec, "--json", "--", machine])
 
     @server.tool(description="Run one command on a machine and return its output and "
                              "exit code. This is how work actually gets started -- fleet "
@@ -317,7 +325,8 @@ def build_server():
                              "long jobs detached (nohup ... > log 2>&1 &).")
     def run_on_machine(machine: str, command: str) -> Any:
         try:
-            p = _exec(["ssh", machine, "--", command])
+            # The command after the name is the command's own, `--` and all.
+            p = _exec(["ssh", "--", machine, command])
         except subprocess.TimeoutExpired:
             return {"ok": False, "error": f"still running after {TIMEOUT_S}s -- start it "
                                           "detached with nohup and read its log"}
@@ -337,7 +346,7 @@ def build_server():
                     kind: str | None = None) -> Any:
         """`kind` only when the user says what it is: permanent, rental, shared,
         appliance or mobile. fleet picks one itself otherwise."""
-        args = ["add", ssh_command, "--json"]
+        args = ["add", "--json"]
         if name:
             args += ["--name", name]
         if alias:
@@ -348,7 +357,7 @@ def build_server():
             args += ["--tag", t]
         # A refusal comes back with `why` and `fix`: the one thing the user does to let
         # fleet in (put their key on it, add it to the provider, a Tailscale SSH rule).
-        return _run(args, SLOW_TIMEOUT_S)
+        return _run([*args, "--", ssh_command], SLOW_TIMEOUT_S)
 
     @server.tool(description="Machines the user can already reach that are not added yet: "
                              "the Host entries of their ~/.ssh/config, and the machines on "
@@ -362,7 +371,7 @@ def build_server():
                              "the key to, or the Tailscale SSH rule. Changes nothing; tell "
                              "the user what it says -- access is theirs to grant.")
     def doctor_machine(name: str | None = None) -> Any:
-        return _run(["doctor", *([name] if name else []), "--json"], SLOW_TIMEOUT_S)
+        return _run(["doctor", "--json", "--", *([name] if name else [])], SLOW_TIMEOUT_S)
 
     @server.tool(description="Label a machine, or change what it costs per hour (for the "
                              "$/HR column and burn rate), how it is reached, or which disks "
@@ -382,7 +391,7 @@ def build_server():
                      autodetect_disks: bool = False, rename: str | None = None,
                      alias: str | None = None, note: str | None = None,
                      local: bool = False) -> Any:
-        args = ["edit", name, "--json"]
+        args = ["edit", "--json"]
         if note is not None:
             args += ["--note", note]
         if local:
@@ -403,7 +412,7 @@ def build_server():
             args += ["--cost", str(cost_per_hour)]
         if ssh_command:
             args += ["--ssh", ssh_command]
-        return _run(args)
+        return _run([*args, "--", name])
 
     _refuse_unknown_arguments(server)
     return server

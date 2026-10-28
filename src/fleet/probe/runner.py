@@ -208,11 +208,16 @@ def _posix_remote(env: dict | None) -> str:
     an empty answer that looks like a machine with nothing to report.
     """
     prefix = " ".join(f"{k}={shlex.quote(v)}" for k, v in (env or {}).items())
-    # `$$` is the remote shell's pid, so two probes of one host cannot collide, and the
-    # file goes wherever `mktemp` says rather than assuming /tmp is writable.
+    # In a folder of its own, made fresh: on a shared host anyone can list /tmp, and a
+    # file named after the script's ($f.out) or the shell's pid was one somebody else
+    # could make first -- a link there and the probe's output truncated a file of ours,
+    # a file of theirs and they read it or rewrote the script before sh ran it. `mkdir`
+    # fails on a name that is already there; `mktemp -d` picks one nobody has.
     return (
-        'f=$(mktemp 2>/dev/null || echo /tmp/.fleet-probe.$$); '
-        'cat > "$f" || { echo "fleet: cannot write $f" >&2; exit 127; }; '
+        'd=$(mktemp -d 2>/dev/null) || { d=/tmp/.fleet-probe.$$; mkdir -m 700 "$d"; } '
+        '|| { echo "fleet: cannot write a folder for the probe in /tmp" >&2; exit 127; }; '
+        'f="$d/probe"; '
+        'cat > "$f" || { echo "fleet: cannot write $f" >&2; rm -rf "$d"; exit 127; }; '
         # And a limit on the far side. The probe is detached from the channel by design,
         # so when the local timeout drops the connection nothing tells it to stop: a `df`
         # stuck on a dead NFS mount, or a wedged `nvidia-smi`, stayed behind -- one more
@@ -221,7 +226,7 @@ def _posix_remote(env: dict | None) -> str:
         'T=; timeout -s KILL 5 true >/dev/null 2>&1 && T="timeout -s KILL 90"; '
         f'{prefix} $T sh "$f" > "$f.out" 2> "$f.err"; rc=$?; '
         'cat "$f.out"; cat "$f.err" >&2; '
-        'rm -f "$f" "$f.out" "$f.err"; exit $rc'
+        'rm -f "$f" "$f.out" "$f.err"; rm -rf "$d"; exit $rc'
     ).replace("  ", " ").strip()
 
 
