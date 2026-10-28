@@ -772,7 +772,11 @@ def test_help_reads_as_paragraphs_in_an_80_column_terminal():
     for name in (c.name for c in app.registered_commands):
         out = subprocess.run(["fleet", name, "--help"], capture_output=True, text=True,
                              encoding="utf-8", errors="replace", env=env).stdout
-        about = out.split("Usage:", 1)[-1].split("╭", 1)[0].splitlines()[1:]
+        about = []
+        for line in out.split("Usage:", 1)[-1].splitlines()[1:]:
+            if line.strip()[:1] in ("╭", "┌", "+"):   # a panel: Rich draws them square on Windows
+                break
+            about.append(line)
         for line, after in zip(about, about[1:] + [""]):
             if 0 < len(line.split()) <= 2 and after.strip() and "Example" not in line:
                 stranded.append(f"{name}: {line.strip()!r}")
@@ -800,3 +804,10 @@ def test_removing_a_skill_that_is_already_gone_says_so(tmp_path):
     install(tmp_path, ["claude"], "fleet")
     assert [c.action for c in uninstall(tmp_path, ["claude"])] == ["removed"]
     assert [c.action for c in uninstall(tmp_path, ["claude"])] == ["not there"]
+
+
+def test_the_skill_has_agents_answer_the_prompts_they_cannot_see():
+    """An agent has no terminal: `fleet rm NAME`, as the skill wrote it, only ever
+    printed "Aborted."."""
+    text = skill_text("fleet")
+    assert "fleet rm NAME --yes" in text and "fleet uninstall --yes" in text
