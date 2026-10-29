@@ -106,8 +106,11 @@ if ($env:FLEET_DISK_PATHS) {
     # path asked about rather than whatever volume happens to hold it, because "819G
     # free on C:" answers a different question from "819G free where my data goes".
     foreach ($path in ($env:FLEET_DISK_PATHS -split '\|' | Where-Object { $_ })) {
-        if (-not (Test-Path -LiteralPath $path)) { continue }
-        $root = [System.IO.Path]::GetPathRoot((Resolve-Path -LiteralPath $path).Path)
+        # `~` is this user's home, as in payload.sh; the row keeps the name it was given.
+        $q = $path
+        if ($q -eq '~') { $q = $HOME } elseif ($q -match '^~[\\/]') { $q = Join-Path $HOME $q.Substring(2) }
+        if (-not (Test-Path -LiteralPath $q)) { continue }
+        $root = [System.IO.Path]::GetPathRoot((Resolve-Path -LiteralPath $q).Path)
         $vol = Get-CimInstance Win32_LogicalDisk -Filter "DeviceID='$($root.TrimEnd('\'))'"
         if (-not $vol) { continue }
         $total = [int64]($vol.Size / 1024)
