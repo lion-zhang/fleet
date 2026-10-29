@@ -305,12 +305,21 @@ def _print_discovered(json_out: bool, *, hide: list[str] = (), unhide: list[str]
         discover.set_hidden(list(hide), hide=True)
     if unhide:
         discover.set_hidden(list(unhide), hide=False)
-    found = discover.candidates(include_hidden=show_all)
+    found = discover.candidates(include_hidden=True)
     gone = discover.hidden()
 
     def is_hidden(c) -> bool:
         # Under --all a hidden one was listed like any other, with nothing to say which.
         return c.name.lower() in gone or c.target.lower() in gone
+
+    offered = {n for c in found for n in (c.name.lower(), c.target.lower())}
+    if hide and (unseen := [n for n in hide if n.lower() not in offered]):
+        # `--hide old-bx` hid nothing anyone sees, old-box stayed on the list, and the
+        # answer was the list itself: a typo read as a hide that had not taken.
+        err.print(f"[yellow]not offered now: {escape(', '.join(unseen))}[/yellow]  "
+                  "[dim](hidden all the same, should it turn up; --unhide undoes it)[/dim]")
+    if not show_all:
+        found = [c for c in found if not is_hidden(c)]
 
     if _emit({"candidates": [{**c.to_dict(), "hidden": is_hidden(c)} for c in found],
               "hidden": sorted(gone)}, json_out):

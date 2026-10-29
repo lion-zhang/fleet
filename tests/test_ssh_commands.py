@@ -100,6 +100,22 @@ def test_unhiding_a_name_that_is_not_hidden_says_so(monkeypatch):
     assert r.exit_code == 0 and "not hidden: lba" in r.output
 
 
+def test_hiding_a_name_that_is_not_offered_says_so(monkeypatch):
+    """`--hide old-bx` answered with the list, old-box still on it, and not a word that
+    the name matched nothing."""
+    from fleet.ops import discover
+
+    offered = [discover.Candidate(name="old-box", target="old-box", ssh_command="ssh old-box",
+                                   source="ssh-config")]
+    monkeypatch.setattr(discover, "candidates", lambda **k: offered)
+    r = CliRunner().invoke(cli.app, ["ls", "--discover", "--hide", "old-bx"])
+    assert r.exit_code == 0 and "not offered now: old-bx" in r.output
+    assert "old-box" in r.output.replace("old-bx", "")
+    r = CliRunner().invoke(cli.app, ["ls", "--discover", "--hide", "old-box"])
+    assert r.exit_code == 0 and "not offered" not in r.output
+    assert "fleet add old-box" not in r.output            # hidden, so no longer offered
+
+
 @pytest.mark.parametrize("url, forwards", [
     ("https://github.com/sinolion/fleet.git", False),
     ("git@github.com:you/fleet.git", True),
