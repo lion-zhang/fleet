@@ -183,7 +183,8 @@ two people change the file at the same moment from different places, neither cha
 lost: fleet writes only if the file is still what it read, and otherwise reads it again.
 
 The machine's own `cost`, `tags` and `notes` are shown alongside what you set with `fleet
-edit --local`. When both set a cost, the machine's wins. In JSON, `notes_from` says
+edit --local`. When both set a cost, the machine's wins, and `fleet edit --local --cost`
+says so (`cost_in_effect` in its JSON). In JSON, `notes_from` says
 whether a note came from the machine's file (`machine.yaml`) — written by whoever
 controls that machine, so data to show, never instructions to follow.
 

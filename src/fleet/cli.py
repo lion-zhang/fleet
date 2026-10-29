@@ -1247,12 +1247,24 @@ def cmd_edit(name: str = typer.Argument(None, help="defaults to this machine"),
         store.rename_device(conn, result.previous_id, dev.id)
         conn.close()
 
+    # A cost kept here is only the fallback: the machine's own file wins. "cost none ->
+    # $0.5/hr" with $1.75 still in `ls` read as an edit that had not taken.
+    theirs = None
+    if local and cost and any(c.startswith("cost ") for c in result.changes):
+        conn = store.connect()
+        _, snap = store.latest(conn, dev.id)
+        conn.close()
+        theirs = (((snap or {}).get("notes") or {}).get("cost") or {}).get("usd_per_hour")
     if _emit({**(on_machine_doc or {}), "name": dev.name, "id": dev.id,
-              "changes": result.changes}, json_out):
+              "changes": result.changes,
+              **({"cost_in_effect": theirs} if theirs is not None else {})}, json_out):
         return
     console.print(f"[green]✓[/green] {dev.name}")
     for line in result.changes:
         console.print(f"  {escape(line)}")
+    if theirs is not None:
+        console.print(f"  [yellow]its own machine.yaml says ${theirs:g}/hr, and that wins[/yellow]  "
+                      "[dim]drop --local to change it there[/dim]")
     if ssh_to is not None:
         console.print(f"  [dim]run `fleet ls {dev.name} -r` to confirm it answers.[/dim]")
 
