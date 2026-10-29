@@ -2118,7 +2118,7 @@ def cmd_setup(
     """
     root = Path.cwd() if project else Path.home()
     # MCP clients are a second namespace: a desktop app is registered, not written to.
-    # `--project` never touches them -- their config is per-user, not per-repo.
+    # `--project` touches only those that read a config in the repository.
 
     mcp_names = tuple(c.name for c in MCP_CLIENTS)
     if refresh:
@@ -2135,7 +2135,7 @@ def cmd_setup(
                    + install_mcp(root, clients, config_command(), dry_run=dry_run))
         changed = [c for c in changes if c.action != "unchanged"]
         for c in changed:
-            console.print(f"  [green]{c.action:<9}[/green] {c.path}")
+            _print_change(c, dry_run)
         if not changed:
             console.print("[dim]· agent skills already match this fleet[/dim]")
         return
@@ -2150,10 +2150,10 @@ def cmd_setup(
     else:
         targets = [target] if target in TARGETS else []
         clients = [target] if target in mcp_names else []
-        if clients and project and target != "cursor":
+        if clients and project and not {c.name: c for c in MCP_CLIENTS}[target].project:
             # It wrote .config/Claude/claude_desktop_config.json into the repo, where no
-            # desktop app looks, and said "created". Cursor alone reads the same path,
-            # .cursor/mcp.json, in a project as in your home.
+            # desktop app looks, and said "created". Cursor (.cursor/mcp.json) and VS Code
+            # (.vscode/mcp.json) read one in a project; VS Code was refused as if not.
             err.print(f"[red]{target} keeps one config for you, not one per project[/red]  "
                       f"[dim]-- run [bold]fleet setup --target {target}[/bold] without "
                       "--project[/dim]")
@@ -2183,22 +2183,15 @@ def cmd_setup(
     cmd = fleet_command()
     if remove:
         changes = (uninstall(root, targets, dry_run=dry_run, project=project)
-                   + uninstall_mcp(root, clients, dry_run=dry_run))
+                   + uninstall_mcp(root, clients, dry_run=dry_run, project=project))
     else:
 
         changes = (install(root, targets, cmd, dry_run=dry_run, project=project)
-                   + install_mcp(root, clients, config_command(), dry_run=dry_run))
+                   + install_mcp(root, clients, config_command(), dry_run=dry_run,
+                                 project=project))
 
     for c in changes:
-        colour = {"created": "green", "updated": "green", "removed": "yellow",
-                  "unreadable": "yellow", "taken": "yellow"}.get(c.action, "dim")
-        # A file that is still there held more than fleet -- the user's GEMINI.md, an
-        # app's MCP config -- and only fleet's part went: "removed" beside its path read
-        # as the whole file deleted. As `fleet uninstall` says it.
-        kept = c.action == "removed" and (c.path.name != "SKILL.md" if dry_run
-                                          else c.path.exists())
-        console.print(f"  [{colour}]{c.action:<9}[/{colour}] "
-                      f"{'fleet from ' if kept else ''}{escape(str(c.path))}")
+        _print_change(c, dry_run)
     for action, why in (("unreadable", "not plain JSON or text fleet can rewrite safely "
                          "(not UTF-8, or JSON with comments or trailing commas, which VS "
                          "Code allows), so it was left exactly as it was; add fleet to it "
@@ -2222,6 +2215,18 @@ def cmd_setup(
         console.print("\n[dim]--dry-run: nothing was written.[/dim]")
     elif not remove and cmd != "fleet":
         err.print(f"\n[dim]{_short_name_hint(cmd)}[/dim]")
+
+
+def _print_change(c, dry_run: bool) -> None:
+    colour = {"created": "green", "updated": "green", "removed": "yellow",
+              "unreadable": "yellow", "taken": "yellow"}.get(c.action, "dim")
+    # A file that is still there held more than fleet -- the user's GEMINI.md, an app's
+    # MCP config -- and only fleet's part went: "removed" beside its path read as the
+    # whole file deleted. As `fleet uninstall` says it.
+    kept = c.action == "removed" and (c.path.name != "SKILL.md" if dry_run
+                                      else c.path.exists())
+    console.print(f"  [{colour}]{c.action:<9}[/{colour}] "
+                  f"{'fleet from ' if kept else ''}{escape(str(c.path))}")
 
 
 def _missing_key(ssh_command: str) -> str:

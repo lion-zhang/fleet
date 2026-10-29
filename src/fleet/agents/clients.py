@@ -171,14 +171,14 @@ def stale_mcp_clients(root: Path, cmd: str, platform: str = "") -> list[str]:
 
 
 def install_mcp(root: Path, clients: list[str], cmd: str, *,
-                dry_run: bool = False, platform: str = "") -> list[Change]:
+                dry_run: bool = False, platform: str = "", project: bool = False) -> list[Change]:
     """Register `fleet mcp` with each client, without disturbing its other servers."""
     platform = platform or sys.platform
     changes: list[Change] = []
     for client in MCP_CLIENTS:
         if client.name not in clients:
             continue
-        path = client.path(root, platform)
+        path = client.path(root, platform, project=project)
         if path is None:
             continue
         current = _read(path) if path.exists() else ""
@@ -202,13 +202,13 @@ def install_mcp(root: Path, clients: list[str], cmd: str, *,
 
 
 def uninstall_mcp(root: Path, clients: list[str], *,
-                  dry_run: bool = False, platform: str = "") -> list[Change]:
+                  dry_run: bool = False, platform: str = "", project: bool = False) -> list[Change]:
     platform = platform or sys.platform
     changes: list[Change] = []
     for client in MCP_CLIENTS:
         if client.name not in clients:
             continue
-        path = client.path(root, platform)
+        path = client.path(root, platform, project=project)
         if path is None or not path.exists():
             continue
         current = _read(path)
