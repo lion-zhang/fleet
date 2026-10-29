@@ -111,3 +111,48 @@ def test_whose_job_it_is_is_not_cut_to_eight_characters(tmp_path):
     snap = parse_payload(probe(make_home(tmp_path), PATH=f"{bin_}:{os.environ['PATH']}"))
     (job,) = [p for p in snap.processes if p.scope == "gpu"]
     assert job.user == "researcher1"
+
+
+def test_a_little_hidden_memory_is_not_called_unsafe_beside_idle():
+    # The captured box: 414 MiB its desktop holds that nvidia-smi does not list. The
+    # card is idle and counted free, and the alert beside it said "do not treat as free".
+    row = _row(CARD, Detail.FULL)
+    assert jobs_view([row])["idle"] and row["gpus"][0]["busy"] is False
+    said = [a for a in row["alerts"] if a.startswith("gpu0:")]
+    assert said and "do not treat as free" not in said[0]
+
+
+def test_a_card_hiding_a_job_still_says_not_to_use_it():
+    row = _row("0|GPU-00000000-1111-2222-3333-444444444444|NVIDIA A100-SXM4-80GB"
+               "|81920|71680|10240|0|33|61.2", Detail.FULL)
+    assert any("do not treat as free" in a for a in row["alerts"])
+
+
+def test_show_says_which_card_each_job_is_on(capsys):
+    # Three jobs on an eight-card box came as one list with no card beside any of them.
+    from fleet import cli
+    text = FIX.read_text(encoding="utf-8").replace(
+        "|9164|156|user|690348|msedge", "|9164|20156|user|690348|python train.py")
+    snap = parse_payload(text)
+    dev = Device(id="linux:machine-id:" + snap.machine_id, name="spark", kind=Kind.PERMANENT,
+                 endpoints=[{"target": "h", "user": "u", "port": 22}])
+    row = device_view(dev, {"status": "ok"}, snap.to_dict(), Detail.FULL)
+    assert [p["gpu"] for p in row["processes"]] == [0]
+    cli._print_show(row)
+    line = next(ln for ln in capsys.readouterr().out.splitlines() if "9164" in ln)
+    assert line.split()[:2] == ["gpu0", "9164"]
+
+
+def test_top_on_one_machine_says_which_card_each_job_is_on():
+    import io
+
+    from rich.console import Console
+    text = FIX.read_text(encoding="utf-8").replace(
+        "|9164|156|user|690348|msedge", "|9164|20156|user|690348|python train.py")
+    snap = parse_payload(text)
+    dev = Device(id="linux:machine-id:" + snap.machine_id, name="spark", kind=Kind.PERMANENT,
+                 endpoints=[{"target": "h", "user": "u", "port": 22}])
+    row = device_view(dev, {"status": "ok"}, snap.to_dict(), Detail.FULL)
+    buf = io.StringIO()
+    Console(file=buf, width=120, color_system=None).print(top.render_device(row))
+    assert any("gpu job" in ln and "gpu0  20156 MiB" in ln for ln in buf.getvalue().splitlines())

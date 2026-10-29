@@ -458,8 +458,9 @@ def render_device(row: dict[str, Any], live_within: int = 10) -> Table:
         what = proc.get("args") or proc.get("comm") or ""
         if not proc.get("user") and not what:
             what = f"pid {proc.get('pid', '?')}, not visible from this login (a container?)"
+        card = f"gpu{proc['gpu']}  " if proc.get("gpu") is not None else ""
         t.add_row("[dim]gpu job[/dim]",
-                  f"{proc.get('vram_mib', 0)} MiB  {escape(proc.get('user') or '?')}  "
+                  f"{card}{proc.get('vram_mib', 0)} MiB  {escape(proc.get('user') or '?')}  "
                   f"[dim]{escape(short_command(what, 60))}[/dim]")
     if more := max(len(row.get("processes") or []) - 8, 0) + (row.get("processes_more") or 0):
         t.add_row("[dim]gpu job[/dim]", f"[dim]and {more} more[/dim]")

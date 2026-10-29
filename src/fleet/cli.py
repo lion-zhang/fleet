@@ -442,14 +442,16 @@ def _print_show(r: dict) -> None:
         # As wide as the longest name: `_windowserver`, or a login past ten letters now
         # that the probe keeps whole names, pushed its row out of line with the rest.
         uw = max(10, *(len(p["user"] or "?") for p in r["processes"]))
+        # The card each is on, in the column the `gpuN` lines above it are named in.
+        card = lambda p: f"{'gpu' + str(p['gpu']) if p.get('gpu') is not None else '':<6}"
         for p in r["processes"]:
             # As in `fleet ps`: a job in a container shows no user, age or command from
             # here, and "0m" with a blank said it had just started and was nothing.
             if not p["user"] and not (p.get("args") or p.get("comm")):
-                console.print(f"        {p['pid']:>8} {'?':<{uw}} {p['vram_mib']:>6} MiB  {'-':>6}  "
+                console.print(f"  {card(p)}{p['pid']:>8} {'?':<{uw}} {p['vram_mib']:>6} MiB  {'-':>6}  "
                               "[dim]not visible from this login (a container?)[/dim]")
                 continue
-            console.print(f"        {p['pid']:>8} {escape(p['user'] or '?'):<{uw}} {p['vram_mib']:>6} MiB  "
+            console.print(f"  {card(p)}{p['pid']:>8} {escape(p['user'] or '?'):<{uw}} {p['vram_mib']:>6} MiB  "
                           f"{runtime_text(p.get('etimes', 0)):>6}  {escape((p.get('args') or p['comm'])[:90])}")
         if r.get("processes_more"):
             console.print(f"        [dim]and {r['processes_more']} more: "
