@@ -444,6 +444,9 @@ def _print_show(r: dict) -> None:
                 continue
             console.print(f"        {p['pid']:>8} {escape(p['user'] or '?'):<10} {p['vram_mib']:>6} MiB  "
                           f"{runtime_text(p.get('etimes', 0)):>6}  {escape((p.get('args') or p['comm'])[:90])}")
+        if r.get("processes_more"):
+            console.print(f"        [dim]and {r['processes_more']} more: "
+                          f"fleet ps {escape(r['name'])} lists them all[/dim]")
     elif r["gpus"]:
         console.print("  [dim]gpu compute   none — no job is using this GPU[/dim]")
     if r.get("top_cpu"):
