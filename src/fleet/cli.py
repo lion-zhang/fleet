@@ -48,7 +48,7 @@ from .ops.rows import snapshot as _rows, tick as _live_tick
 from .probe.runner import PAYLOAD, probe_env, probe_many, run_probe, run_probe_local
 from .render import view as view_mod
 from .render.top import (Schedule, device_lines, disk_cell, gpu_cells_compact, render_models,
-                         render_ps, runtime as runtime_text, size as size_text,
+                         render_ps, runtime as runtime_text, size as size_text, reading_age,
                          name_cell, render_device, render_fleet, render_ls, _gb as gb_text)
 from .render.view import Detail, auth_of, device_view, fleet_view, matches_tag
 from .ssh.cmd import (WINDOWS, build_argv, local_platform, local_shell_argv, remote_command,
@@ -409,7 +409,7 @@ def _print_show(r: dict) -> None:
         console.print(f"  [red]{r['error']['class']}[/red]: {escape(r['error']['detail'] or '')}")
     # A machine fleet does not probe now -- mobile, or one that backs off -- showed a
     # reading hours old as though it had just been taken.
-    age = r.get("telemetry_age_s")
+    age = reading_age(r)
     if age is not None and age > int(load_config().get("telemetry_ttl_s") or 0):
         why = ("; fleet never probes a mobile device" if r.get("probe_policy") == "never"
                else "")

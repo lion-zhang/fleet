@@ -65,7 +65,7 @@ overrides that.
 | `rental` | the machine shows signs of vast.ai, RunPod or AutoDL, or the address it was added by contains `vast.ai`, `runpod`, `autodl`, `seetacloud`, `lambdalabs` or `paperspace` | the `rental` fact, and the idle-rental alert |
 | `shared` | it runs SLURM, or more than three people are logged in | measured lightly (no process list; SLURM jobs and partitions instead), only when named (`fleet ls NAME`), never offered for work, and always flagged |
 | `appliance` | only with `--kind appliance` | the `appliance` fact; never offered for work |
-| `mobile` | only with `--kind mobile` | never measured, never offered for work |
+| `mobile` | only with `--kind mobile` | measured once when added, then never; never offered for work |
 
 ## Alerts
 

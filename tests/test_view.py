@@ -171,6 +171,19 @@ def test_fleet_summary_counts_and_burn_rate():
     assert (s["total"], s["online"], s["gpus_free"], s["hourly_burn"]) == (3, 2, 2, 1.2)
 
 
+def test_a_rental_that_refuses_us_is_still_costing_money():
+    """Up but refusing is not off: the burn rate read $0/hr for a rental whose key had
+    gone, and it did not count as running."""
+    refused = {"status": "auth_failed", "last_probe_at": 1, "error_class": "",
+               "error_detail": ""}
+    rows = [device_view(make("a100", Kind.RENTAL, cost={"usd_per_hour": 1.89}), refused,
+                        None, Detail.COMPACT),
+            device_view(make("gone", Kind.RENTAL, cost={"usd_per_hour": 5}),
+                        {**refused, "status": "refused"}, None, Detail.COMPACT)]
+    s = fleet_view(rows)["summary"]
+    assert (s["online"], s["rentals_running"], s["hourly_burn"]) == (0, 1, 1.89)
+
+
 # ------------------------------------------------------------------ disk
 def test_compact_view_keeps_its_headline_number_and_lists_the_mounts_behind_it():
     """`fleet ls` still gets one number per device -- but not *only* that number.
@@ -325,3 +338,35 @@ def test_eight_jobs_say_nothing_of_more():
     snap = snap_of("gpu-box")
     v = device_view(make(), STATE_OK, snap, Detail.FULL)
     assert v["processes_more"] == 0
+
+
+def test_a_gpu_on_a_machine_never_offered_for_work_is_not_idle_or_free():
+    """A shared host's or an appliance's GPU is "never offered for work", but `fleet ps`
+    listed it as idle and the summary counted it free -- the lists an agent picks from."""
+    from fleet.render.view import jobs_view
+
+    for kind in (Kind.APPLIANCE, Kind.SHARED):
+        rows = [device_view(make("nas", kind), STATE_OK, snap_of("gpu-box"), Detail.FULL)]
+        assert jobs_view(rows)["idle"] == [] and fleet_view(rows)["summary"]["gpus_free"] == 0
+    rows = [device_view(make(), STATE_OK, snap_of("gpu-box"), Detail.FULL)]
+    assert len(jobs_view(rows)["idle"]) == 1 and fleet_view(rows)["summary"]["gpus_free"] == 1
+
+
+def test_a_machine_that_failed_its_last_try_is_aged_by_its_last_reading(capsys):
+    """Refused a moment ago, a machine's row said AGE 0s, and `fleet show` gave no age,
+    over memory, disks and models from the reading 17 minutes before."""
+    import time
+
+    from fleet import cli
+    from fleet.render.top import staleness
+
+    now = int(time.time())
+    snap = {**snap_of("gpu-box"), "ts": now - 1013}
+    state = {**STATE_AUTH_FAILED, "last_probe_at": now - 2, "last_ok_at": now - 1013}
+    v = device_view(make(), state, snap, Detail.FULL)
+    assert staleness(v, live_within=10) == "16m"
+    cli._print_show(v)
+    assert "as read 16m ago" in capsys.readouterr().out
+    ok = device_view(make(), {**STATE_OK, "last_probe_at": now - 2}, {**snap, "ts": now - 2},
+                     Detail.FULL)
+    assert staleness(ok, live_within=10) == ""

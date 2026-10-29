@@ -694,7 +694,9 @@ def jobs_view(rows: list[dict]) -> dict:
         for g in r["gpus"]:
             for j in g.get("jobs", []):
                 jobs.append({"machine": r["name"], "gpu": g["idx"], "gpu_name": g["name"], **j})
-            if not g.get("jobs") and not g.get("busy"):
+            # A shared host's, an appliance's: "never offered for work", and an agent
+            # took the idle list for the GPUs it could start on.
+            if not g.get("jobs") and not g.get("busy") and r.get("claimable", True):
                 idle.append({"machine": r["name"], "gpu": g["idx"], "gpu_name": g["name"],
                              "vram_free_mib": g["vram_free_mib"],
                              "shared_memory": bool(g.get("shared_memory"))})
@@ -713,8 +715,13 @@ def select_fields(row: dict, fields: list[str]) -> dict:
 
 def models_view(rows: list[dict]) -> dict:
     """`fleet models`: every model server across the fleet, and the model folders."""
-    return {"servers": [{"machine": r["name"], **m} for r in rows for m in r.get("models", [])],
-            "model_folders": [{"machine": r["name"], **st} for r in rows
+    # A machine that did not answer keeps its last reading, and that listed its servers
+    # with a tunnel to each, as if they were there now: to a machine refusing us, the
+    # tunnel offered could not even connect. It is named under not_read instead, as
+    # `fleet ps` names it.
+    read = [r for r in rows if r["status"] == "ok"]
+    return {"servers": [{"machine": r["name"], **m} for r in read for m in r.get("models", [])],
+            "model_folders": [{"machine": r["name"], **st} for r in read
                               for st in (r.get("storage") or {}).get("models", [])],
             # A machine that did not answer: "No model servers found" was all it said,
             # as if it had been looked at and serves nothing.
@@ -723,13 +730,17 @@ def models_view(rows: list[dict]) -> dict:
 
 def fleet_view(rows: list[dict]) -> dict:
     online = [r for r in rows if r["status"] == "ok"]
+    # Up, though refusing us, is still running and still billed: a rental whose key had
+    # gone read as "$0/hr", the one moment its cost mattered.
+    up = [r for r in rows if r["status"] in (Status.OK.value, Status.AUTH_FAILED.value)]
     return {
         "devices": rows,
         "summary": {
             "total": len(rows),
             "online": len(online),
-            "gpus_free": sum(1 for r in online for g in r.get("gpus", []) if not g.get("busy")),
-            "rentals_running": sum(1 for r in online if r["kind"] == "rental"),
-            "hourly_burn": round(sum(r.get("usd_per_hour") or 0 for r in online), 4),
+            "gpus_free": sum(1 for r in online if r.get("claimable", True)
+                             for g in r.get("gpus", []) if not g.get("busy")),
+            "rentals_running": sum(1 for r in up if r["kind"] == "rental"),
+            "hourly_burn": round(sum(r.get("usd_per_hour") or 0 for r in up), 4),
         },
     }

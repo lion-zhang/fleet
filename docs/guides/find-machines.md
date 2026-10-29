@@ -121,7 +121,7 @@ fleet edit a100 --cost 1.89          # on the machine; --local to keep it here
 ```
 
 The price shows in the `$/HR` column, and `fleet ls --json` adds up the hourly burn of
-everything online. A rental whose GPUs are all idle is flagged *RENTAL is idle -- this is
+everything that is up, including a machine that is up but refusing us. A rental whose GPUs are all idle is flagged *RENTAL is idle -- this is
 costing money*, whatever its price.
 
 ## Alerts
@@ -145,5 +145,5 @@ The full conditions are in the [reference](../reference/facts.md#alerts).
   — are recognised by themselves. They are measured lightly and only when you name them
   (`fleet ls NAME`), and never offered for claiming.
 - **Appliances** and **mobile** devices (`fleet add … --kind appliance`) are listed but
-  never offered for work; mobile ones are not measured at all.
+  never offered for work; mobile ones are measured once, when added, and never after.
 - **Windows** machines report no per-process detail or listening services.

@@ -521,3 +521,4 @@ def test_a_machine_added_while_the_view_is_open_is_probed(monkeypatch):
         assert asked.wait(5)
     finally:
         bg.stop()
+
