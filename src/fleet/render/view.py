@@ -694,7 +694,9 @@ def jobs_view(rows: list[dict]) -> dict:
         for g in r["gpus"]:
             for j in g.get("jobs", []):
                 jobs.append({"machine": r["name"], "gpu": g["idx"], "gpu_name": g["name"], **j})
-            if not g.get("jobs") and not g.get("busy"):
+            # A shared host's, an appliance's: "never offered for work", and an agent
+            # took the idle list for the GPUs it could start on.
+            if not g.get("jobs") and not g.get("busy") and r.get("claimable", True):
                 idle.append({"machine": r["name"], "gpu": g["idx"], "gpu_name": g["name"],
                              "vram_free_mib": g["vram_free_mib"],
                              "shared_memory": bool(g.get("shared_memory"))})
@@ -731,7 +733,8 @@ def fleet_view(rows: list[dict]) -> dict:
         "summary": {
             "total": len(rows),
             "online": len(online),
-            "gpus_free": sum(1 for r in online for g in r.get("gpus", []) if not g.get("busy")),
+            "gpus_free": sum(1 for r in online if r.get("claimable", True)
+                             for g in r.get("gpus", []) if not g.get("busy")),
             "rentals_running": sum(1 for r in up if r["kind"] == "rental"),
             "hourly_burn": round(sum(r.get("usd_per_hour") or 0 for r in up), 4),
         },

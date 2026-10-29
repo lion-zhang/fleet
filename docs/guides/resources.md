@@ -36,6 +36,8 @@ started with `--hf-token hf_…`, `--api-key=…`, `--password …`, `HF_TOKEN=�
 `github_pat_…`, `AKIA…`) is shown with `***` in its place.
 
 On a shared host (`kind: shared`) fleet does not list other people's processes at all.
+Its GPUs, and an appliance's, are never listed as idle or counted as free, since fleet
+never offers those machines for work.
 
 ## Model servers
 

@@ -338,3 +338,15 @@ def test_eight_jobs_say_nothing_of_more():
     snap = snap_of("gpu-box")
     v = device_view(make(), STATE_OK, snap, Detail.FULL)
     assert v["processes_more"] == 0
+
+
+def test_a_gpu_on_a_machine_never_offered_for_work_is_not_idle_or_free():
+    """A shared host's or an appliance's GPU is "never offered for work", but `fleet ps`
+    listed it as idle and the summary counted it free -- the lists an agent picks from."""
+    from fleet.render.view import jobs_view
+
+    for kind in (Kind.APPLIANCE, Kind.SHARED):
+        rows = [device_view(make("nas", kind), STATE_OK, snap_of("gpu-box"), Detail.FULL)]
+        assert jobs_view(rows)["idle"] == [] and fleet_view(rows)["summary"]["gpus_free"] == 0
+    rows = [device_view(make(), STATE_OK, snap_of("gpu-box"), Detail.FULL)]
+    assert len(jobs_view(rows)["idle"]) == 1 and fleet_view(rows)["summary"]["gpus_free"] == 1
