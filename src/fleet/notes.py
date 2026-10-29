@@ -196,8 +196,13 @@ def parse(text: str, skipped: list[str] | None = None) -> dict:
 
 
 def merge(system: dict, user: dict) -> dict:
-    """The user's file over the machine's: field by field, and for paths kind by kind."""
+    """The user's file over the machine's: field by field, for paths kind by kind, and
+    tags from both."""
     out = {**system, **{k: v for k, v in user.items() if k not in ("paths", "endpoints")}}
+    if system.get("tags") and user.get("tags"):
+        # Labels, not a setting: `fleet edit --tag mine` writes the user's file, and the
+        # admin's tags in /etc/fleet vanished from `fleet ls --tag` the moment it did.
+        out["tags"] = list(dict.fromkeys(system["tags"] + user["tags"]))[:MAX_TAGS]
     for key in ("paths", "endpoints"):
         if key in system or key in user:
             out[key] = {**system.get(key, {}), **user.get(key, {})}

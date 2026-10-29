@@ -75,6 +75,12 @@ def _replace_primary(dev: Device, ep: Endpoint, out: Edits) -> None:
     if route := (classify_route(ep.address) or old.get("via", "")):
         record["via"] = route
     eps[idx] = record
+    # Pointed at an address it already had as another route (added by `fleet add` at a
+    # second address): that one was kept too, and the machine had the same address
+    # twice, each dialled in turn when it was down.
+    same = (ep.target, ep.user, ep.port)
+    eps = [e for i, e in enumerate(eps) if i == idx or (
+        e.get("target"), e.get("user", ""), int(e.get("port", 22) or 22)) != same]
     dev.endpoints = eps
     if before != after:
         out.changes.append(f"address {before} -> {after}")

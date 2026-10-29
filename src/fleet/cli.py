@@ -629,8 +629,18 @@ def _edit_machine_file(dev, json_out: bool, *, paths: list[str], endpoints: list
             return doc
         if tags_remove and not (paths or endpoints or tags_add or note is not None
                                 or cost is not None):
-            console.print(f"[dim]· {dev.name} has no tag "
-                          f"{escape(', '.join(tags_remove))}.[/dim]")
+            # One set by the machine's admin in /etc/fleet: "has no tag" while `ls`
+            # showed it, and fleet does not write that file.
+            mine = notes_mod.parse(before).get("tags") or []
+            admins = [t for t in tags_remove if t not in mine
+                      and t in ((snap or {}).get("notes") or {}).get("tags", [])]
+            if admins:
+                console.print(f"[yellow]· {escape(', '.join(admins))} is set machine-wide "
+                              f"on {dev.name}[/yellow]  [dim]in the machine.yaml its admin "
+                              "keeps (/etc/fleet); fleet edit writes only yours[/dim]")
+            else:
+                console.print(f"[dim]· {dev.name} has no tag "
+                              f"{escape(', '.join(tags_remove))}.[/dim]")
         elif (servers and all(v is None for v in servers.values())
               and not (paths or tags_add or tags_remove or note is not None
                        or cost is not None)):
@@ -797,7 +807,9 @@ def cmd_add(ssh_command: str = typer.Argument(None, help='e.g. "ssh -p 58418 roo
         # `name` and `action`, as the real add answers: agents read the same keys from
         # both. A machine already recorded keeps its name, so that is the one to report
         # -- `cloud-1-2`, the name a new machine would have got, named nothing.
-        known = None if split else inv.find_exact(devices, dev.id)
+        # A removed one too: looked up among the live alone, it was "added", and the
+        # real add said "restored".
+        known = None if split else next((d for d in devices if d.id == dev.id), None)
         if known is not None:
             have = {(e.target, e.user, e.port) for e in inv.endpoints_of(known)}
             new_eps = [e for e in inv.endpoints_of(dev) if (e.target, e.user, e.port) not in have]
@@ -810,7 +822,11 @@ def cmd_add(ssh_command: str = typer.Argument(None, help='e.g. "ssh -p 58418 roo
                 action = "updated"
         else:
             action = "added"
-        _emit({"action": action, "name": known.name if known else dev.name, "id": dev.id,
+        shown = known.name if known else dev.name
+        if known is not None and known.deleted_at and shown in inv.handles(
+                devices, excluding=known.id):
+            shown = dev.name        # as the real add renames it: its name is taken now
+        _emit({"action": action, "name": shown, "id": dev.id,
                "kind": (dev.kind if kind or known is None else known.kind).value,
                "status": res.status.value, "dry_run": True,
                "clone_of_a_known_machine": split}, True)
@@ -857,6 +873,27 @@ def cmd_add(ssh_command: str = typer.Argument(None, help='e.g. "ssh -p 58418 roo
             if alias and not survivor.alias and alias != survivor.name:
                 apply_edits(survivor, alias=alias)
         updated.clear()
+        if action == "restored" and survivor is not None:
+            # Its name given to another machine while it was removed: brought back under
+            # it, two machines answered to one name, and every command refused the list.
+            others = inv.handles(current, excluding=survivor.id)
+            if survivor.name in others:
+                old_name, n = survivor.name, 2
+                fresh = dev.name if dev.name not in others else ""
+                while not fresh:
+                    fresh = f"{old_name}-{n}" if f"{old_name}-{n}" not in others else ""
+                    n += 1
+                survivor.name = fresh
+                inv.touch(survivor)
+                updated.append(f"name {old_name} -> {fresh}: another machine is called "
+                               f"{old_name} now")
+            if survivor.alias and survivor.alias in others:
+                updated.append(f"alias {survivor.alias} -> (none): another machine "
+                               "answers to it now")
+                survivor.alias = ""
+                inv.touch(survivor)
+            if was is not None:
+                was = (was[0], was[1], survivor.alias)
         if was is not None:
             # A machine already recorded, given a new --kind or --tag: it was changed,
             # and said "already recorded with this endpoint", action "unchanged".
@@ -1227,9 +1264,28 @@ def cmd_edit(name: str = typer.Argument(None, help="defaults to this machine"),
         if not more:
             return
     if not result.changes:
-        if _emit({**(on_machine_doc or {}), "name": dev.name, "changes": []}, json_out):
+        # `--untag g4 --local` with g4 in the machine's own file said "nothing to
+        # change", and `ls` went on showing g4 with no word of where it came from.
+        theirs_tags: list[str] = []
+        if local and untag:
+            conn = store.connect()
+            _, snap = store.latest(conn, dev.id)
+            conn.close()
+            on_file = ((snap or {}).get("notes") or {}).get("tags") or []
+            theirs_tags = [t for t in (_tags(untag, untag=True) or []) if t in on_file]
+        if _emit({**(on_machine_doc or {}), "name": dev.name, "changes": [],
+                  **({"kept_on_machine": theirs_tags} if theirs_tags else {})}, json_out):
             return
-        console.print(f"[dim]· nothing to change on {dev.name}.[/dim]")
+        if theirs_tags:
+            console.print(f"[yellow]· {dev.name}'s own machine.yaml has "
+                          f"{escape(', '.join(theirs_tags))}, and --local cannot take it "
+                          "off[/yellow]  [dim]drop --local to remove it there[/dim]")
+        elif local and untag and not (tag or cost is not None or new_name or new_alias
+                                      or ssh_command or disk_path or clear_disk_paths):
+            console.print(f"[dim]· {dev.name} has no tag "
+                          f"{escape(', '.join(_tags(untag, untag=True) or []))} here.[/dim]")
+        else:
+            console.print(f"[dim]· nothing to change on {dev.name}.[/dim]")
         return
 
     def _apply(current):
@@ -1249,6 +1305,12 @@ def cmd_edit(name: str = typer.Argument(None, help="defaults to this machine"),
         # the cache is keyed by id; without this the device looks brand new
         conn = store.connect()
         store.rename_device(conn, result.previous_id, dev.id)
+        conn.close()
+    if any(c.startswith("disk paths ") for c in result.changes):
+        # The reading cached a minute ago measured the old mounts: `fleet ls` straight
+        # after `--disk-path /data` showed every disk but /data, as if it were ignored.
+        conn = store.connect()
+        store.expire(conn, dev.id)
         conn.close()
 
     # A cost kept here is only the fallback: the machine's own file wins. "cost none ->

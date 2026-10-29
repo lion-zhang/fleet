@@ -34,6 +34,17 @@ def test_a_new_ssh_command_replaces_the_primary_address():
     assert dev.endpoints[0]["port"] == 2222
 
 
+def test_pointing_at_an_address_it_already_has_leaves_it_there_once():
+    """`fleet add` at a second address, then `edit --ssh` to that address: it was kept as
+    well, and the machine had the same address twice, dialled twice when it was down."""
+    dev = _dev(endpoints=[
+        {"target": "1.2.3.4", "user": "root", "port": 22, "name": "default", "preference": 10},
+        {"target": "5.6.7.8", "user": "root", "port": 2222, "name": "default", "preference": 10}])
+    out = apply_edits(dev, endpoint=_ep())
+    assert [(e["target"], e["port"]) for e in dev.endpoints] == [("5.6.7.8", 2222)]
+    assert out.changes[0] == "address root@1.2.3.4:22 -> root@5.6.7.8:2222"
+
+
 def test_replacing_an_address_keeps_the_endpoint_name_and_preference():
     """The endpoint is the same route to the same box; only where it points changed."""
     dev = _dev(endpoints=[{"target": "1.2.3.4", "user": "root", "port": 22,
@@ -393,3 +404,57 @@ def test_a_cost_kept_here_says_when_the_machines_own_cost_wins(tmp_path, monkeyp
     snap = {"notes": {}}                               # nothing there: no word of it
     result = runner.invoke(app, ["edit", "box", "--cost", "0.7", "--local"])
     assert result.exit_code == 0 and "wins" not in result.output
+
+
+def test_a_local_untag_of_a_tag_the_machine_itself_holds_says_where_it_is(tmp_path, monkeypatch):
+    """`edit --untag g4 --local`, with g4 in the machine's own machine.yaml, said "nothing
+    to change", and `ls` went on showing g4 with no word of where it came from."""
+    import json
+
+    from fleet import cli
+    from fleet.cli import app
+
+    runner, _ = _cli_env(tmp_path, monkeypatch, _dev())
+    monkeypatch.setattr(cli.store, "latest", lambda conn, dev_id: ({}, {"notes": {"tags": ["g4"]}}))
+    result = runner.invoke(app, ["edit", "box", "--untag", "g4", "--local"])
+    assert result.exit_code == 0, result.output
+    assert "own machine.yaml has g4" in result.output and "drop --local" in result.output
+    result = runner.invoke(app, ["edit", "box", "--untag", "g4", "--local", "--json"])
+    assert json.loads(result.output)["kept_on_machine"] == ["g4"]
+    result = runner.invoke(app, ["edit", "box", "--untag", "zz", "--local"])
+    assert "has no tag zz here" in result.output
+
+
+def test_untagging_a_tag_set_machine_wide_says_who_keeps_it(tmp_path, monkeypatch):
+    """`edit --untag lab` with lab in the machine's /etc/fleet/machine.yaml said "has no
+    tag lab" while `ls` showed it."""
+    from fleet import cli
+    from fleet.ops import machinefile
+    from fleet.cli import app
+
+    runner, _ = _cli_env(tmp_path, monkeypatch, _dev())
+    monkeypatch.setattr(cli.store, "latest",
+                        lambda conn, dev_id: ({}, {"notes": {"tags": ["lab", "mine"]}}))
+    monkeypatch.setattr(machinefile, "change", lambda *a, **k: ("tags: [mine]\n",) * 2)
+    result = runner.invoke(app, ["edit", "box", "--untag", "lab"])
+    assert result.exit_code == 0, result.output
+    assert "lab is set machine-wide" in result.output, result.output
+    result = runner.invoke(app, ["edit", "box", "--untag", "zz"])
+    assert "has no tag zz" in result.output
+
+
+def test_a_new_disk_path_is_read_on_the_next_look(tmp_path, monkeypatch):
+    """`fleet ls` straight after `edit --disk-path /data` showed the reading cached a minute
+    before, of every disk but /data, as if the flag had been ignored."""
+    from fleet import cli
+    from fleet.cli import app
+
+    runner, _ = _cli_env(tmp_path, monkeypatch, _dev())
+    expired = []
+    monkeypatch.setattr(cli.store, "expire", lambda conn, dev_id: expired.append(dev_id))
+    for args in (["--disk-path", "/data"], ["--clear-disk-paths"]):
+        result = runner.invoke(app, ["edit", "box", *args])
+        assert result.exit_code == 0, result.output
+    assert expired == [_dev().id] * 2
+    runner.invoke(app, ["edit", "box", "--alias", "b"])
+    assert len(expired) == 2

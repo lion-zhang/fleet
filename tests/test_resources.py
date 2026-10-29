@@ -548,6 +548,16 @@ def test_the_users_file_is_laid_over_the_machines():
                    "paths": {"models": ["~/m"], "media": ["/srv/x"]}}
 
 
+def test_tags_from_both_files_are_kept():
+    """`fleet edit --tag mine` writes the user's file, and with tags there the admin's
+    tags in /etc/fleet vanished from `fleet ls` and `--tag`."""
+    kv = {"notes.system": base64.b64encode(b"tags: [a100, lab]\ncost: 2\n").decode(),
+          "notes.user": base64.b64encode(b"tags: [mine, lab]\ncost: 3\n").decode()}
+    got, err = notes.from_probe(kv)
+    assert not err
+    assert got == {"tags": ["a100", "lab", "mine"], "cost": {"usd_per_hour": 3.0}}
+
+
 def test_aliases_in_a_notes_file_are_refused():
     bomb = "a: &a [x, x]\nb: &b [*a, *a]\npaths: *b\n"
     with pytest.raises(notes.NotesError):
