@@ -61,7 +61,9 @@ waits at most two seconds for each and ten seconds in all. Of each server's mode
 | `down` | declared in the machine's `machine.yaml`, but nothing answers on its port; `url`, if any, is where it would answer, and there is no `tunnel` |
 
 A server that answers `401` is shown as *wants an API key*: it is running, but fleet
-cannot see its models without the key, and does not ask for it.
+cannot see its models without the key, and does not ask for it. A declared server that
+answers, but not with a model list (`"status": "none"`, often a wrong base path), is shown
+as *no model list there*.
 
 **A server fleet does not find by itself** — on an unusual port, or a program it does not
 recognise — can be declared in the machine's notes:

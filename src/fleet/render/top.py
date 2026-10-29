@@ -582,6 +582,7 @@ def render_models(view: dict[str, Any]) -> list:
             if not sv["models"]:
                 t.add_row("[yellow]wants an API key[/yellow]" if sv["status"] == "auth"
                           else "[yellow]not running[/yellow]" if sv.get("reach") == "down"
+                          else "[yellow]no model list there[/yellow]" if sv["status"] == "none"
                           else "[dim]none listed[/dim]", escape(sv["machine"]), label, reach)
             for m in sv["models"]:
                 t.add_row(escape(m), escape(sv["machine"]), label, reach)

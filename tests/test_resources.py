@@ -972,3 +972,19 @@ def test_a_machine_that_did_not_answer_is_named_by_models_and_ps():
     assert jobs_view([down, seen, ok])["not_read"] == ["gpu"]
     for parts in (render_models(models_view([down])), render_ps(jobs_view([down]))):
         assert "not read just now: gpu" in " ".join(map(str, parts))
+
+
+def test_a_declared_server_that_answers_without_a_model_list_is_still_listed():
+    """Declared at the wrong path, it answered 404 and vanished from `fleet models`: the
+    one server the machine said it had, gone with no word of why."""
+    from fleet.render.top import render_models
+    from fleet.render.view import models_view
+
+    out = ("#FLEET v1\nnotes.user=" + base64.b64encode(b"endpoints:\n  mine: 9000/api\n").decode()
+           + "\n#LISTEN proto|addr|port|pid|comm\ntcp|127.0.0.1|9000|1|python3\ntcp|127.0.0.1|8080|2|vllm\n"
+           "#LLMMODEL port|status|ms|model\n9000|none|3|\n8080|none|3|\n#END rc=0\n")
+    rows = model_servers(_dev(), parse_payload(out).to_dict())
+    assert [(r["port"], r["status"]) for r in rows] == [(9000, "none")]
+    text = " ".join(map(str, render_models(models_view(
+        [{"name": "lab", "status": "ok", "models": rows}]))[0].columns[0]._cells))
+    assert "no model list there" in text, text

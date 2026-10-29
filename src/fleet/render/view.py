@@ -337,7 +337,10 @@ def model_servers(dev: Device, snap: dict | None, *, here: bool = False,
     eps = by_use(dev, state)
     out = []
     for s in (snap or {}).get("services", []):
-        if not s.get("status") or s.get("status") == "none":
+        # "none": it answered, but not with a model list. Not a model server, unless the
+        # machine says it is one: a declared server at the wrong path vanished from
+        # `fleet models` with no word of why.
+        if not s.get("status") or s.get("status") == "none" and s.get("source") != "declared":
             continue
         if s.get("kind") not in ("llm", "llm?"):
             continue

@@ -426,6 +426,7 @@ def _print_show(r: dict) -> None:
                       + (escape(", ".join(m["models"][:6])) + _more(m, 6) if m["models"]
                          else "[yellow]wants an API key[/yellow]" if m["status"] == "auth"
                          else "[yellow]not running[/yellow]" if down
+                         else "[yellow]no model list there[/yellow]" if m["status"] == "none"
                          else "[dim]none listed[/dim]"))
     sw = r.get("software") or {}
     if sw.get("system"):
