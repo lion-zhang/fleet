@@ -1756,7 +1756,11 @@ def cmd_ssh(ctx: typer.Context,
     # Keys only, in batch: fleet never handles a password, and a prompt here reads as
     # though typing one would work for the agent that asked.
     argv = ["ssh", "-o", "StrictHostKeyChecking=accept-new",
-            "-o", "PasswordAuthentication=no", "-o", "KbdInteractiveAuthentication=no"]
+            "-o", "PasswordAuthentication=no", "-o", "KbdInteractiveAuthentication=no",
+            # A port that takes the connection and never speaks ssh held `fleet ssh`, and
+            # the agent's run_on_machine, until its own limit, which then said the
+            # command "may still be running" when it had never started.
+            "-o", f"ConnectTimeout={int(load_config().get('connect_timeout_s') or 8)}"]
     if ep.port and ep.port != 22:
         argv += ["-p", str(ep.port)]
     if ep.identity:
