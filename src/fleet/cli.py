@@ -454,6 +454,10 @@ def _print_show(r: dict) -> None:
         if r.get("processes_more"):
             console.print(f"        [dim]and {r['processes_more']} more: "
                           f"fleet ps {escape(r['name'])} lists them all[/dim]")
+    elif r["gpus"] and r.get("kind") == "shared":
+        # Its processes are left unread on purpose: "none -- no job is using this GPU"
+        # under a login node's card at 97% holding 20G.
+        console.print("  [dim]gpu compute   not listed: fleet does not read a shared host's processes[/dim]")
     elif r["gpus"]:
         console.print("  [dim]gpu compute   none — no job is using this GPU[/dim]")
     if r.get("top_cpu"):

@@ -586,11 +586,12 @@ def render_ps(view: dict[str, Any]) -> list:
         out.append(t)
     elif not view.get("busy_unseen"):
         out.append("[dim]No jobs on any GPU.[/dim]")
-    if view.get("busy_unseen"):
-        out.append(("\n" if view["jobs"] else "") + "[yellow]busy[/yellow]  " + "  ".join(
-            f"{escape(b['machine'])} gpu{b['gpu']} [dim]({b['vram_used_mib'] / 1024:.1f}G, "
-            f"{b['util_pct']}%)[/dim]" for b in view["busy_unseen"])
-            + "  [dim]by processes not visible from this login (a container?)[/dim]")
+    for shared, why in ((False, "by processes not visible from this login (a container?)"),
+                        (True, "on a shared host, whose processes fleet does not read")):
+        if busy := [b for b in view.get("busy_unseen", []) if bool(b.get("shared_host")) is shared]:
+            out.append(("\n" if view["jobs"] and len(out) == 1 else "") + "[yellow]busy[/yellow]  " + "  ".join(
+                f"{escape(b['machine'])} gpu{b['gpu']} [dim]({b['vram_used_mib'] / 1024:.1f}G, "
+                f"{b['util_pct']}%)[/dim]" for b in busy) + f"  [dim]{why}[/dim]")
     if view["idle"]:
         out.append("\n[green]idle[/green]  " + "  ".join(
             f"{escape(i['machine'])} gpu{i['gpu']} [dim]"

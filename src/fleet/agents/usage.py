@@ -41,7 +41,8 @@ A name may be omitted where the obvious subject is the machine you are on.
   `models` (what its servers serve), and each GPU's `jobs`
 - `{cmd} ps --json` -- every job on every GPU across the fleet (who, how much VRAM, how
   long, the command), which GPUs are idle, and `busy_unseen`: GPUs in use by processes
-  this login cannot see (a container's, another user's) -- someone's all the same
+  this login cannot see (a container's, another user's, any on a `shared_host`) --
+  someone's all the same
 - `{cmd} models --json` -- every model being served: machine, server, `url`, and for a
   server that only listens on its own machine a `tunnel` (an `ssh -L` command) to reach
   it; `reach: down` is a server the machine declares that is not running, and

@@ -69,7 +69,8 @@ def test_fleet_ps_says_a_card_is_busy_when_it_cannot_see_the_job():
     view = jobs_view([row])
     assert view["busy_unseen"] == [{"machine": "spark", "gpu": 0,
                                     "gpu_name": "NVIDIA A100-SXM4-80GB",
-                                    "vram_used_mib": 71680, "util_pct": 97}]
+                                    "vram_used_mib": 71680, "util_pct": 97,
+                                    "shared_host": False}]
     text = " ".join(str(p) for p in top.render_ps(view))
     assert "No jobs on any GPU" not in text
     assert "spark gpu0" in text and "70.0G, 97%" in text
