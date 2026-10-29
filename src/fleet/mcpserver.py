@@ -281,7 +281,7 @@ def build_server():
         a folder still being measured after a while keeps its old `sized_at`."""
         return _run(["show", "--json", "--refresh" if refresh else "--no-refresh",
                      *(["--rescan", "--wait", str(RESCAN_WAIT_S)] if rescan else []),
-                     "--", *([name] if name else [])])
+                     "--", *([name] if name is not None else [])])
 
     @server.tool(description="Every job on every GPU across the fleet -- who runs it, "
                              "how much VRAM, for how long, the command -- and which GPUs "
@@ -312,6 +312,10 @@ def build_server():
                              "an empty list clears it. Ask the user where before "
                              "recording a folder they did not name.")
     def set_machine_paths(machine: str, kind: str, paths: list[str]) -> Any:
+        if "=" in kind:
+            # `--path KIND=PATH` splits at the first `=`: kind "models=x" recorded the
+            # folder "x=/data" under models.
+            return {"ok": False, "error": f"{kind!r} is not a kind: a kind has no '='"}
         args = ["edit", "--json"]
         for p in paths or [""]:
             args += ["--path", f"{kind}={p}"]
@@ -336,6 +340,10 @@ def build_server():
                              "an ssh command by hand. Returns within 120 seconds: start "
                              "long jobs detached (nohup ... > log 2>&1 &).")
     def run_on_machine(machine: str, command: str) -> Any:
+        if not command.strip():
+            # An empty command opened a login shell there, which read nothing and came
+            # back ok: as though something had run.
+            return {"ok": False, "error": "no command to run"}
         try:
             # The command after the name is the command's own, `--` and all.
             p = _exec(["ssh", "--", machine, command])
@@ -399,7 +407,7 @@ def build_server():
                              "the key to, or the Tailscale SSH rule. Changes nothing; tell "
                              "the user what it says -- access is theirs to grant.")
     def doctor_machine(name: str | None = None) -> Any:
-        return _run(["doctor", "--json", "--", *([name] if name else [])], SLOW_TIMEOUT_S)
+        return _run(["doctor", "--json", "--", *([name] if name is not None else [])], SLOW_TIMEOUT_S)
 
     @server.tool(description="Label a machine, or change what it costs per hour (for the "
                              "$/HR column and burn rate), how it is reached, or which disks "
@@ -424,7 +432,9 @@ def build_server():
             args += ["--note", note]
         if local:
             args.append("--local")
-        if rename:
+        # "" is passed on, to be refused: dropped, it answered as an edit that changed
+        # nothing, and the agent took the rename as done.
+        if rename is not None:
             args += ["--name", rename]
         if alias is not None:
             args += ["--alias", alias]
@@ -438,7 +448,7 @@ def build_server():
             args += ["--untag", t]
         if cost_per_hour is not None:
             args += ["--cost", str(cost_per_hour)]
-        if ssh_command:
+        if ssh_command is not None:
             args += ["--ssh", ssh_command]
         return _run([*args, "--", name])
 

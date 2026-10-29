@@ -138,6 +138,11 @@ def cmd_ls(names: list[str] = typer.Argument(None, help="only these devices"),
     [dim]Example:[/dim]  fleet ls --json
     """
     _first_run("ls")
+    if tag and not view_mod.split_tags(tag):
+        # `--tag ""` listed every machine, as though each had matched.
+        err.print(f"[red]--tag {escape(repr(tag[0]))}[/red] is not a tag  [dim]e.g. "
+                  "--tag cuda, or --tag cuda,vram-24g for both[/dim]")
+        raise typer.Exit(2)
     if discover or hide or unhide:
         _print_discovered(json_out, hide=hide or [], unhide=unhide or [], show_all=show_all)
         return
@@ -494,13 +499,24 @@ def _edit_machine_file(dev, json_out: bool, *, paths: list[str], endpoints: list
                       f"{', '.join(notes_mod.KINDS)}, or your own)[/dim]")
             raise typer.Exit(2)
         if value.strip():
-            wanted.setdefault(kind, []).append(value.strip())  # type: ignore[union-attr]
+            # The same folder twice was recorded twice, and counted twice in its size.
+            items = wanted.setdefault(kind, []) or []
+            if value.strip() not in items:
+                items.append(value.strip())
+            wanted[kind] = items
         else:
             wanted[kind] = None
     servers: dict[str, str | None] = {}
     for spec in endpoints:
         name, sep, value = spec.partition("=")
         name = name.strip().lower()
+        if sep and notes_mod.valid_kind(name) and (port := re.match(r"\s*(\d+)", value)) \
+                and not 1 <= int(port.group(1)) <= 65535:
+            # Port 0 or 70000 said the whole thing was not NAME=PORT, which it was.
+            err.print(f"[red]--endpoint {escape(repr(spec))}[/red]: port "
+                      f"{int(port.group(1))} is not a port  [dim]ports run from 1 to "
+                      "65535[/dim]")
+            raise typer.Exit(2)
         if not sep or not notes_mod.valid_kind(name) or (
                 value.strip() and notes_mod.endpoint_spec(value) is None):
             err.print(f"[red]--endpoint {escape(repr(spec))}[/red] is not "
@@ -622,7 +638,13 @@ def _tags(values, *, untag: bool = False) -> list[str] | None:
     if untag:
         # A tag stored whole before tags were split -- "training,big" -- can still go.
         tags += [w for w in map(view_mod.normalise_tag, values) if w and w not in tags]
-    return tags or None
+    if not tags:
+        # `--tag ""` said "machine.yaml already says that", as though it had been kept.
+        flag = "--untag" if untag else "--tag"
+        err.print(f"[red]{flag} {escape(repr(values[0]))}[/red] is not a tag  "
+                  f"[dim]e.g. {flag} training, or {flag} a,b for two[/dim]")
+        raise typer.Exit(2)
+    return tags
 
 
 
@@ -659,6 +681,14 @@ def cmd_add(ssh_command: str = typer.Argument(None, help='e.g. "ssh -p 58418 roo
         err.print("[red]Give an ssh command, or --self -- not both, not neither.[/red]")
         raise typer.Exit(2)
     _usable_names(name=name, alias=alias)
+    if kind is not None:
+        kind = kind.strip().lower()
+        if kind not in {k.value for k in Kind}:
+            # It was refused only after the machine had been reached, as "'weird' is
+            # not a valid Kind" -- the name of a class, and no word of what would do.
+            err.print(f"[red]--kind {escape(repr(kind))}[/red] is not a kind  [dim]one "
+                      f"of {', '.join(k.value for k in Kind)}[/dim]")
+            raise typer.Exit(2)
     devices = inv.load()
     taken = inv.handles(devices)
     if alias and alias in taken:
@@ -719,6 +749,10 @@ def cmd_add(ssh_command: str = typer.Argument(None, help='e.g. "ssh -p 58418 roo
             new_eps = [e for e in inv.endpoints_of(dev) if (e.target, e.user, e.port) not in have]
             action = ("restored" if known.deleted_at
                       else "endpoint_added" if new_eps else "unchanged")
+            # What the real add would change on it, as that answers.
+            if action == "unchanged" and ((kind and dev.kind is not known.kind) or any(
+                    t not in known.tags for t in (_tags(tag) or []))):
+                action = "updated"
         else:
             action = "added"
         _emit({"action": action, "name": known.name if known else dev.name, "id": dev.id,
@@ -738,6 +772,8 @@ def cmd_add(ssh_command: str = typer.Argument(None, help='e.g. "ssh -p 58418 roo
         # port moved, say -- the tags would be dropped without a word. Apply them to the
         # record that actually survived.
         survivor = inv.find_exact(current, dev.id)
+        was = (None if survivor is None or survivor is dev else
+               (survivor.kind, list(survivor.tags), survivor.alias))
         # A new machine too: under `survivor is not dev` alone, its tags never reached
         # the list and `fleet ls --tag` found nothing.
         if survivor is not None and tags:
@@ -760,7 +796,22 @@ def cmd_add(ssh_command: str = typer.Argument(None, help='e.g. "ssh -p 58418 roo
                 inv.touch(survivor)
             if alias and not survivor.alias and alias != survivor.name:
                 apply_edits(survivor, alias=alias)
+        updated.clear()
+        if was is not None:
+            # A machine already recorded, given a new --kind or --tag: it was changed,
+            # and said "already recorded with this endpoint", action "unchanged".
+            if survivor.kind is not was[0]:
+                updated.append(f"kind {was[0].value} -> {survivor.kind.value}")
+            if survivor.tags != was[1]:
+                updated.append(f"tags {' '.join(was[1]) or '(none)'} -> "
+                               f"{' '.join(survivor.tags) or '(none)'}")
+            if survivor.alias != was[2]:
+                updated.append(f"alias {was[2] or '(none)'} -> {survivor.alias}")
+            if updated and action == "unchanged":
+                action = "updated"
         return current, action
+
+    updated: list[str] = []
 
     devices, action = inv.update(_record)
     # A machine already known keeps its own name: the record that survived is the one to
@@ -788,6 +839,12 @@ def cmd_add(ssh_command: str = typer.Argument(None, help='e.g. "ssh -p 58418 roo
                           "another endpoint (same machine-id, so this is one device, not two).")
         elif action == "unchanged":
             console.print(f"[dim]· {dev.name} {what} already recorded with this endpoint.[/dim]")
+        elif action == "updated":
+            console.print(f"[green]✓[/green] {dev.name} {what} was already recorded with "
+                          "this endpoint")
+        if action != "added":
+            for line in updated:
+                console.print(f"  {escape(line)}")
         if action != "added" and name and name != dev.name:
             # Offering a rename to a name another machine has sent people to a command
             # that only said no.
@@ -812,7 +869,8 @@ def cmd_add(ssh_command: str = typer.Argument(None, help='e.g. "ssh -p 58418 roo
         if not res.ok:
             console.print(f"  [yellow]{res.status.value}[/yellow]: {escape(res.error_detail or '')}")
     _emit({"action": action, "name": dev.name, "id": dev.id, "kind": dev.kind.value,
-           "status": res.status.value}, json_out)
+           "status": res.status.value, **({"changes": updated} if updated else {})},
+          json_out)
 
 
 def _discovered_command(text: str) -> str:
@@ -1009,6 +1067,18 @@ def cmd_edit(name: str = typer.Argument(None, help="defaults to this machine"),
         err.print(f"[red]--cost {cost:g}[/red] is not a cost  "
                   "[dim]US dollars per hour, from 0 (which clears it) up to a million[/dim]")
         raise typer.Exit(2)
+    if ssh_command is not None and not ssh_command.strip():
+        # `--ssh ""` said "nothing to change", as though the address had been kept.
+        err.print("[red]--ssh needs how you connect to it[/red]  [dim]e.g. --ssh "
+                  "\"ssh -p 40001 root@5.6.7.8\"[/dim]")
+        raise typer.Exit(2)
+    # Before anything is written: a bad --ssh refused after the tags had gone onto the
+    # machine left half the edit done.
+    try:
+        ssh_to = resolve_command(ssh_command) if ssh_command is not None else None
+    except ValueError as exc:
+        err.print(f"[red]{escape(str(exc))}[/red]")
+        raise typer.Exit(2)
     devices = inv.load()
     dev = _this_machine(devices, "edit") if name is None else inv.find(devices, name)
     if dev is None:
@@ -1017,6 +1087,7 @@ def cmd_edit(name: str = typer.Argument(None, help="defaults to this machine"),
     on_machine = bool(path or endpoint or note is not None
                       or (not local and (tag or untag or cost is not None)))
     on_machine_doc: dict | None = None
+    more = True
     if on_machine:
         here_tag, here_untag, here_cost = tag, untag, cost
         if not local:
@@ -1032,22 +1103,11 @@ def cmd_edit(name: str = typer.Argument(None, help="defaults to this machine"),
         more = here_cost is not None or any(v not in (None, False, []) for v in (
             ssh_command, disk_path, clear_disk_paths, new_name, new_alias, here_tag,
             here_untag))
-        # One --json document for the whole edit: two, back to back, are not JSON, and
-        # the MCP server handed an agent the raw text instead of the result.
-        on_machine_doc = _edit_machine_file(
-            dev, json_out, paths=path or [], endpoints=endpoint or [], note=note,
-            tags_add=[] if local else (_tags(tag) or []),
-            tags_remove=[] if local else (_tags(untag, untag=True) or []),
-            cost=None if local else cost, emit=not more)
-        if not more:
-            return
+        machine_tags = ([] if local else (_tags(tag) or []),
+                        [] if local else (_tags(untag, untag=True) or []))
+        machine_cost = None if local else cost
         tag, untag, cost = here_tag, here_untag, here_cost
 
-    try:
-        endpoint = resolve_command(ssh_command) if ssh_command else None
-    except ValueError as exc:
-        err.print(f"[red]{escape(str(exc))}[/red]")
-        raise typer.Exit(2)
     # Both at once: start again from these. Clearing first dropped the new paths too.
     paths = list(disk_path) if disk_path else ([] if clear_disk_paths else None)
     old_name, dev_id = dev.name, dev.id
@@ -1056,27 +1116,42 @@ def cmd_edit(name: str = typer.Argument(None, help="defaults to this machine"),
         return apply_edits(target, name=new_name, alias=new_alias,
                            add_tags=_tags(tag), drop_tags=_tags(untag, untag=True),
                            taken=inv.handles(current, excluding=target.id),
-                           endpoint=endpoint, disk_paths=paths, usd_per_hour=cost)
+                           endpoint=ssh_to, disk_paths=paths, usd_per_hour=cost)
 
-    try:
-        # A dry run on the copy loaded above, to refuse or report "nothing to change"
-        # before taking the lock.
-        result = _edit(dev, devices)
-    except ValueError as exc:
-        # apply_edits refuses in words -- a clashing alias, a name already taken -- and
-        # those words are the whole answer. A traceback around them was not.
-        err.print(f"[red]{escape(str(exc))}[/red]")
-        raise typer.Exit(2)
+    result = None
+    if more:
+        try:
+            # A dry run on a copy, to refuse or report "nothing to change" before taking
+            # the lock -- and before the machine's own file is written: a name already
+            # taken, or an --ssh that reaches another machine, said "nothing changed"
+            # after the tags had gone onto the machine.
+            result = _edit(copy.deepcopy(dev), devices)
+        except ValueError as exc:
+            # apply_edits refuses in words -- a clashing alias, a name already taken --
+            # and those words are the whole answer. A traceback around them was not.
+            err.print(f"[red]{escape(str(exc))}[/red]")
+            raise typer.Exit(2)
+        if (result.changes and ssh_to is not None
+                and (other := _answers_as_another(dev, ssh_to, devices))):
+            err.print(f"[red]{escape(ssh_command)} reaches {escape(other)}, not "
+                      f"{dev.name}[/red]  [dim]-- nothing changed. A typo, or the address "
+                      "now belongs to another machine; `fleet add` it if it is a new "
+                      "one.[/dim]")
+            raise typer.Exit(2)
+    if on_machine:
+        # One --json document for the whole edit: two, back to back, are not JSON, and
+        # the MCP server handed an agent the raw text instead of the result.
+        on_machine_doc = _edit_machine_file(
+            dev, json_out, paths=path or [], endpoints=endpoint or [], note=note,
+            tags_add=machine_tags[0], tags_remove=machine_tags[1], cost=machine_cost,
+            emit=not more)
+        if not more:
+            return
     if not result.changes:
         if _emit({**(on_machine_doc or {}), "name": dev.name, "changes": []}, json_out):
             return
         console.print(f"[dim]· nothing to change on {dev.name}.[/dim]")
         return
-    if endpoint is not None and (other := _answers_as_another(dev, endpoint, devices)):
-        err.print(f"[red]{escape(ssh_command)} reaches {escape(other)}, not {dev.name}[/red]"
-                  "  [dim]-- nothing changed. A typo, or the address now belongs to "
-                  "another machine; `fleet add` it if it is a new one.[/dim]")
-        raise typer.Exit(2)
 
     def _apply(current):
         # Again, on the inventory as it is now: two agents tagging one machine at once
@@ -1103,7 +1178,7 @@ def cmd_edit(name: str = typer.Argument(None, help="defaults to this machine"),
     console.print(f"[green]✓[/green] {dev.name}")
     for line in result.changes:
         console.print(f"  {escape(line)}")
-    if endpoint is not None:
+    if ssh_to is not None:
         console.print(f"  [dim]run `fleet ls {dev.name} -r` to confirm it answers.[/dim]")
 
 
@@ -2105,7 +2180,7 @@ def cmd_doctor(name: str = typer.Argument(None, help="one machine; all that are 
     from .ops import doctor
 
     devices = inv.live(inv.load())
-    if name:
+    if name is not None:
         dev = inv.find(devices, name) or _not_added(name)
         if dev is None:
             err.print(f"[red]No machine named {name!r}[/red]")
