@@ -42,7 +42,7 @@ for those there is one command: `fleet doctor NAME` says why, and what to do.
 | `NAME has no endpoint recorded` | fleet knows the machine but not how to reach it. `fleet edit NAME --ssh "ssh user@host"`. |
 | `NAME is this machine` from `fleet ssh` | Run the command here, without `fleet ssh`. |
 | `claude reads an older description of fleet` (or several agents) | `fleet setup --refresh`. |
-| `fleet ls --tag …` finds nothing, and says machines were skipped | Those machines have never been measured, so they have no measured facts yet. `fleet ls -r` measures them; a shared or mobile machine is measured only when named: `fleet ls NAME`. |
+| `fleet ls --tag …` finds nothing, and says machines were skipped | Those machines have never been measured, so they have no measured facts yet. `fleet ls -r` measures them; a shared machine is measured only when named (`fleet ls NAME`), and a mobile one never is. |
 | `… is not valid YAML`, or `device X in the inventory is malformed: …` | `machines.yaml` was edited by hand and no longer parses. The message names the file; fix it or restore a copy. fleet changes nothing until it parses. |
 | `two machines in the inventory answer to 'NAME'` | Two entries in `machines.yaml` share a name or alias -- often two copies merged in dotfiles. Rename or remove one by hand; until then fleet will not guess which one you meant. |
 | `fleet: cannot write PATH (…)` | fleet could not save one of its own files: a read-only folder, a full disk, a folder `sudo` left owned by root. Nothing was changed; free the space or fix the folder's owner and run it again. |

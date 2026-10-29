@@ -145,5 +145,5 @@ The full conditions are in the [reference](../reference/facts.md#alerts).
   — are recognised by themselves. They are measured lightly and only when you name them
   (`fleet ls NAME`), and never offered for claiming.
 - **Appliances** and **mobile** devices (`fleet add … --kind appliance`) are listed but
-  never offered for work; mobile ones are not measured at all.
+  never offered for work; mobile ones are measured once, when added, and never after.
 - **Windows** machines report no per-process detail or listening services.
