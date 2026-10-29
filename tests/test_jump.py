@@ -171,3 +171,38 @@ def test_another_jump_host_or_key_for_a_known_machine_is_another_route():
     _, action = inv.upsert(devices, dev(jump="a"))
     assert action == "unchanged"
     assert len(devices[0].endpoints) == 3
+
+
+# ------------------------------------------------------- a connection that never opened
+@pytest.mark.parametrize("reason", ["Permission denied", "failure",
+                                    "Address family not supported by protocol"])
+def test_a_connection_this_machine_could_not_open_is_not_the_machine_answering(reason):
+    # "Permission denied" from a firewall or sandbox here read as the machine refusing
+    # the key; "failure" (no IPv6 here) as "it answered, but the probe failed".
+    status, detail = runner.classify_stderr(f"ssh: connect to host ::1 port 2251: {reason}")
+    assert status is Status.UNREACHABLE and detail == f"could not connect: {reason}"
+    v = doctor.advise(_dev(), status.value, detail)
+    assert reason in v.why and "authorized_keys" not in " ".join(v.fix)
+
+
+def test_the_reasons_ssh_already_names_keep_their_own_status():
+    for reason, status in (("Connection refused", Status.REFUSED),
+                           ("Connection timed out", Status.TIMEOUT),
+                           ("No route to host", Status.UNREACHABLE)):
+        assert runner.classify_stderr(
+            f"ssh: connect to host h port 22: {reason}")[0] is status
+    assert runner.classify_stderr("me@h: Permission denied (publickey).")[0] is (
+        Status.AUTH_FAILED)
+
+
+def test_an_address_not_added_yet_is_not_given_to_fleet_ssh_as_a_name():
+    dev = Device(id="", name="ssh -p 2251 me@h", endpoints=[
+        {"target": "h", "user": "me", "port": 2251}])
+    (fix,) = doctor.advise(dev, Status.PROBE_ERROR.value, "odd", adding=True).fix
+    assert fix.startswith("ssh -p 2251 me@h 'echo ok'")
+
+
+def test_an_ipv6_jump_host_is_written_so_its_port_is_not_read_into_it():
+    # "me@::1:2251" read as port 1 of ::1, and -J takes an unbracketed one apart.
+    assert Hop("me", "::1", 2251).shown == "me@[::1]:2251"
+    assert Hop("me", "fd00::1").spec == "me@[fd00::1]"

@@ -79,20 +79,17 @@ class Hop:
     port: int = 22
 
     @property
-    def shown(self) -> str:
-        name = f"{self.user}@{self.host}" if self.user else self.host
+    def spec(self) -> str:
+        """As `-J` takes it, and as it is shown: `me@::1:2251` read as port 1 of ::1."""
+        host = f"[{self.host}]" if ":" in self.host else self.host
+        name = f"{self.user}@{host}" if self.user else host
         return f"{name}:{self.port}" if self.port != 22 else name
+
+    shown = spec
 
     def ssh_command(self) -> str:
         bits = ["ssh"] + (["-p", str(self.port)] if self.port != 22 else [])
         return " ".join(bits + [f"{self.user}@{self.host}" if self.user else self.host])
-
-    @property
-    def spec(self) -> str:
-        """As `-J` takes it."""
-        host = f"[{self.host}]" if ":" in self.host else self.host
-        name = f"{self.user}@{host}" if self.user else host
-        return f"{name}:{self.port}" if self.port != 22 else name
 
 
 def jump_hops(jump: str) -> list[Hop]:

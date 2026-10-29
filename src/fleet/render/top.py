@@ -17,7 +17,7 @@ from typing import Any
 from rich.markup import escape
 from rich.table import Table
 
-from ..models import Device, Kind
+from ..models import Device, Kind, Status
 from .view import usd
 
 # Block characters, not "#": rich parses a leading "#" inside brackets as a hex colour
@@ -389,6 +389,18 @@ def _fleet_table(rows: list[dict[str, Any]], live_within: int, gave_up: set[str]
     return t
 
 
+def _reading_state(row: dict[str, Any], stale: str) -> str:
+    """live, how old, or why there is no reading: a machine that refused was headed
+    "live", over a reading of nothing."""
+    status = row.get("status")
+    if status in (None, Status.OK.value):
+        return f"[dim]{stale} old[/dim]" if stale else "[green]live[/green]"
+    detail = escape((row.get("error") or {}).get("detail") or "")
+    word = ("[dim]not measured[/dim]" if status == Status.SKIPPED_POLICY.value
+            else f"[red]{escape(status)}[/red]")
+    return f"{word} [dim]{detail}{f'; read {stale} ago' if stale else ''}[/dim]"
+
+
 def render_device(row: dict[str, Any], live_within: int = 10) -> Table:
     """One device in detail: every GPU, then what is actually holding it."""
     t = Table(box=None, pad_edge=False, show_header=False)
@@ -402,15 +414,17 @@ def render_device(row: dict[str, Any], live_within: int = 10) -> Table:
               f"{escape(row['name'])}"
               + (f" [dim]({escape(host)})[/dim]" if host and host != row["name"] else "")
               + f"  [dim]{escape(row.get('os') or '')}[/dim]  "
-              + (f"[dim]{stale} old[/dim]" if stale else "[green]live[/green]"))
+              + _reading_state(row, stale))
     pct = cpu_pct(row)
     t.add_row("[bold]cpu[/bold]",
               (f"{escape(meter(pct or 0, 100, 20))} {pct}%" if pct is not None else "?")
               + f"  [dim]{row.get('cpu_cores') or '?'} cores[/dim]")
     total = row.get("ram_total_gb") or 0
     free = row.get("ram_free_gb") or 0
+    # Never read: "0G free", drawn as an empty meter, said the opposite of unknown.
     t.add_row("[bold]ram[/bold]",
-              f"{escape(meter(total - free, total, 20))} {free:.0f}G free")
+              f"{escape(meter(total - free, total, 20))} {free:.0f}G free"
+              if row.get("ram_total_gb") is not None else "?")
     for gpu in row.get("gpus") or []:
         used = gpu.get("vram_total_mib", 0) - gpu.get("vram_free_mib", 0)
         t.add_row(f"[bold]gpu{gpu.get('idx', 0)}[/bold]",
@@ -488,9 +502,12 @@ def _ls_table(rows: list[dict[str, Any]], gave_up: set[str]) -> Table:
     # card. A fleet of single-GPU boxes renders exactly as it always did.
     tall = any(device_lines(r) > 1 for r in rows)
     priced = any(r["usd_per_hour"] for r in rows)
+    notes = [escape((r.get("error", {}).get("detail", "") if r["status"] != "ok" else (
+        r["alerts"][0] if r["alerts"] else "")) or "") for r in rows]
+    # Not with nothing in it: at 80 columns an empty NOTE cost the kind and the price.
     shown = {"KIND": "kind" not in gave_up, "AGE": "age" not in gave_up,
              "$/HR": "price" not in gave_up and (priced or "price_if_none" not in gave_up),
-             "NOTE": "note" not in gave_up}
+             "NOTE": "note" not in gave_up and any(notes)}
     columns = (("", {}), ("NAME", {"no_wrap": True}), ("KIND", {"no_wrap": True}),
                ("GPU", {"no_wrap": True, "overflow": "ellipsis", "max_width": 24}),
                ("VRAM FREE", {"justify": "left" if tall else "right", "no_wrap": True}),
@@ -505,10 +522,8 @@ def _ls_table(rows: list[dict[str, Any]], gave_up: set[str]) -> Table:
     for col, kw in columns:
         if shown.get(col, True):
             t.add_column(col, **kw)
-    for r in rows:
+    for r, note in zip(rows, notes):
         gpu, vram = gpu_cells_compact(r)
-        note = escape((r.get("error", {}).get("detail", "") if r["status"] != "ok" else (
-            r["alerts"][0] if r["alerts"] else "")) or "")
         # "86400s" for a reading a day old: in the units `staleness` uses.
         age = staleness(r, -1) if r["telemetry_age_s"] is not None else "-"
         cells = {"": DOT.get(r["status"], "?"), "NAME": name_cell(r), "KIND": escape(r["kind"]),
