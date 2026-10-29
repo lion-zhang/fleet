@@ -294,8 +294,14 @@ def _print_discovered(json_out: bool, *, hide: list[str] = (), unhide: list[str]
     if unhide:
         discover.set_hidden(list(unhide), hide=False)
     found = discover.candidates(include_hidden=show_all)
-    if _emit({"candidates": [c.to_dict() for c in found],
-              "hidden": sorted(discover.hidden())}, json_out):
+    gone = discover.hidden()
+
+    def is_hidden(c) -> bool:
+        # Under --all a hidden one was listed like any other, with nothing to say which.
+        return c.name.lower() in gone or c.target.lower() in gone
+
+    if _emit({"candidates": [{**c.to_dict(), "hidden": is_hidden(c)} for c in found],
+              "hidden": sorted(gone)}, json_out):
         return
     new = [c for c in found if not c.added]
     if not found:
@@ -306,17 +312,29 @@ def _print_discovered(json_out: bool, *, hide: list[str] = (), unhide: list[str]
     for col in ("NAME", "FROM", "OS", "ONLINE", "ADD WITH"):
         t.add_column(col, no_wrap=True)
     for c in new:
-        t.add_row(c.name, c.source, c.os or "-",
+        t.add_row(c.name + (" [dim](hidden)[/dim]" if is_hidden(c) else ""), c.source,
+                  c.os or "-",
                   "-" if c.online is None else ("yes" if c.online else "[dim]no[/dim]"),
                   f"fleet add {c.name if c.source == 'ssh-config' else c.target}")
     if new:
         console.print(t)
-    added = [c for c in found if c.added]
+    added: dict[str, list[str]] = {}
+    for c in found:
+        if c.added:
+            added.setdefault(c.added, []).append(c.name + (" (hidden)" if is_hidden(c) else ""))
     if added:
-        console.print(f"\n[dim]already added: {', '.join(c.added for c in added)}[/dim]")
-    if (gone := discover.hidden()) and not show_all:
+        # Six Host entries for one machine read "lab, lab, lab, lab, lab, lab".
+        console.print("\n[dim]already added: " + ", ".join(
+            name + (f" (as {', '.join(n for n in via if n != name)})"
+                    if any(n != name for n in via) else "")
+            for name, via in added.items()) + "[/dim]")
+    if gone and not show_all:
         console.print(f"[dim]hidden ({len(gone)}): --all lists them, --unhide NAME offers "
                       "one again[/dim]")
+    elif show_all and (unseen := sorted(gone - {c.name.lower() for c in found}
+                                        - {c.target.lower() for c in found})):
+        # --all was said to list them, and a hidden name no longer found listed nothing.
+        console.print(f"[dim]hidden, and not found now: {escape(', '.join(unseen))}[/dim]")
 
 
 @app.command("show")
