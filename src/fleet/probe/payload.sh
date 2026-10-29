@@ -473,6 +473,11 @@ writable() {
 }
 
 # ---------------------------------------------------------------- disk
+# On a Mac every APFS volume of a disk reports the whole disk's size and free space, and
+# only its own use: "/" said 11G used and 30G free on a 1T disk that its data volume had
+# filled to 97% -- 27% "used", and the disk-full alert could never come. What is used of
+# the disk is what is not free.
+MAC_DF=; [ "$OS" = "Darwin" ] && MAC_DF=1
 echo "#DISK mount|total_kb|used_kb|avail_kb|rw"
 if have df; then
   if [ -n "${FLEET_DISK_PATHS:-}" ]; then
@@ -490,8 +495,8 @@ if have df; then
       # the machine showed no disk at all and nothing said why.
       [ -e "$q" ] || { printf '%s|0|0|0|missing\n' "$p"; continue; }
       rw=$(writable "$q")
-      dfk -Pk "$q" 2>/dev/null | awk -v p="$p" -v rw="$rw" 'NR>1 && $2+0>0 {
-        printf "%s|%s|%s|%s|%s\n", p, $2, $3, $4, rw
+      dfk -Pk "$q" 2>/dev/null | awk -v p="$p" -v rw="$rw" -v mac="$MAC_DF" 'NR>1 && $2+0>0 {
+        printf "%s|%s|%s|%s|%s\n", p, $2, (mac ? $2 - $4 : $3), $4, rw
       }'
     done | head -20
   else
@@ -503,10 +508,10 @@ if have df; then
     # Twenty are kept: / and then the biggest. Cut by name, twenty shares under /mnt
     # left out /workspace -- the 8 TB volume a rental is for, and its storage facts.
     { all=$(dfk -Pk 2>/dev/null); [ $? -ge 124 ] && all=$(dfk -Pkl 2>/dev/null); printf '%s\n' "$all"; } \
-      | awk 'NR>1 && $2+0>0 {
+      | awk -v mac="$MAC_DF" 'NR>1 && $2+0>0 {
       m=$0; sub(/^.* [0-9]+% +/, "", m)
       if (m=="/" || m ~ /^\/(workspace|data|mnt|home|srv|opt|Volumes|scratch)/)
-        printf "%s|%s|%s|%s\n", m, $2, $3, $4
+        printf "%s|%s|%s|%s\n", m, $2, (mac ? $2 - $4 : $3), $4
     }' | sort -u \
       | awk -F'|' '{ print ($1 == "/" ? 0 : 1) "|" $0 }' | sort -t'|' -k1,1n -k3,3nr \
       | head -20 | cut -d'|' -f2- | sort | while IFS='|' read -r m tot used avail; do
@@ -560,6 +565,8 @@ if [ "$FLEET_MODE" != "shared" ]; then
   fi
 
   echo "#CPUPROC pid|user|pcpu|rss_kb|etimes|comm"
+  # Only processes using over 1% of a core: on a Mac every idle one was listed too, and
+  # `fleet show` named launchd and a shell at 0% as what kept the machine busy.
   # A process alive for under a second is also dropped (Linux only -- Darwin's etime
   # cannot express sub-second). pcpu is cputime/elapsed, so at elapsed near zero it is
   # meaningless and inflated, which is how a tailscaled fork servicing our own inbound
@@ -570,7 +577,7 @@ if [ "$FLEET_MODE" != "shared" ]; then
   # Filtering happens before sort|head, or our own rows would displace real ones.
   if [ "$OS" = "Darwin" ]; then
     ps -axo pid=,ppid=,user=,pcpu=,rss=,etime=,comm= 2>/dev/null \
-      | awk -v me="$$" '$1 != me && $2 != me {
+      | awk -v me="$$" '$1 != me && $2 != me && $4+0>1.0 {
               p=$1;u=$3;c=$4;r=$5;e=$6;
               $1="";$2="";$3="";$4="";$5="";$6="";sub(/^ +/,"");
               n=split($0,a,"/"); printf "%s|%s|%s|%s|%s|%s\n",p,u,c,r,e,a[n]}' \
