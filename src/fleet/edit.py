@@ -134,7 +134,9 @@ def apply_edits(dev: Device, *, endpoint: Endpoint | None = None,
             raise ValueError(f"another machine already answers to {alias!r}")
         if alias and alias == dev.name:
             raise ValueError("an alias the same as the name is not an alias")
-        out.changes.append(f"alias {dev.alias or 'none'} -> {alias or 'none'}")
+        # "(none)", not "none": that is a usable alias, and `--alias none` then read
+        # "alias none -> none", as if nothing had been set.
+        out.changes.append(f"alias {dev.alias or '(none)'} -> {alias or '(none)'}")
         dev.alias = alias
     if add_tags or drop_tags:
         # Add and remove rather than replacing the whole list the way --disk-path does:
@@ -143,8 +145,8 @@ def apply_edits(dev: Device, *, endpoint: Endpoint | None = None,
         after = [t for t in before if t not in (drop_tags or [])]
         after += [t for t in (add_tags or []) if t not in after]
         if after != before:
-            out.changes.append(f"tags {' '.join(before) or 'none'} -> "
-                               f"{' '.join(after) or 'none'}")
+            out.changes.append(f"tags {' '.join(before) or '(none)'} -> "
+                               f"{' '.join(after) or '(none)'}")
             dev.tags = after
     if endpoint is not None:
         _replace_primary(dev, endpoint, out)

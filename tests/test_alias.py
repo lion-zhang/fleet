@@ -377,7 +377,7 @@ def test_untag_removes_a_tag_that_add_kept_here(tmp_path, monkeypatch):
     assert r.exit_code == 0, r.output
     assert inv.find_exact(inv.load(), "box").tags == []
     # It said "machine.yaml already says that" first, which read as nothing done.
-    assert "already says" not in r.output and "tags web -> none" in r.output, r.output
+    assert "already says" not in r.output and "tags web -> (none)" in r.output, r.output
     r = runner.invoke(cli.app, ["edit", "box", "--untag", "web"])
     assert "box has no tag web" in r.output, r.output
 
@@ -556,3 +556,24 @@ def test_removing_a_server_that_was_never_declared_says_so(tmp_path, monkeypatch
     r = runner.invoke(cli.app, ["edit", "box", "--endpoint", "other=9001",
                                 "--endpoint", "mylm="])
     assert "mylm: removed" not in r.output and "declares no server mylm" in r.output
+
+
+def test_an_option_given_without_the_one_it_needs_says_so(tmp_path, monkeypatch):
+    """`--wait 30` without --rescan returned at once, and `ls --all` without --discover
+    listed what it always lists, both without a word: as --fields without --json does,
+    each now says which option it goes with."""
+    runner = _cli(tmp_path, monkeypatch)
+    for args, says in ((["ls", "--wait", "3"], "--wait applies to --rescan"),
+                       (["models", "--wait", "3"], "--wait applies to --rescan"),
+                       (["ls", "--all"], "--all applies to --discover")):
+        r = runner.invoke(cli.app, args)
+        assert r.exit_code == 0 and says in r.output, (args, r.output)
+
+
+def test_an_alias_spelt_none_is_not_shown_as_no_alias():
+    """`--alias none` is a usable alias, and the change read "alias none -> none"."""
+    from fleet.edit import apply_edits
+
+    dev = Device(id="id:a", name="box", kind=Kind.PERMANENT)
+    assert apply_edits(dev, alias="none").changes == ["alias (none) -> none"]
+    assert apply_edits(dev, alias="").changes == ["alias none -> (none)"]
