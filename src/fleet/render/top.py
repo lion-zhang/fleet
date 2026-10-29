@@ -584,8 +584,13 @@ def render_ps(view: dict[str, Any]) -> list:
                       f"[dim]pid {j.get('pid', '?')}, not visible from this login "
                       "(a container?)[/dim]" if hidden else escape(j["command"] or ""))
         out.append(t)
-    else:
+    elif not view.get("busy_unseen"):
         out.append("[dim]No jobs on any GPU.[/dim]")
+    if view.get("busy_unseen"):
+        out.append(("\n" if view["jobs"] else "") + "[yellow]busy[/yellow]  " + "  ".join(
+            f"{escape(b['machine'])} gpu{b['gpu']} [dim]({b['vram_used_mib'] / 1024:.1f}G, "
+            f"{b['util_pct']}%)[/dim]" for b in view["busy_unseen"])
+            + "  [dim]by processes not visible from this login (a container?)[/dim]")
     if view["idle"]:
         out.append("\n[green]idle[/green]  " + "  ".join(
             f"{escape(i['machine'])} gpu{i['gpu']} [dim]"

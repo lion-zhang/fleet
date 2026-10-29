@@ -285,7 +285,9 @@ def build_server():
 
     @server.tool(description="Every job on every GPU across the fleet -- who runs it, "
                              "how much VRAM, for how long, the command -- and which GPUs "
-                             "are idle. A GPU with jobs is someone's: ask before using it.")
+                             "are idle. A GPU with jobs is someone's: ask before using it, "
+                             "and so is one in `busy_unseen`, in use by processes this "
+                             "login cannot see.")
     def list_gpu_jobs(names: list[str] | None = None, refresh: bool = False) -> Any:
         return _run(["ps", "--json", *(["--refresh"] if refresh else []), "--", *(names or [])])
 

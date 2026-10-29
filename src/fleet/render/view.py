@@ -692,20 +692,27 @@ def connect_view(dev: Device, state: dict | None = None, *, here: bool = False) 
 
 def jobs_view(rows: list[dict]) -> dict:
     """`fleet ps`: every GPU job across the fleet, the idle GPUs, and who was not read."""
-    jobs, idle = [], []
+    jobs, idle, busy = [], [], []
     for r in rows:
         if r["status"] != "ok":
             continue
         for g in r["gpus"]:
             for j in g.get("jobs", []):
                 jobs.append({"machine": r["name"], "gpu": g["idx"], "gpu_name": g["name"], **j})
+            # Busy with nothing listed -- a job in a container, another user's: neither a
+            # job nor idle, so it was left out of both and ps said "No jobs on any GPU."
+            # beside a card at 97% holding 20G. Not a shared host's: its processes are
+            # left unread on purpose, so every card in use there would read as hidden.
+            if not g.get("jobs") and g.get("busy") and r.get("claimable", True):
+                busy.append({"machine": r["name"], "gpu": g["idx"], "gpu_name": g["name"],
+                             "vram_used_mib": g["vram_used_mib"], "util_pct": g["util_pct"]})
             # A shared host's, an appliance's: "never offered for work", and an agent
             # took the idle list for the GPUs it could start on.
             if not g.get("jobs") and not g.get("busy") and r.get("claimable", True):
                 idle.append({"machine": r["name"], "gpu": g["idx"], "gpu_name": g["name"],
                              "vram_free_mib": g["vram_free_mib"],
                              "shared_memory": bool(g.get("shared_memory"))})
-    return {"jobs": jobs, "idle": idle,
+    return {"jobs": jobs, "idle": idle, "busy_unseen": busy,
             # Never read, its GPUs are not known to be none: `fleet ps gpu` on a machine
             # that was down said "No jobs on any GPU." and nothing else.
             "not_read": [r["name"] for r in rows if r["status"] != "ok"
