@@ -349,6 +349,21 @@ def test_the_first_run_says_nothing_of_a_0_5_list_that_is_not_there(home, monkey
     assert not any("inventory.yaml" in s for s in said)
 
 
+def test_a_tailnet_offers_its_machines_by_their_magicdns_names_and_no_exit_nodes():
+    """A Mullvad exit node was offered as a machine to add; "Lin's MacBook Pro" was
+    offered under a name `--hide` refused; two laptops named "laptop" shared one name."""
+    status = {"Peer": {
+        "a": {"HostName": "Lin's MacBook Pro", "DNSName": "lins-macbook-pro.example.ts.net.",
+              "OS": "macOS", "TailscaleIPs": ["100.64.0.8"]},
+        "b": {"HostName": "laptop", "DNSName": "laptop.example.ts.net.", "OS": "linux"},
+        "c": {"HostName": "laptop", "DNSName": "laptop-1.example.ts.net.", "OS": "linux"},
+        "d": {"HostName": "us-nyc-wg-301", "DNSName": "us-nyc-wg-301.example.ts.net.",
+              "OS": "linux", "ExitNodeOption": True, "Location": {"Country": "USA"}},
+    }}
+    assert [c.name for c in discover.tailnet(status)] == [
+        "laptop", "laptop-1", "lins-macbook-pro"]
+
+
 # ---------------------------------------------------------------- hiding candidates
 def test_a_hidden_candidate_is_not_offered_until_unhidden(home, monkeypatch):
     (home / ".ssh" / "config").write_text("Host lab\nHost old-box\n")
@@ -366,6 +381,24 @@ def test_ls_discover_hide_says_what_is_hidden(monkeypatch):
     r = CliRunner().invoke(cli.app, ["ls", "--discover", "--hide", "printer", "--json"])
     assert r.exit_code == 0, r.output
     assert json.loads(r.stdout)["hidden"] == ["printer"]
+
+
+def test_discover_names_each_entry_for_a_machine_and_marks_what_is_hidden(monkeypatch):
+    """Six Host entries for one added machine read "already added: lab, lab, lab, lab,
+    lab, lab"; under --all a hidden one was listed with nothing to say so, and a hidden
+    name no longer found listed nothing at all, though --all was said to list them."""
+    C = discover.Candidate
+    monkeypatch.setattr(discover, "candidates", lambda **k: [
+        C("alpha", "alpha", "ssh alpha", "ssh-config", added="lab"),
+        C("beta", "beta", "ssh beta", "ssh-config", added="lab"),
+        C("delta", "delta", "ssh delta", "ssh-config")])
+    monkeypatch.setattr(discover, "hidden", lambda: {"delta", "gone-box"})
+    r = CliRunner().invoke(cli.app, ["ls", "--discover", "--all"], env={"COLUMNS": "200"})
+    assert "already added: lab (as alpha, beta)" in r.output, r.output
+    assert "delta (hidden)" in r.output and "not found now: gone-box" in r.output, r.output
+    r = CliRunner().invoke(cli.app, ["ls", "--discover", "--all", "--json"])
+    assert {c["name"]: c["hidden"] for c in json.loads(r.stdout)["candidates"]} == {
+        "alpha": False, "beta": False, "delta": True}
 
 
 # ---------------------------------------------------------------- edit: where it lands
