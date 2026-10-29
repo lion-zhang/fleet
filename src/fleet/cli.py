@@ -33,7 +33,7 @@ from .agents import (MCP_CLIENTS, TARGETS, config_command, detect_mcp_clients,
                      install_mcp, installed_mcp_clients, installed_targets, package_version,
                      stale_mcp_clients, stale_targets, uninstall, uninstall_mcp)
 from .config import INVENTORY_PATH, load_config
-from .edit import apply_edits, check_name
+from .edit import apply_edits, check_name, is_full_path
 from .install import (NOTHING_TO_UPDATE, build_install_argv, install_script, needs_agent,
                       install_source,
                       local_install_argv, payload_for)
@@ -189,8 +189,11 @@ def cmd_ls(names: list[str] = typer.Argument(None, help="only these devices"),
                  and not all(matches_tag(r, t) for t in tag)]
         rows = [r for r in rows if all(matches_tag(r, t) for t in tag)]
         if blind:
-            err.print(f"[dim]! {len(blind)} with no telemetry were not considered: "
-                      f"{', '.join(sorted(blind)[:6])}[/dim]")
+            # "1 ... were", and a seventh one cut from the list without a word.
+            more = f" and {len(blind) - 6} more" if len(blind) > 6 else ""
+            err.print(f"[dim]! {len(blind)} with no telemetry "
+                      f"{'was' if len(blind) == 1 else 'were'} not considered: "
+                      f"{', '.join(sorted(blind)[:6])}{more}[/dim]")
     view = fleet_view(rows)
     if fields and json_out:
         wanted = [f.strip() for f in fields.split(",") if f.strip()]
@@ -441,6 +444,9 @@ def _print_show(r: dict) -> None:
                 continue
             console.print(f"        {p['pid']:>8} {escape(p['user'] or '?'):<10} {p['vram_mib']:>6} MiB  "
                           f"{runtime_text(p.get('etimes', 0)):>6}  {escape((p.get('args') or p['comm'])[:90])}")
+        if r.get("processes_more"):
+            console.print(f"        [dim]and {r['processes_more']} more: "
+                          f"fleet ps {escape(r['name'])} lists them all[/dim]")
     elif r["gpus"]:
         console.print("  [dim]gpu compute   none — no job is using this GPU[/dim]")
     if r.get("top_cpu"):
@@ -532,7 +538,7 @@ def _edit_machine_file(dev, json_out: bool, *, paths: list[str], endpoints: list
                       "[dim]e.g. --path models=/data/models (kinds: "
                       f"{', '.join(notes_mod.KINDS)}, or your own)[/dim]")
             raise typer.Exit(2)
-        if value.strip() and not re.match(r"(/|~(/|$)|[A-Za-z]:[\\/]|\\\\)", value.strip()):
+        if value.strip() and not is_full_path(value):
             # `models=data/models` was kept as written: relative to wherever the probe's
             # shell started, shown as is beside `~/m` shown in full, and no use to an
             # agent working anywhere else.

@@ -292,3 +292,36 @@ def test_a_reading_from_the_future_has_no_age():
     row = device_view(make(), {**STATE_OK, "last_probe_at": future},
                       {**snap_of("gpu-box"), "ts": future})
     assert row["telemetry_age_s"] is None and row["snapshot_age_s"] is None
+
+
+def test_a_gpu_with_ten_jobs_does_not_read_as_eight(capsys):
+    """`fleet show` and `fleet top NAME` listed the eight biggest GPU jobs and said
+    nothing of the rest: a box running ten read as running eight."""
+    from rich.console import Console
+
+    from fleet import cli
+    from fleet.render.top import render_device
+
+    snap = snap_of("gpu-box")
+    uuid = snap["gpus"][0]["uuid"]
+    snap["processes"] += [{"pid": 2000 + i, "user": "lin", "comm": "python", "klass": "compute",
+                           "scope": "gpu", "gpu_uuid": uuid, "vram_mib": 100 + i,
+                           "cpu_pct": 0.0, "rss_kb": 0, "etimes": 60, "args": f"python job{i}.py"}
+                          for i in range(10)]
+    v = device_view(make(), STATE_OK, snap, Detail.FULL)
+    assert len(v["processes"]) == 8 and v["processes_more"] == 2
+    assert len(v["gpus"][0]["jobs"]) == 10           # `fleet ps` still has them all
+
+    cli._print_show(v)
+    out = capsys.readouterr().out
+    assert "and 2 more" in out and "fleet ps gpu-box" in out
+
+    console = Console(width=120, record=True)
+    console.print(render_device(v))
+    assert "and 2 more" in console.export_text()
+
+
+def test_eight_jobs_say_nothing_of_more():
+    snap = snap_of("gpu-box")
+    v = device_view(make(), STATE_OK, snap, Detail.FULL)
+    assert v["processes_more"] == 0

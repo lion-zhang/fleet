@@ -201,8 +201,10 @@ def test_on_windows_this_machine_is_updated_last_and_in_the_background(fleet_of,
     assert "in the background" in r.output and "2 updated" in r.output
 
 
-def test_the_windows_runner_waits_for_fleet_then_reports_how_it_ended(tmp_path):
-    text = install._windows_update_runner(tmp_path / "it's.ps1", [123, 456])
+def test_the_windows_runner_waits_for_fleet_then_reports_how_it_ended():
+    # A path with no digits in it: under tmp_path the check that 456 comes only after
+    # the wait failed whenever pytest's own folder was pytest-456 (or 1456, 4560...).
+    text = install._windows_update_runner(Path("C:/Users/me/fleet/it's.ps1"), [123, 456])
     assert "$id = 123" in text and "456" not in text.split("waiting for fleet")[0]
     # up to the fleet.exe that started us and no further: whoever ran fleet.exe -- an
     # agent, a test harness -- may be waiting for us, and waiting for it never ends

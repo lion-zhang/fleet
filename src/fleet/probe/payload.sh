@@ -473,11 +473,15 @@ if have df; then
     # come separated by "|", not spaces, which cut "/mnt/My Data" in two.
     printf '%s\n' "$FLEET_DISK_PATHS" | tr '|' '\n' | while IFS= read -r p; do
       [ -n "$p" ] || continue
+      # `~/data` is this login's home, as it is for a folder: looked up as written, it
+      # was "not there". The row keeps the path as asked.
+      q=$p
+      case "$q" in "~") q=$HOME ;; "~/"*) q="$HOME/${q#\~/}" ;; esac
       # A path that is not there (mistyped, or not mounted yet) is said so: dropped,
       # the machine showed no disk at all and nothing said why.
-      [ -e "$p" ] || { printf '%s|0|0|0|missing\n' "$p"; continue; }
-      rw=$(writable "$p")
-      dfk -Pk "$p" 2>/dev/null | awk -v p="$p" -v rw="$rw" 'NR>1 && $2+0>0 {
+      [ -e "$q" ] || { printf '%s|0|0|0|missing\n' "$p"; continue; }
+      rw=$(writable "$q")
+      dfk -Pk "$q" 2>/dev/null | awk -v p="$p" -v rw="$rw" 'NR>1 && $2+0>0 {
         printf "%s|%s|%s|%s|%s\n", p, $2, $3, $4, rw
       }'
     done | head -20

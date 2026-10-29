@@ -614,6 +614,8 @@ def device_view(dev: Device, state: dict | None, snap: dict | None,
             # top compute processes only; display apps collapse to one number because a
             # single Chromium cmdline is ~1 KB and would flood an agent's context.
             "processes": sorted(compute, key=lambda p: -p.get("vram_mib", 0))[:8],
+            # and how many that cut, so ten jobs never read as eight
+            "processes_more": max(len(compute) - 8, 0),
             "top_cpu": top_cpu,
             "display_overhead_mib": display_mib,
             "services_detail": (snap or {}).get("services", []),

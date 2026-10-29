@@ -425,6 +425,8 @@ def render_device(row: dict[str, Any], live_within: int = 10) -> Table:
         t.add_row("[dim]gpu job[/dim]",
                   f"{proc.get('vram_mib', 0)} MiB  {escape(proc.get('user') or '?')}  "
                   f"[dim]{escape(short_command(what, 60))}[/dim]")
+    if more := max(len(row.get("processes") or []) - 8, 0) + (row.get("processes_more") or 0):
+        t.add_row("[dim]gpu job[/dim]", f"[dim]and {more} more[/dim]")
     for m in row.get("models") or []:
         more = (m.get("models_total") or 0) - len(m.get("models") or [])
         t.add_row("[bold]models[/bold]",

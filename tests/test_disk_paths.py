@@ -569,3 +569,27 @@ def test_the_biggest_volume_is_kept_when_there_are_many(tmp_path):
         PATH=f"{bin_}:/usr/bin:/bin:/usr/sbin:/sbin", HOME=str(tmp_path)))]
     assert len(got) == 20 and "/workspace" in got and "/" in got
     assert not {f"/mnt/share{i:02d}" for i in range(7)} & set(got), "the smallest go"
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="payload is POSIX sh")
+def test_a_path_in_the_home_is_found_and_keeps_its_name(tmp_path):
+    """`--disk-path ~/data` was looked up as the folder "~/data" and said not to be
+    there, though the login's home has it."""
+    (tmp_path / "data").mkdir()
+    rows = _disk_rows(_run_payload(HOME=str(tmp_path), FLEET_DISK_PATHS="~|~/data|~/gone"))
+    assert [r.split("|")[0] for r in rows if not r.endswith("|missing")] == ["~", "~/data"]
+    assert "~/gone|0|0|0|missing" in rows
+
+
+def test_a_disk_path_must_be_full_and_is_kept_once():
+    """`--disk-path data` was watched relative to wherever the probe's shell started,
+    `/` given twice was listed twice, and the change read "['/data', '/']"."""
+    from fleet.edit import apply_edits
+    from fleet.models import Device, Kind
+
+    dev = Device(id="x", name="box", kind=Kind.PERMANENT, disk_paths=["/data"])
+    with pytest.raises(ValueError, match="data is not a full path"):
+        apply_edits(dev, disk_paths=["data"])
+    out = apply_edits(dev, disk_paths=["/", "/", "/tmp/", "/tmp", "~", "D:\\x"])
+    assert dev.disk_paths == ["/", "/tmp/", "~", "D:\\x"]
+    assert out.changes == ["disk paths /data -> /, /tmp/, ~, D:\\x"]

@@ -95,6 +95,15 @@ def _migrate_identity(dev: Device, ep: Endpoint, out: Edits) -> None:
 _NAME = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]{0,62}")
 
 
+# A folder on another machine, written so it means the same wherever the probe's shell
+# starts: from the root, from the home (`~`), a drive letter or a share.
+_FULL_PATH = re.compile(r"(/|~(/|$)|[A-Za-z]:[\\/]|\\\\)")
+
+
+def is_full_path(path: str) -> bool:
+    return bool(_FULL_PATH.match(path.strip()))
+
+
 def check_name(name: str, what: str = "name") -> str:
     """A machine's name or alias: what people type and agents pass as an argument.
 
@@ -161,10 +170,22 @@ def apply_edits(dev: Device, *, endpoint: Endpoint | None = None,
         # nothing said which. Back to every disk has its own flag.
         raise ValueError("--disk-path needs a folder; --clear-disk-paths watches every "
                          "disk again")
+    if disk_paths:
+        # `--disk-path data` was watched relative to wherever the probe's shell started;
+        # `/` given twice, or `/tmp/` and `/tmp`, was watched and listed twice.
+        if bad := [p for p in disk_paths if not is_full_path(str(p))]:
+            raise ValueError(f"--disk-path {bad[0]} is not a full path: e.g. /workspace, "
+                             "~/data or D:\\data")
+        seen: dict[str, str] = {}
+        for p in (str(p).strip() for p in disk_paths):
+            seen.setdefault(p.rstrip("/\\") or p, p)
+        disk_paths = list(seen.values())
     if disk_paths is not None and list(disk_paths) != list(dev.disk_paths):
         before = list(dev.disk_paths) or ["auto"]
         dev.disk_paths = list(disk_paths)
-        out.changes.append(f"disk paths {before} -> {dev.disk_paths or ['auto']}")
+        # "['/data', '/']" was Python's own spelling of a list.
+        out.changes.append(f"disk paths {', '.join(before)} -> "
+                           f"{', '.join(dev.disk_paths or ['auto'])}")
     if usd_per_hour is not None:
         # What a machine costs to keep, per hour; 0 clears it. It drives the $/HR
         # column and the fleet's burn rate (the idle-rental alert goes by kind, not
