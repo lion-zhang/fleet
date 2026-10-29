@@ -45,7 +45,10 @@ Emit "cpu.model" (Get-CimInstance Win32_Processor | Select-Object -First 1 -Expa
 # rather than omitting it: cpu_pct divides load by cores, so the shape must match.
 $busy = (Get-CimInstance Win32_Processor | Measure-Object -Property LoadPercentage -Average).Average
 if ($null -ne $busy) {
-    Emit "cpu.load" ("{0:N2} {0:N2} {0:N2}" -f ($busy / 100 * $cs.NumberOfLogicalProcessors))
+    # In the invariant culture: `-f` writes the machine's own, and on a German or French
+    # Windows "1,50" is no number to the parser, so its CPU read "?" for ever.
+    $load = ($busy / 100 * $cs.NumberOfLogicalProcessors).ToString('F2', [Globalization.CultureInfo]::InvariantCulture)
+    Emit "cpu.load" "$load $load $load"
 }
 
 Emit "mem.total_kb" ([int64]$os.TotalVisibleMemorySize)
@@ -55,9 +58,23 @@ Emit "mem.avail_kb" ([int64]$os.FreePhysicalMemory)
 # is how gpu.present and gpu.driver used to be lost on every Windows machine.
 $smi = Get-Command nvidia-smi -ErrorAction SilentlyContinue
 if ($smi) {
-    Emit "gpu.present" 1
-    Emit "gpu.driver" (& nvidia-smi --query-gpu=driver_version --format=csv,noheader 2>$null |
-                       Select-Object -First 1)
+    # A broken driver answers on stdout ("NVIDIA-SMI has failed because it couldn't
+    # communicate with the NVIDIA driver"), as on Linux: taken for a driver version, the
+    # machine read as having no GPU and nothing said why. payload.sh does the same.
+    $driver = "" + (& nvidia-smi --query-gpu=driver_version --format=csv,noheader 2>$null |
+                    Select-Object -First 1)
+    $driver = ($driver -replace '[\r\n|]', ' ').Trim()
+    if ($driver -match '^[0-9]') {
+        Emit "gpu.present" 1
+        Emit "gpu.driver" $driver
+    } else {
+        if (-not $driver) {
+            $driver = ("" + (& nvidia-smi 2>&1 | Where-Object { "$_".Trim() } | Select-Object -First 1)) -replace '[\r\n|]', ' '
+        }
+        Emit "gpu.present" "err"
+        Emit "gpu.error" $driver.Trim()
+        $smi = $null
+    }
 } else {
     Emit "gpu.present" 0
 }
@@ -112,7 +129,9 @@ if ($env:FLEET_DISK_PATHS) {
         # `~` is this user's home, as in payload.sh; the row keeps the name it was given.
         $q = $path
         if ($q -eq '~') { $q = $HOME } elseif ($q -match '^~[\\/]') { $q = Join-Path $HOME $q.Substring(2) }
-        if (-not (Test-Path -LiteralPath $q)) { continue }
+        # Not there (mistyped, a drive not mounted): said so, as on POSIX. Dropped, the
+        # machine showed no disk at all and nothing said why.
+        if (-not (Test-Path -LiteralPath $q)) { Write-Output ("{0}|0|0|0|missing" -f $path); continue }
         $root = [System.IO.Path]::GetPathRoot((Resolve-Path -LiteralPath $q).Path)
         $vol = Get-CimInstance Win32_LogicalDisk -Filter "DeviceID='$($root.TrimEnd('\'))'"
         if (-not $vol) { continue }
