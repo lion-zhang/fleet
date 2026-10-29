@@ -75,7 +75,8 @@ NOTE column. In order:
 | Alert | When |
 |---|---|
 | *host is UP but refused us (this is not 'offline') -- `fleet doctor NAME` says how to let us in* | the machine answered and did not let fleet in on the last reading |
-| *gpuN: … MiB held by processes not visible to us -- do not treat as free* | a GPU's used memory exceeds what its visible processes account for by 256 MiB or more |
+| *gpuN: … MiB held by processes not visible to us -- do not treat as free* | a GPU's used memory exceeds what its visible processes account for by 4096 MiB or more; the GPU counts as busy |
+| *gpuN: … MiB held by processes not visible to us -- a desktop's windows, or a job just starting* | the same by 256 MiB or more, but less than 4096: the GPU still counts as idle |
 | *disk MOUNT: N% full, NG left -- a long job will die on this* | a writable volume is at least 90% full |
 | *nvidia-smi present but failing: …* | `nvidia-smi` is installed but failing |
 | *amd-smi is installed but read no GPU -- is the amdgpu driver loaded?* | `amd-smi` or `rocm-smi` is there, and lists no card |

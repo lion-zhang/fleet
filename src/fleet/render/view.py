@@ -473,9 +473,14 @@ def _alerts(dev: Device, snap: dict | None, state: dict | None) -> list[str]:
     if snap:
         read = len(out)
         for g in snap.get("gpus", []):
-            if _gpu_view(g)["unattributed_mib"] >= 256:
-                out.append(f"gpu{g['idx']}: {_gpu_view(g)['unattributed_mib']} MiB held by "
+            if (held := _gpu_view(g)["unattributed_mib"]) >= HIDDEN_BUSY_MIB:
+                out.append(f"gpu{g['idx']}: {held} MiB held by "
                            "processes not visible to us -- do not treat as free")
+            elif held >= 256:
+                # Below what makes a card busy it is still listed idle and counted free,
+                # and "do not treat as free" beside that told an agent both at once.
+                out.append(f"gpu{g['idx']}: {held} MiB held by processes not visible to "
+                           "us -- a desktop's windows, or a job just starting")
         for disk in snap.get("disks", []):
             dv = _disk_view(disk)
             # a read-only mount is 100% full by definition; nothing will ever die on it
@@ -595,7 +600,10 @@ def device_view(dev: Device, state: dict | None, snap: dict | None,
         # "compute processes" means work occupying the GPU. A busy CPU process is a
         # different question and gets its own list; conflating them made `fleet show`
         # report tailscaled as a GPU job.
-        compute = [p for p in procs
+        # Each with the card it is on: eight jobs on eight H100s listed as one block
+        # said nothing of which card was whose, where the guide says "under each GPU".
+        card = {raw.get("uuid"): raw.get("idx") for raw in (snap or {}).get("gpus", [])}
+        compute = [{**p, "gpu": card.get(p.get("gpu_uuid"))} for p in procs
                    if p.get("scope") == "gpu" and p.get("klass") == "compute"]
         top_cpu = sorted((p for p in procs if p.get("scope") == "cpu"),
                          key=lambda p: -p.get("cpu_pct", 0))[:5]
