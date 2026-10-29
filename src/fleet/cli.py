@@ -498,6 +498,13 @@ def _edit_machine_file(dev, json_out: bool, *, paths: list[str], endpoints: list
                       "[dim]e.g. --path models=/data/models (kinds: "
                       f"{', '.join(notes_mod.KINDS)}, or your own)[/dim]")
             raise typer.Exit(2)
+        if value.strip() and not re.match(r"(/|~(/|$)|[A-Za-z]:[\\/]|\\\\)", value.strip()):
+            # `models=data/models` was kept as written: relative to wherever the probe's
+            # shell started, shown as is beside `~/m` shown in full, and no use to an
+            # agent working anywhere else.
+            err.print(f"[red]--path {escape(repr(spec))}[/red]: {escape(value.strip())} is "
+                      "not a full path  [dim]e.g. /data/models, ~/models or D:\\models[/dim]")
+            raise typer.Exit(2)
         if value.strip():
             # The same folder twice was recorded twice, and counted twice in its size.
             items = wanted.setdefault(kind, []) or []
@@ -1066,6 +1073,14 @@ def cmd_edit(name: str = typer.Argument(None, help="defaults to this machine"),
     if cost is not None and not (0 <= cost < 1e6):
         err.print(f"[red]--cost {cost:g}[/red] is not a cost  "
                   "[dim]US dollars per hour, from 0 (which clears it) up to a million[/dim]")
+        raise typer.Exit(2)
+    if local and (note is not None or path or endpoint):
+        # --local is for a machine you would rather not write to; a note, a folder or a
+        # server has nowhere else to go, so it went onto the machine all the same.
+        what = ", ".join(o for o, v in (("--note", note is not None), ("--path", path),
+                                        ("--endpoint", endpoint)) if v)
+        err.print(f"[red]--local keeps only tags and cost here[/red]  [dim]{what} is kept "
+                  "only on the machine itself: drop --local to write it there[/dim]")
         raise typer.Exit(2)
     if ssh_command is not None and not ssh_command.strip():
         # `--ssh ""` said "nothing to change", as though the address had been kept.
@@ -1722,8 +1737,9 @@ def cmd_rm(name: str = typer.Argument(..., help="the exact name; a prefix is nev
            yes: bool = typer.Option(False, "--yes", "-y", help="do not ask for confirmation")):
     """Stop watching a machine: take it out of this machine's list.
 
-    Nothing is changed on the machine itself -- fleet put nothing there but the notes
-    `fleet edit --path` wrote, which stay with it.
+    Nothing is changed on the machine itself: what `fleet edit` wrote to its
+    machine.yaml (tags, cost, a note, folders, servers), and fleet if you installed it
+    there, stay with it.
 
     [dim]Example:[/dim]  fleet rm machine_A
     """
@@ -1930,8 +1946,6 @@ def cmd_setup(
 
     [dim]Example:[/dim]  fleet setup --dry-run
     """
-    if not (refresh or remove or dry_run):
-        _first_run("setup")
     root = Path.cwd() if project else Path.home()
     # MCP clients are a second namespace: a desktop app is registered, not written to.
     # `--project` never touches them -- their config is per-user, not per-repo.
@@ -1979,6 +1993,10 @@ def cmd_setup(
         err.print(f"[red]Unknown target {unknown[0]!r}[/red]  "
                   f"({' | '.join((*TARGETS, *mcp_names))} | all | auto)")
         raise typer.Exit(2)
+    # Only once the target is known to be one: `--target nosuch` recorded this machine
+    # and said "✓ fleet is ready here" before refusing.
+    if not (remove or dry_run):
+        _first_run("setup")
     if not targets and not clients:
         from .agents import registry as agent_registry
 
@@ -2138,7 +2156,7 @@ def cmd_paths():
     # Every place the probe reads one: this listed the Linux two alone, and a Mac or a
     # Windows machine keeps its own somewhere else.
     console.print("notes      ~/.config/fleet/machine.yaml, /etc/fleet/machine.yaml   "
-                  "[dim](on each machine, about itself: fleet edit --path)[/dim]\n"
+                  "[dim](on each machine, about itself: what fleet edit writes there)[/dim]\n"
                   "           [dim]on a Mac also ~/Library/Application Support/fleet/"
                   "machine.yaml; on Windows %LOCALAPPDATA%\\fleet\\machine.yaml and "
                   "%ProgramData%\\fleet\\machine.yaml[/dim]")

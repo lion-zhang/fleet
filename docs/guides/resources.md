@@ -117,7 +117,8 @@ fleet edit gpu-box --path media=                                               #
 
 The kinds fleet names in what it tells agents are `models`, `datasets`, `media`,
 `scratch` and `envs` (Python environments to look in), but any name works — say
-`checkpoints`. Each folder then shows in `fleet show` with its size and the free space
+`checkpoints`. A folder is a full path on that machine (`/data/models`, `~/models`,
+`D:\models`). Each folder then shows in `fleet show` with its size and the free space
 left on its disk, and `fleet models` lists every machine's `models` folders.
 
 A folder's size comes from `du`, which can take minutes on a disk full of model weights.

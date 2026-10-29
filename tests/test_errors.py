@@ -97,6 +97,16 @@ def test_the_cli_reports_it_in_one_line_and_as_json(tmp_path):
      "device box in the inventory is malformed: cost 'lots' is not US dollars per hour"),
     (b"devices:\n- {id: a, name: box, tags: {gpu: 1}}\n",
      "device box in the inventory is malformed: tags {'gpu': 1} is not a list"),
+    (b"devices:\n- {id: a, name: box, probe_policy: sometimes}\n",
+     "device box in the inventory is malformed: probe_policy 'sometimes' is not auto"),
+    (b"devices:\n- {id: a, name: box, disk_paths: {a: 1}}\n",
+     "device box in the inventory is malformed: disk_paths {'a': 1} is not a list"),
+    (b"devices:\n- {id: a, name: box, endpoints: [{target: h, port: 99999}]}\n",
+     "device box in the inventory is malformed: endpoint h: port 99999 is not a port"),
+    (b"devices:\n- {id: a, name: box, endpoints: [{target: h, port: 0}]}\n",
+     "device box in the inventory is malformed: endpoint h: port 0 is not a port"),
+    (b"devices:\n- {id: a, name: [box]}\n",
+     "device \\['box'\\] in the inventory is malformed: name \\['box'\\] is not text"),
 ])
 def test_a_hand_edited_machines_file_is_named_not_a_traceback(tmp_path, text, said):
     """machines.yaml is meant to be fixable by hand, and shared with dotfiles: a bad byte
@@ -115,6 +125,16 @@ def test_numbers_typed_into_machines_yaml_are_read_as_they_were_meant(tmp_path):
                     'cost: {usd_per_hour: "1.50"}}\n', encoding="utf-8")
     (dev,) = inv.load(path)
     assert dev.tags == ["gpu", "7"] and dev.cost["usd_per_hour"] == 1.5
+
+
+def test_a_number_for_a_name_and_one_folder_for_disk_paths_are_read_as_meant(tmp_path):
+    """`name: 5` stopped every view on a traceback; `disk_paths: /data` was watched
+    letter by letter -- "disk path d is not there"."""
+    path = tmp_path / "machines.yaml"
+    path.write_text("devices:\n- {id: 7, name: 5, alias: 6, disk_paths: /data}\n",
+                    encoding="utf-8")
+    (dev,) = inv.load(path)
+    assert (dev.id, dev.name, dev.alias, dev.disk_paths) == ("7", "5", "6", ["/data"])
 
 
 def test_a_yes_or_no_is_not_taken_for_a_number(cfg_at, capsys):
@@ -240,3 +260,24 @@ def test_a_repo_that_is_not_text_is_not_cloned(cfg_at, capsys, value):
     cfg_at.write_text(f"repo: {value}\n", encoding="utf-8")
     assert config.load_config().get("repo") == ""
     assert "repo: " in capsys.readouterr().err
+
+
+@pytest.mark.parametrize("text, said", [
+    (b"devices:\n- {id: a, name: lab}\n- {id: b, name: lab}\n", "answer to 'lab'"),
+    (b"devices:\n- {id: a, name: lab}\n- {id: b, name: gpu, alias: lab}\n", "answer to 'lab'"),
+    (b"devices:\n- {id: a, name: lab}\n- {id: a, name: gpu}\n", "machine a is in the inventory twice"),
+])
+def test_two_entries_that_answer_to_one_name_are_named(tmp_path, text, said):
+    """Two lists merged in dotfiles, or an entry copied by hand: both loaded, and every
+    command took the first -- `fleet ssh lab` reached the other machine."""
+    path = tmp_path / "machines.yaml"
+    path.write_bytes(text)
+    with pytest.raises(inv.InventoryError, match=said):
+        inv.load(path)
+
+
+def test_a_removed_machine_and_its_alias_naming_itself_are_not_a_clash(tmp_path):
+    path = tmp_path / "machines.yaml"
+    path.write_bytes(b"devices:\n- {id: a, name: lab, deleted_at: 5}\n"
+                     b"- {id: b, name: lab, alias: lab}\n")
+    assert [d.id for d in inv.live(inv.load(path))] == ["b"]

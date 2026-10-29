@@ -664,3 +664,23 @@ def test_show_takes_r_as_ls_and_models_do(tmp_path, monkeypatch):
     runner = _cli(tmp_path, monkeypatch)
     r = runner.invoke(cli.app, ["show", "-r", "--help"])
     assert r.exit_code == 0 and "No such option" not in r.output, r.output
+
+
+def test_a_folder_must_be_a_full_path(tmp_path, monkeypatch):
+    """`--path models=data/models` was kept as written, relative to wherever the probe's
+    shell started, and shown that way beside `~/m` shown in full."""
+    from fleet.ops import machinefile
+
+    runner = _cli(tmp_path, monkeypatch, [
+        Device(id="id:box", name="box", kind=Kind.PERMANENT,
+               endpoints=[{"target": "10.0.0.5", "user": "root", "port": 22}])])
+    asked = []
+    monkeypatch.setattr(machinefile, "change", lambda *a, **k: asked.append(k) or ("", "x: 1\n"))
+    for bad in ("data/models", "./m", "~me/m", "$HOME/m"):
+        r = runner.invoke(cli.app, ["edit", "box", "--path", f"models={bad}"])
+        assert r.exit_code == 2 and "is not a full path" in r.output, (bad, r.output)
+    assert not asked
+    for good in ("/data/m", "~", "~/m", "D:\\models", "C:/m", "\\\\nas\\share"):
+        r = runner.invoke(cli.app, ["edit", "box", "--path", f"models={good}"])
+        assert r.exit_code == 0, (good, r.output)
+        assert asked[-1]["paths"] == {"models": [good]}
