@@ -17,7 +17,7 @@ import shlex
 from pathlib import Path
 
 from . import config
-from .ssh.cmd import WINDOWS, Endpoint, local_platform
+from .ssh.cmd import WINDOWS, Endpoint, jump_args, local_platform
 
 INSTALL_DIR = "$HOME/.local/share/fleet"
 WINDOWS_INSTALL_DIR = "$env:USERPROFILE\\.local\\share\\fleet"
@@ -254,8 +254,8 @@ def build_install_argv(ep: Endpoint, *, forward_agent: bool = True,
     a repo, so no BatchMode timeout games. -A forwards the agent so the clone can
     authenticate as you without a credential at rest.
     """
-    argv = ["ssh", "-o", f"ConnectTimeout={connect_timeout}",
-            "-o", "StrictHostKeyChecking=accept-new"]
+    opts = ["-o", f"ConnectTimeout={connect_timeout}", "-o", "StrictHostKeyChecking=accept-new"]
+    argv = ["ssh", *opts]
     if forward_agent:
         argv.append("-A")
     if ep.port and ep.port != 22:
@@ -264,7 +264,7 @@ def build_install_argv(ep: Endpoint, *, forward_agent: bool = True,
         # Its own key alone, as the probe and `fleet ssh` offer it: see build_argv.
         argv += ["-o", "IdentitiesOnly=yes", "-i", ep.identity]
     if ep.jump:
-        argv += ["-J", ep.jump]
+        argv += jump_args(ep.jump, opts)
     argv += ["--", f"{ep.user}@{ep.target}" if ep.user else ep.target]
     # Both read the script from stdin, so nothing long or quoted has to survive a second
     # round of shell parsing on the way in. Windows writes it out and runs the file --

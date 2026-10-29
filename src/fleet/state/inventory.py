@@ -405,6 +405,21 @@ def touch(dev: Device) -> None:
     dev.updated_at = int(time.time())
 
 
+def same_route(new: dict, old: dict) -> bool:
+    """Whether endpoint `new` is a route already recorded as `old`.
+
+    The address alone was the test, so `fleet add "ssh -J other-jump ..."` or `-i
+    other-key` for a machine already known said "already recorded with this endpoint" and
+    went on by the old jump host and the old key. A new route beside it, not over it: the
+    old one may be how another of your machines reaches it. A key left unsaid is not a
+    different key -- the one recorded may be a path on another machine."""
+    def addr(e: dict) -> tuple:
+        return (e.get("target"), e.get("user") or "", int(e.get("port", 22) or 22),
+                e.get("jump") or "")
+    return addr(new) == addr(old) and (
+        not new.get("identity") or new.get("identity") == old.get("identity"))
+
+
 def upsert(devices: list[Device], new: Device) -> tuple[list[Device], str]:
     """Add a device, or merge an endpoint into the one that already has this identity.
 
@@ -421,10 +436,8 @@ def upsert(devices: list[Device], new: Device) -> tuple[list[Device], str]:
             if restored:
                 existing.deleted_at = 0
                 touch(existing)
-            known = {(e.get("target"), e.get("user"), int(e.get("port", 22) or 22))
-                     for e in existing.endpoints}
             added = [e for e in new.endpoints
-                     if (e.get("target"), e.get("user"), int(e.get("port", 22) or 22)) not in known]
+                     if not any(same_route(e, old) for old in existing.endpoints)]
             if added:
                 existing.endpoints.extend(added)
                 touch(existing)

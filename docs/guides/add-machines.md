@@ -31,7 +31,10 @@ Anything ssh would use works: your ssh-agent, a key file named with `-i` (any ki
 its user, port, key and `ProxyJump`. From a pasted command fleet keeps the address,
 user, port, `-i` key and `-J` jump host (an `ssh://user@host:port` address works too);
 a `-o ProxyCommand=...` is refused, so put it in
-a `Host` block of `~/.ssh/config` and add that name. fleet then:
+a `Host` block of `~/.ssh/config` and add that name. As with ssh, the `-i` key is offered
+to the machine alone: a jump host is reached with your agent, or the key under its own
+`Host` in `~/.ssh/config`. The same address added again by another jump host or key is
+kept as a second route beside the first. fleet then:
 
 1. **connects** with that, in batch mode — it never prompts for a password;
 2. **measures it**: CPU, memory, GPUs, disks, what is running and what is free now;
