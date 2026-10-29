@@ -60,7 +60,7 @@ max_workers: 16
 An unreadable `config.yaml` is ignored rather than stopping fleet, with one warning, and
 a number setting that is not a number (`no` included) falls back to its default, with one
 warning. So does one that is below 1 where 0 cannot work: `max_workers`,
-`probe_timeout_s`, `connect_timeout_s` and `snapshot_retention`. A `repo` that is not text
+`probe_timeout_s`, `connect_timeout_s` and `snapshot_retention`. So does a timeout of more than a day (86400), or a `snapshot_retention` above a billion. A `repo` that is not text
 (`repo: 5`) is ignored the same way. A key fleet does not
 know is ignored with a warning that names the setting it looks like; 0.5's `sync_ttl_s`
 and `access_retry_s` are ignored quietly.

@@ -59,6 +59,19 @@ def test_a_setting_below_its_least_falls_back_too(cfg_at, capsys):
     assert "max_workers: 0 is less than 1; using 8" in err
 
 
+def test_a_setting_above_its_most_falls_back_too(cfg_at, capsys):
+    """`connect_timeout_s: 3000000000` is a time ssh refuses, so every reading failed while
+    `doctor` said all was well; `probe_timeout_s` that large overflowed the clock, and
+    `snapshot_retention` past SQLite's integers stopped `ls` on a traceback."""
+    cfg_at.write_text("probe_timeout_s: 99999999999999999999\nconnect_timeout_s: 3000000000\n"
+                      "snapshot_retention: 99999999999999999999\ntelemetry_ttl_s: 9999999\n",
+                      encoding="utf-8")
+    cfg = config.load_config()
+    assert (cfg.probe_timeout_s, cfg.connect_timeout_s, cfg.snapshot_retention) == (20, 8, 120)
+    assert cfg.telemetry_ttl_s == 9999999, "a long freshness is a choice"
+    assert "connect_timeout_s: 3000000000 is more than 86400; using 8" in capsys.readouterr().err
+
+
 @pytest.mark.parametrize("make", [
     lambda p: p.write_bytes(b"max_workers: 4\n\xff\xfe\n"),     # not UTF-8
     lambda p: p.mkdir(),                                            # not a file

@@ -131,7 +131,7 @@ def load_config() -> Config:
                 if isinstance(data[key], bool):
                     raise TypeError
                 value = int(data[key])
-                if value < least:
+                if value < least or value > _MOST.get(key, value):
                     raise ValueError
                 data[key] = value
             except (TypeError, ValueError, OverflowError):
@@ -140,7 +140,8 @@ def load_config() -> Config:
                 v = data[key]
                 why = ("is not a number" if isinstance(v, bool)
                        or not isinstance(v, (int, float)) or v != v or v in (_INF, -_INF)
-                       else f"is less than {least}")
+                       else f"is less than {least}" if v < least
+                       else f"is more than {_MOST[key]}")
                 # `no`, `off` and `false` all load as False: "False is not a number"
                 # quoted something nobody wrote.
                 shown = "a yes/no value" if isinstance(v, bool) else repr(v)
@@ -165,3 +166,9 @@ def _warn(key: str, what: str) -> None:
 # `telemetry_ttl_s` of 0 measures on every read, which is a choice, not a mistake.
 _LEAST = {"max_workers": 1, "probe_timeout_s": 1, "connect_timeout_s": 1,
           "snapshot_retention": 1}
+# And the most. A connect timeout past 2^31 seconds is one ssh refuses ("invalid time
+# value"), so every reading failed and `fleet ssh` with it while `doctor` said all was
+# well; a probe timeout that large overflowed the clock, and a retention past SQLite's
+# integers stopped `ls` on a traceback. A day is longer than any wait anyone means.
+_MOST = {"probe_timeout_s": 86400, "connect_timeout_s": 86400,
+         "snapshot_retention": 1_000_000_000}
