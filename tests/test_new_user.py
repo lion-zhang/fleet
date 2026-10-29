@@ -312,3 +312,24 @@ def test_a_refused_command_does_not_record_this_machine_first(tmp_path, monkeypa
     r = CliRunner().invoke(cli.app, argv)
     assert r.exit_code == 2, r.output
     assert not ran
+
+
+def test_an_old_reading_says_how_old_it_is(capsys):
+    """A mobile device is never probed, so `fleet show` drew a reading hours old as
+    though it had just been taken; `fleet ls` gave its age as "7200s"."""
+    import time
+
+    from fleet.render.top import _ls_table
+    from fleet.render.view import Detail, device_view
+
+    dev = Device(id="id:phone", name="phone", kind=Kind.MOBILE, probe_policy="never",
+                 endpoints=[{"target": "phone", "user": "me", "port": 22}])
+    old = device_view(dev, {"status": "ok", "last_probe_at": int(time.time()) - 7200},
+                      None, Detail.FULL)
+    cli._print_show(old)
+    assert "as read 2h ago; fleet never probes a mobile device" in capsys.readouterr().out
+    assert " 2h " in _text(_ls_table([old], set()))
+    fresh = device_view(dev, {"status": "ok", "last_probe_at": int(time.time())},
+                        None, Detail.FULL)
+    cli._print_show(fresh)
+    assert "as read" not in capsys.readouterr().out

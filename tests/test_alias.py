@@ -85,6 +85,14 @@ def test_an_alias_equal_to_its_own_name_is_refused():
         apply_edits(dev, alias="lin-xps", taken=set())
 
 
+def test_renaming_a_machine_to_its_alias_drops_the_alias():
+    """`fleet edit lin-xps --name x` left it answering to x twice, shown as "x (x)"."""
+    dev = Device(id="id:xps", name="lin-xps", alias="x", kind=Kind.PERMANENT)
+    out = apply_edits(dev, name="x", taken=set())
+    assert (dev.name, dev.alias) == ("x", "")
+    assert "alias x -> (none): it is the name now" in out.changes
+
+
 def test_a_machine_keeps_its_own_alias_when_edited():
     """`handles(excluding=...)` leaves this machine out, or re-setting the same alias --
     or any other edit that passes it through -- would collide with itself."""
@@ -433,6 +441,10 @@ def test_a_field_that_does_not_exist_is_said_to_not_exist(tmp_path, monkeypatch)
     r = runner.invoke(cli.app, ["ls", "--json", "--fields", "alias,nosuchfield"])
     assert r.exit_code == 0, r.output
     assert "no such field: nosuchfield " in " ".join(r.stderr.split()), r.stderr
+    # `--fields ""` printed every field, as though none had been asked for.
+    for empty in ("", " , "):
+        r = runner.invoke(cli.app, ["ls", "--json", "--fields", empty])
+        assert r.exit_code == 2 and "--fields needs the keys" in r.output, r.output
 
 
 @pytest.mark.parametrize("cost", ["-5", "nan", "inf", "2000000"])
@@ -700,3 +712,29 @@ def test_a_re_add_says_when_it_keeps_the_alias_and_a_dry_run_sees_a_new_one(tmp_
     assert runner.invoke(cli.app, ["add", "ssh root@10.0.0.5", "--alias", "b"]).exit_code == 0
     r = runner.invoke(cli.app, ["add", "ssh root@10.0.0.5", "--alias", "bx"])
     assert "it keeps its alias b; to change it: fleet edit box --alias bx" in r.output, r.output
+
+
+def test_a_kind_changed_back_from_mobile_or_shared_is_probed_again(tmp_path, monkeypatch):
+    """`fleet add ... --kind rental` on a machine recorded as mobile kept `probe_policy:
+    never`, so no `fleet ls` looked at the rental again."""
+    from fleet.state import inventory as inv
+
+    runner = _cli(tmp_path, monkeypatch, [
+        Device(id="linux:machine-id:box", name="box", kind=Kind.MOBILE, probe_policy="never",
+               endpoints=[{"target": "10.0.0.5", "user": "root", "port": 22}])])
+    _readd(monkeypatch)
+    r = runner.invoke(cli.app, ["add", "ssh root@10.0.0.5", "--kind", "rental"])
+    assert r.exit_code == 0, r.output
+    (box,) = [d for d in inv.load() if d.name == "box"]
+    assert box.kind is Kind.RENTAL and box.probe_policy == "auto" and box.probeable
+
+
+@pytest.mark.parametrize("command", ["ls", "models", "show"])
+def test_a_negative_wait_is_refused(tmp_path, monkeypatch, command):
+    """`--rescan --wait -5` was taken as no wait at all, without a word."""
+    runner = _cli(tmp_path, monkeypatch, [
+        Device(id="id:box", name="box", kind=Kind.PERMANENT,
+               endpoints=[{"target": "10.0.0.5", "user": "root", "port": 22}])])
+    monkeypatch.setattr(cli, "_rows", lambda *a, **k: pytest.fail("probed"))
+    r = runner.invoke(cli.app, [command, "box", "--rescan", "--wait", "-5"])
+    assert r.exit_code == 2 and "--wait -5 is not a wait" in r.output, r.output
