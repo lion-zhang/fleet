@@ -141,6 +141,9 @@ def cmd_ls(names: list[str] = typer.Argument(None, help="only these devices"),
     if discover or hide or unhide:
         _print_discovered(json_out, hide=hide or [], unhide=unhide or [], show_all=show_all)
         return
+    if show_all:
+        # Taken in silence, it read as "these are all of them" -- hidden ones included.
+        err.print("[dim]· --all applies to --discover[/dim]")
     # A name that matches nothing is said, and fails: `fleet ls TYPO --json` answered an
     # empty list and exit 0, which an agent reads as "nothing wrong, nothing there".
     unknown = [n for n in (names or []) if inv.find(inv.load(), n) is None]
@@ -222,6 +225,9 @@ def _rescanned(names: list[str] | None, *, refresh: bool, rescan: bool, wait: in
     newer than they were before (compared with themselves, not with this machine's clock,
     which the other one's need not agree with), or until the time is up.
     """
+    if wait > 0 and not rescan:
+        # Nothing was measured to wait for, and it returned at once without a word.
+        err.print("[dim]· --wait applies to --rescan[/dim]")
     if not (rescan and wait > 0):
         return _rows(names, refresh=refresh, rescan=rescan, detail=detail)
     devices = inv.live(inv.load())
