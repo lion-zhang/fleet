@@ -1501,6 +1501,11 @@ def cmd_install(name: str = typer.Argument(None,
                       "internet, or no curl.[/dim]")
         raise typer.Exit(2)
 
+    if kept := _kept(output):
+        # A source checkout there is kept, as `fleet update` says: "✓ node: fleet 0.6.1"
+        # under "installing fleet ... from <url> (main)" read as main installed over it.
+        console.print(f"[dim]·[/dim] {dev.name}: {escape(kept)}")
+        return
     what = output.strip().splitlines()[-1] if output.strip() else "installed"
     console.print(f"[green]✓[/green] {dev.name}: {what}")
     console.print(f"  [dim]fleet there looks at the machines its own ssh reaches; copy "
