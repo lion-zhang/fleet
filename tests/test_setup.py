@@ -940,3 +940,28 @@ def test_several_targets_at_once_and_a_shared_skill_taken_out_of_both(tmp_path, 
     assert r.exit_code == 0, r.output
     assert not shared.exists() and claude.exists()
     assert runner.invoke(app, ["setup", "--target", "codex,nosuch"]).exit_code == 2
+
+
+def test_refresh_keeps_a_skill_a_newer_fleet_wrote(tmp_path, monkeypatch):
+    """`fleet setup --refresh` -- run by every install and update -- from an older fleet
+    on the machine put its older words back over a skill a newer fleet had written, which
+    is what the version in the stamp is there to stop."""
+    from pathlib import Path
+
+    from typer.testing import CliRunner
+
+    from fleet.agents import package_version
+    from fleet.cli import app
+
+    monkeypatch.setattr(Path, "home", classmethod(lambda cls: tmp_path))
+    (tmp_path / ".claude").mkdir()
+    runner = CliRunner()
+    assert runner.invoke(app, ["setup", "--target", "claude"]).exit_code == 0
+    skill = tmp_path / ".claude" / "skills" / "fleet" / "SKILL.md"
+    newer = skill.read_text().replace(f"<!-- fleet {package_version()} #", "<!-- fleet 99.0 #")
+    assert newer != skill.read_text()
+    skill.write_text(newer + "\nwords from the newer fleet\n")
+    r = runner.invoke(app, ["setup", "--refresh"])
+    assert r.exit_code == 0, r.output
+    assert "words from the newer fleet" in skill.read_text()
+    assert "newer fleet" in r.output

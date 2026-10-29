@@ -31,7 +31,7 @@ from . import notes as notes_mod
 from .agents import (MCP_CLIENTS, TARGETS, config_command, detect_mcp_clients,
                      detect_targets, fleet_command, fleet_executable, install,
                      install_mcp, installed_mcp_clients, installed_targets, package_version,
-                     stale_mcp_clients, stale_targets, uninstall, uninstall_mcp)
+                     plan, stale_mcp_clients, stale_targets, uninstall, uninstall_mcp)
 from .config import INVENTORY_PATH, load_config
 from .edit import apply_edits, check_name, is_full_path
 from .install import (NOTHING_TO_UPDATE, build_install_argv, install_script, needs_agent,
@@ -2127,8 +2127,28 @@ def cmd_setup(
         # Run by every install and update, on the machine being updated. So it may only
         # rewrite what is already there -- never teach an agent fleet that someone chose
         # to leave alone -- and finding nothing to refresh is not a failure.
+        from .agents.usage import written_by_newer
+
+        def read_text(path: Path) -> str:
+            try:
+                return path.read_text(encoding="utf-8")
+            except (OSError, UnicodeDecodeError):
+                return ""
+
         targets = installed_targets(root, project=project)
         clients = [] if project else installed_mcp_clients(root)
+        # A copy a newer fleet wrote is not "older": refreshed from an older fleet on the
+        # same machine (a checkout beside the uv install, a remote's own copy), it put the
+        # older words back over the newer ones.
+        paths = plan(root, project=project)
+        newer = [t for t in targets if written_by_newer(read_text(paths[t]))]
+        targets = [t for t in targets if t not in newer]
+        if newer:
+            console.print(f"[dim]· kept: {', '.join(newer)} "
+                          f"read{'s' if len(newer) == 1 else ''} what a newer fleet "
+                          "wrote[/dim]")
+        if not targets and not clients and newer:
+            return
         if not targets and not clients:
             console.print("[dim]· no agent here has fleet installed; nothing to refresh"
                           "[/dim]")
