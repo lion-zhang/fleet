@@ -478,6 +478,20 @@ def test_a_prefix_that_fits_several_machines_says_which(tmp_path, monkeypatch):
     assert "did you mean: cloud-1, cloud-2" in r.output, r.output
 
 
+def test_a_misspelt_name_gets_the_name_it_was_close_to(tmp_path, monkeypatch):
+    """`fleet ssh nod1` said only "No device named 'nod1'": only a part of a name found a
+    suggestion, never a slip of a key."""
+    runner = _cli(tmp_path, monkeypatch, [
+        Device(id="id:1", name="node1", kind=Kind.PERMANENT),
+        Device(id="id:2", name="gpubox", kind=Kind.PERMANENT)])
+    for args in (["ssh", "nod1", "--", "true"], ["ls", "ndoe1"], ["install", "gpubx"]):
+        r = runner.invoke(cli.app, args)
+        assert r.exit_code == 1 and "did you mean: " in r.output, (args, r.output)
+        assert ("gpubox" in r.output) == (args[1] == "gpubx"), r.output
+    r = runner.invoke(cli.app, ["ssh", "zzz", "--", "true"])
+    assert r.exit_code == 1 and "did you mean" not in r.output, r.output
+
+
 def test_a_field_that_does_not_exist_is_said_to_not_exist(tmp_path, monkeypatch):
     """`ls --json --fields nosuchfield` came back as rows holding only `name`, which
     reads as "no machine has it" rather than "you mistyped it"."""
