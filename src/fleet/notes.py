@@ -23,6 +23,7 @@ import yaml
 from .state import untrusted
 
 MAX_BYTES = 8192
+FIELDS = ("cost", "tags", "notes", "paths", "endpoints")
 MAX_TAGS, MAX_TAG = 32, 40
 MAX_NOTE = 1000
 MAX_KINDS, MAX_PATHS, MAX_PATH = 12, 10, 300
@@ -77,27 +78,56 @@ def _str(v, limit: int) -> str:
     return " ".join(_printable(str(v)).split())[:limit] if v is not None else ""
 
 
-def check(data) -> dict:
+def _cost(value) -> float | None:
+    """1.89, and as people write it by hand: "1.89", "$1.89"."""
+    if isinstance(value, str):
+        try:
+            value = float(value.strip().removeprefix("$").strip())
+        except ValueError:
+            return None
+    if isinstance(value, (int, float)) and not isinstance(value, bool) and 0 <= value < 1e6:
+        return float(value)
+    return None
+
+
+def check(data, skipped: list[str] | None = None) -> dict:
     """Only the fields fleet knows, each the right shape. Raises NotesError when the
-    file is not a mapping at all; a single bad field is dropped, not the whole file."""
+    file is not a mapping at all; a single bad field is dropped, not the whole file --
+    and named in `skipped`, when given: a cost written `$1.89/hr` vanished from every
+    view, and nothing said why."""
     if data is None:
         return {}
     if not isinstance(data, dict):
         raise NotesError("not a mapping of fields")
+    skipped = [] if skipped is None else skipped
     out: dict = {}
+    # `Cost: 2` or `tag: gpu` was ignored without a word, as every other key is.
+    for key in [k for k in data if k not in FIELDS][:3]:
+        skipped.append(f"{_str(key, 40)!r} left out: fleet reads {', '.join(FIELDS)}")
     cost = data.get("cost")
     if isinstance(cost, dict):
         cost = cost.get("usd_per_hour")
-    if isinstance(cost, (int, float)) and not isinstance(cost, bool) and 0 <= cost < 1e6:
-        out["cost"] = {"usd_per_hour": float(cost)}
+    if (usd := _cost(cost)) is not None:
+        out["cost"] = {"usd_per_hour": usd}
+    elif cost is not None:
+        skipped.append(f"cost {_str(cost, 40)!r} left out: a cost is US dollars per hour, "
+                       "like 1.75")
     tags = data.get("tags")
     if isinstance(tags, str):
         tags = tags.split(",")
     if isinstance(tags, list):
-        clean = [_str(t, MAX_TAG).lower() for t in tags if isinstance(t, (str, int))]
+        clean = [_str(t, MAX_TAG).lower() for t in tags if isinstance(t, (str, int, float))]
         if clean := [t for t in dict.fromkeys(clean) if t][:MAX_TAGS]:
             out["tags"] = clean
-    if note := _str(data.get("notes"), MAX_NOTE):
+    elif tags is not None:
+        skipped.append("tags left out: tags are a list, like tags: [train, nvme]")
+    note = data.get("notes")
+    if isinstance(note, list):
+        # Several lines written as a list read back as "['a', 'b']".
+        note = " ".join(str(n) for n in note if isinstance(n, (str, int, float)))
+    if isinstance(note, dict):
+        skipped.append("notes left out: a note is a line of text")
+    elif note := _str(note, MAX_NOTE):
         out["notes"] = note
     paths = data.get("paths")
     if isinstance(paths, dict):
@@ -105,27 +135,48 @@ def check(data) -> dict:
         for kind, value in list(paths.items())[:MAX_KINDS * 2]:
             kind = str(kind).strip().lower()
             if not _KIND.match(kind):
+                skipped.append(f"paths {_str(kind, 40)!r} left out: a kind of folder is "
+                               "one word, like models")
+                continue
+            if isinstance(value, dict):
+                skipped.append(f"paths {kind} left out: a kind's folders are a path or a "
+                               "list of them")
                 continue
             items = value if isinstance(value, list) else [value]
-            items = [_printable(str(p)).strip()[:MAX_PATH] for p in items
-                     if isinstance(p, (str, int)) and _printable(str(p)).strip()][:MAX_PATHS]
+            items = list(dict.fromkeys(
+                _printable(str(p)).strip()[:MAX_PATH] for p in items
+                if isinstance(p, (str, int)) and _printable(str(p)).strip()))[:MAX_PATHS]
             if items:
                 kept[kind] = items
             if len(kept) >= MAX_KINDS:
                 break
         if kept:
             out["paths"] = kept
+    elif paths is not None:
+        # `paths: [/data/models]`, with no kind: every folder in it went unseen.
+        skipped.append("paths left out: paths are kinds of folder, like "
+                       "paths: {models: /data/models}")
     endpoints = data.get("endpoints")
     if isinstance(endpoints, dict):
         eps: dict[str, dict] = {}
         for name, value in list(endpoints.items())[:MAX_ENDPOINTS * 2]:
+            if isinstance(value, dict):
+                # {port: 9000, path: /v1}: the shape `fleet show --json` prints, and so
+                # the one copied into the file. Dropped, the server was not looked for.
+                value = f"{value.get('port', '')}{value.get('path') or ''}"
             parsed = endpoint_spec(str(value))
             if _KIND.match(str(name).strip().lower()) and parsed:
                 eps[str(name).strip().lower()] = parsed
+            else:
+                skipped.append(f"endpoint {_str(name, 40)} {_str(value, 40)!r} left out: a "
+                               "server is a name and PORT or PORT/PATH, like mine: 9000/v1")
             if len(eps) >= MAX_ENDPOINTS:
                 break
         if eps:
             out["endpoints"] = eps
+    elif endpoints is not None:
+        skipped.append("endpoints left out: endpoints are names and ports, like "
+                       "endpoints: {mine: 9000/v1}")
     return out
 
 
@@ -137,9 +188,9 @@ def endpoint_spec(value: str) -> dict | None:
     return {"port": int(m.group(1)), "path": m.group(2) or ""}
 
 
-def parse(text: str) -> dict:
+def parse(text: str, skipped: list[str] | None = None) -> dict:
     try:
-        return check(untrusted.load(text))
+        return check(untrusted.load(text), skipped)
     except yaml.YAMLError as e:
         raise NotesError(f"not valid YAML: {str(e).splitlines()[0][:120]}") from None
 
@@ -153,18 +204,23 @@ def merge(system: dict, user: dict) -> dict:
     return out
 
 
-def from_probe(kv: dict[str, str]) -> tuple[dict, str]:
-    """The merged notes from a probe's `notes.system` / `notes.user`, and any error."""
+def from_probe(kv: dict[str, str], skipped: list[str] | None = None) -> tuple[dict, str]:
+    """The merged notes from a probe's `notes.system` / `notes.user`, and any error;
+    the fields left out for their shape are added to `skipped`."""
     parts, errors = [], []
     for key in ("notes.system", "notes.user"):
         if not kv.get(key):
             parts.append({})
             continue
+        where = f"{'/etc/fleet' if key == 'notes.system' else 'user'} machine.yaml"
+        left_out: list[str] = []
         try:
-            parts.append(parse(decode(kv[key])))
+            parts.append(parse(decode(kv[key]), left_out))
         except NotesError as e:
             parts.append({})
-            errors.append(f"{'/etc/fleet' if key == 'notes.system' else 'user'} machine.yaml: {e}")
+            errors.append(f"{where}: {e}")
+        if skipped is not None:
+            skipped += [f"{where}: {what}" for what in left_out]
     return merge(*parts), "; ".join(errors)
 
 
@@ -239,7 +295,12 @@ def edit(text: str, *, paths: dict[str, list[str] | None] | None = None,
     elif cost is not None:
         data["cost"] = cost
     if tags_add or tags_remove:
-        tags = data.get("tags") if isinstance(data.get("tags"), list) else []
+        tags = data.get("tags")
+        if isinstance(tags, str):
+            # `tags: gpu, training`, which every reader takes as two tags: `--tag x`
+            # replaced both with x.
+            tags = [t.strip() for t in tags.split(",") if t.strip()]
+        tags = tags if isinstance(tags, list) else []
         tags = [t for t in tags if str(t).lower() not in {x.lower() for x in tags_remove}]
         tags += [t for t in tags_add if t.lower() not in {str(x).lower() for x in tags}]
         if tags:

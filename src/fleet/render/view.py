@@ -490,6 +490,8 @@ def _alerts(dev: Device, snap: dict | None, state: dict | None) -> list[str]:
                 out.append(f"nvidia-smi present but failing: {snap.get('gpu_error', '')[:80]}")
         if snap.get("notes_error"):
             out.append(f"{snap['notes_error'][:160]} -- its notes and paths were not read")
+        for what in (snap.get("notes_skipped") or [])[:3]:
+            out.append(what[:200])
         for st in snap.get("storage", []):
             if not st.get("exists"):
                 out.append(f"{st.get('kind')} folder {st.get('path')} does not exist there")

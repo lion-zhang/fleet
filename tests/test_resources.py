@@ -92,6 +92,35 @@ def test_a_broken_notes_file_is_reported_not_fatal(tmp_path):
 
 
 @posix
+def test_a_field_written_by_hand_is_read_or_said_to_be_left_out(tmp_path):
+    """`cost: "1.89"` or `$1.89`, and a server written the way `fleet show --json` prints
+    it, were dropped without a word: the machine showed no cost, and its server was not
+    looked for. A shape fleet still cannot read is now an alert naming the field."""
+    home = make_home(tmp_path, """\
+cost: $1.89
+endpoints:
+  mine: {port: 9000, path: /v1}
+  typo: 9000:v1
+paths:
+  datasets: [/data/a, /data/a]
+""")
+    snap = parse_payload(probe(home))
+    assert snap.notes["cost"] == {"usd_per_hour": 1.89}
+    assert snap.notes["endpoints"] == {"mine": {"port": 9000, "path": "/v1"}}
+    assert snap.notes["paths"] == {"datasets": ["/data/a"]}
+    view = device_view(Device(id="x", name="box"), {"status": "ok"}, snap.to_dict())
+    assert any("endpoint typo '9000:v1' left out" in a for a in view["alerts"]), view["alerts"]
+    home = make_home(tmp_path / "2", "cost: 1.89/hr\n")
+    view = device_view(Device(id="x", name="box"), {"status": "ok"},
+                       parse_payload(probe(home)).to_dict())
+    assert any("cost '1.89/hr' left out" in a for a in view["alerts"]), view["alerts"]
+    home = make_home(tmp_path / "3", "paths: [/data/models]\ntags: {a: 1}\n")
+    view = device_view(Device(id="x", name="box"), {"status": "ok"},
+                       parse_payload(probe(home)).to_dict())
+    assert sum("left out" in a for a in view["alerts"]) == 2, view["alerts"]
+
+
+@posix
 def test_folder_sizes_are_worked_out_in_the_background_and_reported_next_time(tmp_path):
     home = make_home(tmp_path, "paths:\n  models: ~/models\n")
     (home / "models").mkdir()
@@ -1002,3 +1031,23 @@ def test_paths_names_every_place_a_machine_keeps_its_notes():
                   "~/Library/Application Support/fleet/machine.yaml",
                   "%LOCALAPPDATA%\\fleet\\machine.yaml", "%ProgramData%\\fleet\\machine.yaml"):
         assert where in out, (where, out)
+
+
+def test_a_shape_written_by_hand_is_read_as_meant_or_named():
+    """A note written as a list read back as "['a', 'b']"; a tag 1.5 and a kind of
+    folder given as a mapping vanished; `Cost: 2` or `tag: x` was ignored without a word."""
+    skipped: list[str] = []
+    got = notes.parse("notes: [shared, weekends]\ntags: [1.5, gpu]\n"
+                      "paths: {models: {a: 1}}\nCost: 2\n", skipped)
+    assert got == {"notes": "shared weekends", "tags": ["1.5", "gpu"]}
+    assert any("paths models left out" in s for s in skipped), skipped
+    assert any("'Cost' left out: fleet reads cost" in s for s in skipped), skipped
+    skipped.clear()
+    notes.parse(notes.TEMPLATE, skipped)
+    assert not skipped, "the file fleet writes reads clean"
+
+
+def test_tags_written_as_one_line_are_kept_when_a_tag_is_added():
+    """`tags: gpu, training` reads as two tags, and `fleet edit --tag x` replaced both."""
+    after = notes.edit("tags: gpu, training\n", tags_add=["x"])
+    assert notes.parse(after)["tags"] == ["gpu", "training", "x"]

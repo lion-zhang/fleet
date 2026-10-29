@@ -189,6 +189,7 @@ class Snapshot:
     # What the machine says about itself in its own machine.yaml, checked (notes.py).
     notes: dict = field(default_factory=dict)
     notes_error: str = ""
+    notes_skipped: list[str] = field(default_factory=list)   # fields of the wrong shape
     storage: list[StorePath] = field(default_factory=list)
     # cuda, nvcc, cudnn, rocm, python, uv, docker, ... -> version (or where it is)
     software: dict[str, str] = field(default_factory=dict)
