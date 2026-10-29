@@ -28,7 +28,7 @@ Each job shows who runs it, the VRAM it holds, how long it has been running and 
 command line. NVIDIA cards are read with `nvidia-smi`, AMD cards with `amd-smi` (or
 `rocm-smi` on ROCm before 6.1), and both list their jobs the same way. Desktop programs that hold a little VRAM (a browser, the window manager)
 are not counted as jobs. `fleet top` shows the same in its JOBS column, and `fleet show
-NAME` lists them under each GPU.
+NAME` lists them with the GPU each is on.
 
 A GPU in use by processes your login cannot see, such as a job in a container or another
 user's, is listed under `busy` with the memory it holds and how busy it is
