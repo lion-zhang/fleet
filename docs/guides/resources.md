@@ -32,7 +32,9 @@ NAME` lists them under each GPU.
 
 A GPU in use by processes your login cannot see, such as a job in a container or another
 user's, is listed under `busy` with the memory it holds and how busy it is
-(`busy_unseen` in `--json`). It is someone's, so it is not listed as idle either.
+(`busy_unseen` in `--json`). It is someone's, so it is not listed as idle either. A
+shared host's processes are not read at all, so a GPU in use there is listed the same
+way, marked as on a shared host (`shared_host` in `--json`).
 
 **Secrets are taken out of command lines before fleet shows or keeps them.** A job
 started with `--hf-token hf_…`, `--api-key=…`, `--password …`, `HF_TOKEN=…`, an

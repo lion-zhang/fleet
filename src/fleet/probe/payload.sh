@@ -675,10 +675,19 @@ echo "#LISTEN proto|addr|port|pid|comm"
 # ---------------------------------------------------------------- SLURM (shared boxes)
 if [ "$FLEET_MODE" = "shared" ] && have squeue; then
   echo "#SLURM key|value"
-  printf 'my_jobs|%s\n' "$(squeue -h -u "$(id -un)" 2>/dev/null | grep -c .)"
-  printf 'my_running|%s\n' "$(squeue -h -u "$(id -un)" -t RUNNING 2>/dev/null | grep -c .)"
+  # One call, with a few seconds for it. A controller that is down or swamped answers
+  # "Unable to contact slurm controller", which was counted as no jobs -- "0 job(s) of
+  # yours" while yours ran -- or answers nothing for a minute, and the probe ran out its
+  # time on it: the login node read as down. Unanswered, the count is unknown, and says so.
+  TQ=; [ -n "$TD" ] && TQ="timeout -s KILL 4"
+  if sq=$($TQ squeue -h -u "$(id -un)" -o '%T' 2>/dev/null); then
+    printf 'my_jobs|%s\n' "$(printf '%s' "$sq" | grep -c .)"
+    printf 'my_running|%s\n' "$(printf '%s\n' "$sq" | grep -c '^RUNNING$')"
+  else
+    printf 'my_jobs|\nmy_running|\n'
+  fi
   if have sinfo; then
-    sinfo -h -o '%P %a %D %t' 2>/dev/null | head -12 | while read -r line; do
+    $TQ sinfo -h -o '%P %a %D %t' 2>/dev/null | head -12 | while read -r line; do
       printf 'partition|%s\n' "$line"
     done
   fi

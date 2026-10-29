@@ -702,11 +702,13 @@ def jobs_view(rows: list[dict]) -> dict:
                 jobs.append({"machine": r["name"], "gpu": g["idx"], "gpu_name": g["name"], **j})
             # Busy with nothing listed -- a job in a container, another user's: neither a
             # job nor idle, so it was left out of both and ps said "No jobs on any GPU."
-            # beside a card at 97% holding 20G. Not a shared host's: its processes are
-            # left unread on purpose, so every card in use there would read as hidden.
-            if not g.get("jobs") and g.get("busy") and r.get("claimable", True):
+            # beside a card at 97% holding 20G. A shared host's processes are left unread
+            # on purpose, so its cards come marked as that, not as hidden: left out, a
+            # login node's card at 97% read as "No jobs on any GPU." all the same.
+            if not g.get("jobs") and g.get("busy"):
                 busy.append({"machine": r["name"], "gpu": g["idx"], "gpu_name": g["name"],
-                             "vram_used_mib": g["vram_used_mib"], "util_pct": g["util_pct"]})
+                             "vram_used_mib": g["vram_used_mib"], "util_pct": g["util_pct"],
+                             "shared_host": r.get("kind") == "shared"})
             # A shared host's, an appliance's: "never offered for work", and an agent
             # took the idle list for the GPUs it could start on.
             if not g.get("jobs") and not g.get("busy") and r.get("claimable", True):
