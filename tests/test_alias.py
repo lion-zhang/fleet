@@ -376,6 +376,10 @@ def test_untag_removes_a_tag_that_add_kept_here(tmp_path, monkeypatch):
     r = runner.invoke(cli.app, ["edit", "box", "--untag", "web"])
     assert r.exit_code == 0, r.output
     assert inv.find_exact(inv.load(), "box").tags == []
+    # It said "machine.yaml already says that" first, which read as nothing done.
+    assert "already says" not in r.output and "tags web -> none" in r.output, r.output
+    r = runner.invoke(cli.app, ["edit", "box", "--untag", "web"])
+    assert "box has no tag web" in r.output, r.output
 
 
 def test_an_edit_that_changes_both_places_prints_one_json_document(tmp_path, monkeypatch):
@@ -485,3 +489,47 @@ def test_add_says_when_the_key_it_names_is_not_there(tmp_path, monkeypatch):
     assert "typo_key: no such file here" in r.output
     r = runner.invoke(cli.app, ["add", f"ssh -i {key} root@10.0.0.5", "--name", "two"])
     assert "no such file" not in r.output
+
+
+def test_re_adding_under_another_machines_name_offers_no_rename_that_would_fail(
+        tmp_path, monkeypatch):
+    """`fleet add "ssh ..." --name gpu` on a known machine said "to rename it: fleet edit
+    box --name gpu", and that command only answered that another machine has the name."""
+    runner = _cli(tmp_path, monkeypatch, [
+        Device(id="linux:machine-id:box", name="box", kind=Kind.PERMANENT,
+               endpoints=[{"target": "10.0.0.5", "user": "root", "port": 22}]),
+        Device(id="linux:machine-id:gpu", name="gpu", kind=Kind.PERMANENT,
+               endpoints=[{"target": "10.0.0.6", "user": "root", "port": 22}])])
+    _readd(monkeypatch)
+    real = cli.onboard
+    monkeypatch.setattr(cli, "onboard", lambda cmd, **k: real(cmd, **{**k, "name": "gpu"}))
+    r = runner.invoke(cli.app, ["add", "ssh root@10.0.0.5", "--name", "gpu"])
+    assert r.exit_code == 0, r.output
+    assert "fleet edit box --name gpu" not in r.output
+    assert "another machine already answers to 'gpu'" in r.output, r.output
+
+
+def test_a_name_refused_is_quoted_as_it_was_typed(tmp_path, monkeypatch):
+    runner = _cli(tmp_path, monkeypatch, [
+        Device(id="linux:machine-id:box", name="box", kind=Kind.PERMANENT,
+               endpoints=[{"target": "10.0.0.5", "user": "root", "port": 22}])])
+    r = runner.invoke(cli.app, ["edit", "box", "--name", "a [red]b[/red]"])
+    assert r.exit_code == 2
+    assert "'a [red]b[/red]' is not a usable name" in r.output, r.output
+
+
+@pytest.mark.parametrize("blank", ["", "  "])
+def test_a_blank_disk_path_is_refused(tmp_path, monkeypatch, blank):
+    """`--disk-path ""` was recorded as a path of "" and shown as [''], watching nothing."""
+    runner = _cli(tmp_path, monkeypatch, [
+        Device(id="linux:machine-id:box", name="box", kind=Kind.PERMANENT,
+               endpoints=[{"target": "10.0.0.5", "user": "root", "port": 22}])])
+    r = runner.invoke(cli.app, ["edit", "box", "--disk-path", blank])
+    assert r.exit_code == 2 and "--clear-disk-paths" in r.output, r.output
+    assert inv.find_exact(inv.load(), "box").disk_paths == []
+
+
+def test_a_cost_under_a_cent_is_not_shown_as_free():
+    from fleet.render.view import usd
+
+    assert [usd(x) for x in (0.004, 0.0125, 1.75)] == ["$0.004", "$0.01", "$1.75"]

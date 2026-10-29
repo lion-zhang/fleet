@@ -199,6 +199,12 @@ def _reachability(dev: Device, state: dict | None) -> list[str]:
 LISTED_FACTS = frozenset({"rental", "shared", "appliance", "public-ip", "mesh", "lan"})
 
 
+def usd(x: float) -> str:
+    """Dollars as people read them: cents, and more digits under a cent -- a small cloud
+    machine at $0.004/hr read "$0.00", as if it were free."""
+    return f"${x:.2f}" if x >= 0.01 or not x else f"${x:.2g}"
+
+
 def matches_tag(row: dict, tag: str) -> bool:
     """One matcher, here rather than in cli.py, so every surface agrees.
 
@@ -708,6 +714,6 @@ def fleet_view(rows: list[dict]) -> dict:
             "online": len(online),
             "gpus_free": sum(1 for r in online for g in r.get("gpus", []) if not g.get("busy")),
             "rentals_running": sum(1 for r in online if r["kind"] == "rental"),
-            "hourly_burn": round(sum(r.get("usd_per_hour") or 0 for r in online), 2),
+            "hourly_burn": round(sum(r.get("usd_per_hour") or 0 for r in online), 4),
         },
     }

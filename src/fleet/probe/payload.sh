@@ -159,7 +159,10 @@ gpu_present=0; gpu_driver=""; gpu_err=""; gpu_vendor=""; amd_out=""
 # than failing, and the probe ran out its time on it: the machine read as off, "nothing
 # answered at that address". Waited for in the background, not under `timeout`, which
 # cannot return while the process is stuck in the driver. 124 when it did not finish.
-if sleep 0.1 2>/dev/null; then NV_STEP=0.1 NV_STEPS=80; else NV_STEP=1 NV_STEPS=8; fi
+# The 8s is kept by a timer, not by counting turns of the loop: each turn starts a
+# `sleep`, and on a loaded machine 80 turns of 0.1s took 12 to 17s -- close to the 20s
+# fleet gives a machine, on exactly the machines that are slow to answer.
+if sleep 0.1 2>/dev/null; then NV_STEP=0.1; else NV_STEP=1; fi
 # NV_ALL=1: its errors too, which a broken driver writes on stderr.
 nvsmi() {
   nv_out=$(mktemp "${TMPDIR:-/tmp}/fleet-nvsmi.XXXXXX" 2>/dev/null)
@@ -167,13 +170,16 @@ nvsmi() {
   if [ -n "${NV_ALL:-}" ]; then nvidia-smi "$@" >"$nv_out" 2>&1 </dev/null &
   else nvidia-smi "$@" >"$nv_out" 2>/dev/null </dev/null &
   fi
-  nv_pid=$! nv_i=0
+  nv_pid=$!
+  ( sleep 8; : >"$nv_out.late" ) >/dev/null 2>&1 </dev/null &
+  nv_timer=$!
   while kill -0 "$nv_pid" 2>/dev/null; do
-    if [ "$nv_i" -ge "$NV_STEPS" ]; then
-      kill -9 "$nv_pid" 2>/dev/null; rm -f "$nv_out"; return 124
+    if [ -e "$nv_out.late" ]; then
+      kill -9 "$nv_pid" 2>/dev/null; rm -f "$nv_out" "$nv_out.late"; return 124
     fi
-    sleep "$NV_STEP"; nv_i=$((nv_i + 1))
+    sleep "$NV_STEP"
   done
+  kill "$nv_timer" 2>/dev/null; rm -f "$nv_out.late"
   wait "$nv_pid"; nv_rc=$?
   cat "$nv_out"; rm -f "$nv_out"
   return "$nv_rc"
