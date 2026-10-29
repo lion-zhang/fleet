@@ -349,6 +349,21 @@ def test_the_first_run_says_nothing_of_a_0_5_list_that_is_not_there(home, monkey
     assert not any("inventory.yaml" in s for s in said)
 
 
+def test_a_tailnet_offers_its_machines_by_their_magicdns_names_and_no_exit_nodes():
+    """A Mullvad exit node was offered as a machine to add; "Lin's MacBook Pro" was
+    offered under a name `--hide` refused; two laptops named "laptop" shared one name."""
+    status = {"Peer": {
+        "a": {"HostName": "Lin's MacBook Pro", "DNSName": "lins-macbook-pro.example.ts.net.",
+              "OS": "macOS", "TailscaleIPs": ["100.64.0.8"]},
+        "b": {"HostName": "laptop", "DNSName": "laptop.example.ts.net.", "OS": "linux"},
+        "c": {"HostName": "laptop", "DNSName": "laptop-1.example.ts.net.", "OS": "linux"},
+        "d": {"HostName": "us-nyc-wg-301", "DNSName": "us-nyc-wg-301.example.ts.net.",
+              "OS": "linux", "ExitNodeOption": True, "Location": {"Country": "USA"}},
+    }}
+    assert [c.name for c in discover.tailnet(status)] == [
+        "laptop", "laptop-1", "lins-macbook-pro"]
+
+
 # ---------------------------------------------------------------- hiding candidates
 def test_a_hidden_candidate_is_not_offered_until_unhidden(home, monkeypatch):
     (home / ".ssh" / "config").write_text("Host lab\nHost old-box\n")

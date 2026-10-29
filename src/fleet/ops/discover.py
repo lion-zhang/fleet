@@ -201,11 +201,16 @@ def tailnet(status: dict | None = None) -> list[Candidate]:
         if not os_name:
             continue                          # iOS, Android, tvOS...: nothing to ssh to
         dns = str(peer.get("DNSName") or "").rstrip(".")
+        if peer.get("Location") or dns.endswith(".mullvad.ts.net"):
+            continue                          # a Mullvad exit node: not a machine of yours
         ips = peer.get("TailscaleIPs") or []
         target = dns or (ips[0] if ips else "")
         if not target:
             continue
-        name = str(peer.get("HostName") or dns.split(".", 1)[0] or target).lower()
+        # The MagicDNS name, which the tailnet keeps unique and typeable: the HostName of
+        # "Lin's MacBook Pro" was offered as a name --hide refused, and two laptops both
+        # called "laptop" were one name for two machines.
+        name = str(dns.split(".", 1)[0] or peer.get("HostName") or target).lower()
         out.append(Candidate(name=name, target=target, ssh_command=f"ssh {target}",
                              source="tailnet", os=os_name, online=bool(peer.get("Online"))))
     return sorted(out, key=lambda c: c.name)
