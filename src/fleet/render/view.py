@@ -470,6 +470,7 @@ def _alerts(dev: Device, snap: dict | None, state: dict | None) -> list[str]:
         out.append(f"host is UP but refused us (this is not 'offline') -- "
                    f"`fleet doctor {dev.name}` says how to let us in")
     if snap:
+        read = len(out)
         for g in snap.get("gpus", []):
             if _gpu_view(g)["unattributed_mib"] >= 256:
                 out.append(f"gpu{g['idx']}: {_gpu_view(g)['unattributed_mib']} MiB held by "
@@ -495,6 +496,10 @@ def _alerts(dev: Device, snap: dict | None, state: dict | None) -> list[str]:
         for st in snap.get("storage", []):
             if not st.get("exists"):
                 out.append(f"{st.get('kind')} folder {st.get('path')} does not exist there")
+        if (state or {}).get("status") not in (None, "ok"):
+            # From the last reading, on a machine that did not answer this time: "disk /
+            # 97% full" or "folder does not exist there" read as true now, hours later.
+            out[read:] = [f"{a} (when last read)" for a in out[read:]]
     if dev.kind is Kind.SHARED:
         out.append("shared multi-user host -- not claimable")
     # Only from a reading that just came in. The snapshot outlives the machine: a rental
