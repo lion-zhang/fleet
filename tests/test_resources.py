@@ -750,6 +750,41 @@ def test_the_windows_probe_reports_notes_folders_and_servers(tmp_path):
         srv.shutdown()
 
 
+def _windows_probe(tmp_path, prelude: str):
+    script = tmp_path / "probe.ps1"
+    script.write_text(prelude + (REPO / "src" / "fleet" / "probe" / "payload.ps1").read_text())
+    p = subprocess.run([PWSH, "-NoProfile", "-File", str(script)], text=True, check=False,
+                       capture_output=True, timeout=120, stdin=subprocess.DEVNULL,
+                       env={**os.environ, "TERM": "dumb", "LOCALAPPDATA": str(tmp_path),
+                            "ProgramData": str(tmp_path / "none")})
+    assert "#END" in p.stdout, p.stderr[-2000:]
+    return parse_payload(p.stdout)
+
+
+# Six cores at 25%, from stand-ins for the counters, so it runs wherever pwsh does.
+_CIM = ("function Get-CimInstance { param($ClassName, $Filter) switch ($ClassName) {\n"
+        "  'Win32_Processor' { [pscustomobject]@{LoadPercentage = 25; Name = 'cpu'} }\n"
+        "  'Win32_ComputerSystem' { [pscustomobject]@{NumberOfLogicalProcessors = 6} } } }\n")
+
+
+@pytest.mark.skipif(PWSH is None, reason="needs PowerShell")
+def test_a_german_windows_reports_its_cpu_load_as_a_number(tmp_path):
+    # `-f` wrote the machine's own culture: "1,50" is no number, and CPU read "?".
+    snap = _windows_probe(tmp_path, "[cultureinfo]::CurrentCulture = 'de-DE'\n" + _CIM)
+    assert snap.load == (1.5, 1.5, 1.5)
+
+
+@pytest.mark.skipif(PWSH is None, reason="needs PowerShell")
+def test_a_broken_nvidia_driver_on_windows_is_said_not_hidden(tmp_path):
+    # Taken for a driver version, the machine read as having no GPU, with no alert.
+    said = ("NVIDIA-SMI has failed because it couldn't communicate with the NVIDIA "
+            "driver. Make sure that the latest NVIDIA driver is installed and running.")
+    quoted = said.replace("'", "''")     # PowerShell's own way to put ' in '...'
+    snap = _windows_probe(tmp_path, f"function nvidia-smi {{ '{quoted}' }}\n" + _CIM)
+    assert snap.gpu_present == "err" and snap.gpu_error == said
+    assert snap.gpu_driver == "" and snap.gpus == []
+
+
 # ---------------------------------------------------------------- who reads what
 def _busy_snap() -> dict:
     out = ("#FLEET v1\nhost.hostname=h\nhost.uname_s=Linux\n"

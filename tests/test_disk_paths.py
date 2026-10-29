@@ -605,4 +605,8 @@ def test_a_path_in_the_home_is_found_on_windows_too():
                          text=True, timeout=120, stdin=subprocess.DEVNULL,
                          env={**os.environ, "FLEET_MODE": "full",
                               "FLEET_DISK_PATHS": "~|~\\fleet-not-here-29"}).stdout
-    assert [r.split("|")[0] for r in _disk_rows(out)] == ["~"]
+    from fleet.probe.parse import parse_payload
+
+    assert [r.split("|")[0] for r in _disk_rows(out)] == ["~", "~\\fleet-not-here-29"]
+    # Not there is said so, as payload.sh says it: dropped, nothing said why.
+    assert parse_payload(out).missing_disk_paths == ["~\\fleet-not-here-29"]
