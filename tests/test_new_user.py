@@ -346,7 +346,7 @@ def test_an_old_reading_says_how_old_it_is(capsys):
                       None, Detail.FULL)
     cli._print_show(old)
     assert "as read 2h ago; fleet never probes a mobile device" in capsys.readouterr().out
-    assert " 2h " in _text(_ls_table([old], set()))
+    assert _text(_ls_table([old], set())).split()[-1] == "2h"     # the AGE column
     fresh = device_view(dev, {"status": "ok", "last_probe_at": int(time.time())},
                         None, Detail.FULL)
     cli._print_show(fresh)

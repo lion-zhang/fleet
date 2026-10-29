@@ -72,6 +72,31 @@ def test_fleet_top_stays_readable_in_a_normal_terminal(width):
     assert any("RTX 4090" in ln for ln in lines)
 
 
+def test_an_empty_note_column_does_not_cost_the_kind():
+    """With nothing to say about any machine, NOTE stayed, empty, and at 100 columns the
+    KIND column went to make room for it."""
+    rows = _rows()
+    for r in rows:
+        r["alerts"] = []
+    header = _lines(render_ls(rows, width=100), 100)[0]
+    assert "KIND" in header and "NOTE" not in header
+    assert "NOTE" not in _lines(render_ls(rows, width=250), 250)[0]
+
+
+def test_a_machine_that_did_not_answer_is_not_shown_live_in_top():
+    """`fleet top dead` headed a refused machine "live", with "0G free" of memory."""
+    from fleet.render.top import render_device
+
+    dev = Device(id="id:dead", name="dead", kind=Kind.PERMANENT,
+                 endpoints=[{"target": "dead", "user": "me", "port": 22}])
+    row = device_view(dev, {"status": "refused", "error_class": "refused",
+                            "error_detail": "nothing listening on that port",
+                            "last_probe_at": 1}, None, Detail.FULL)
+    text = "\n".join(_lines(render_device(row), 120))
+    assert "live" not in text and "0G free" not in text
+    assert "refused nothing listening on that port" in text
+
+
 def test_a_wide_terminal_shows_everything():
     lines = _lines(render_ls(_rows(), width=220), 220)
     assert "/mnt/attach/project-files" in "\n".join(lines)

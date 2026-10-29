@@ -180,6 +180,12 @@ def advise(dev: Device, status: str, detail: str, *, snap: dict | None = None,
     if status in (Status.TIMEOUT.value, Status.UNREACHABLE.value):
         v.why = ("nothing answered at that address: it is off, asleep, or not on a network "
                  "this machine can reach")
+        if detail.startswith("could not connect: "):
+            # Said by this machine, not the other: a firewall or sandbox here says
+            # "Permission denied", a missing IPv6 route only "failure".
+            v.why = (f"this machine could not open a connection to it "
+                     f"({detail.removeprefix('could not connect: ')}): it is off, or a "
+                     "firewall or network here stands in the way")
         v.fix = ["check it is on; on a VPN or tailnet, that both ends are connected",
                  f"if it moved:  {readdress('ssh user@new-address')}"]
         return v
@@ -200,7 +206,10 @@ def advise(dev: Device, status: str, detail: str, *, snap: dict | None = None,
         return v
     if status != Status.AUTH_FAILED.value:
         v.why = f"it answered, but the probe failed: {detail[:160]}"
-        v.fix = [f"fleet ssh {dev.name} -- 'echo ok'   to see what the shell says"]
+        # Not added yet, it has no name to give `fleet ssh`: "fleet ssh ssh -p 22 me@h"
+        # named the command typed at doctor.
+        v.fix = [(f"{ep.ssh_command()} 'echo ok'" if adding
+                  else f"fleet ssh {dev.name} -- 'echo ok'") + "   to see what the shell says"]
         return v
 
     # It is up, and said no.

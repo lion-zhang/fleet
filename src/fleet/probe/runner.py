@@ -95,8 +95,22 @@ def scrub_stderr(stderr: str) -> str:
     return "\n".join(keep)
 
 
+# ssh's own line when the TCP connection itself failed, before any server said anything,
+# and the reasons the signatures above already tell apart.
+_CONNECT_FAILED = re.compile(r"connect to host \S+ port \d+: (.+)")
+_CONNECT_REASONS = ("Connection refused", "timed out", "No route to host",
+                    "Network is unreachable", "Name or service not known")
+
+
 def classify_stderr(stderr: str) -> tuple[Status, str]:
     cleaned = scrub_stderr(stderr)
+    if (m := _CONNECT_FAILED.search(cleaned)) and not any(
+            reason in m.group(1) for reason in _CONNECT_REASONS):
+        # Nothing answered, whatever the reason says. "Permission denied" from a local
+        # firewall or sandbox read as the machine rejecting the key, and a reason with no
+        # signature of its own ("failure", with no IPv6 here) as "it answered, but the
+        # probe failed".
+        return Status.UNREACHABLE, f"could not connect: {m.group(1).strip()[:160]}"
     for needle, status, detail in _ERROR_SIGNATURES:
         if needle in cleaned:
             return status, detail
