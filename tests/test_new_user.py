@@ -300,3 +300,15 @@ def test_setup_refuses_a_target_before_recording_this_machine(tmp_path, monkeypa
     assert r.exit_code == 2, r.output
     assert not ran
     assert "ready here" not in r.output
+
+
+@pytest.mark.parametrize("argv", [["add", "ssh x", "--kind", "weird"], ["add", "ssh x", "--self"],
+                                  ["add", "ssh x", "--name", ""], ["ls", "--tag", ""]])
+def test_a_refused_command_does_not_record_this_machine_first(tmp_path, monkeypatch, argv):
+    """`fleet add ... --kind weird` said "✓ fleet is ready here: recorded vm" and then
+    that weird is not a kind."""
+    ran = []
+    monkeypatch.setattr(cli, "_first_run", lambda *a, **k: ran.append(a))
+    r = CliRunner().invoke(cli.app, argv)
+    assert r.exit_code == 2, r.output
+    assert not ran

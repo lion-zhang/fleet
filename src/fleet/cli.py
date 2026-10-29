@@ -137,12 +137,12 @@ def cmd_ls(names: list[str] = typer.Argument(None, help="only these devices"),
 
     [dim]Example:[/dim]  fleet ls --json
     """
-    _first_run("ls")
     if tag and not view_mod.split_tags(tag):
         # `--tag ""` listed every machine, as though each had matched.
         err.print(f"[red]--tag {escape(repr(tag[0]))}[/red] is not a tag  [dim]e.g. "
                   "--tag cuda, or --tag cuda,vram-24g for both[/dim]")
         raise typer.Exit(2)
+    _first_run("ls")
     if discover or hide or unhide:
         _print_discovered(json_out, hide=hide or [], unhide=unhide or [], show_all=show_all)
         return
@@ -683,9 +683,13 @@ def cmd_add(ssh_command: str = typer.Argument(None, help='e.g. "ssh -p 58418 roo
 
     [dim]Example:[/dim]  fleet add "ssh -p 58418 root@1.2.3.4"
     """
-    _first_run("add")
     if this_machine == bool(ssh_command):
         err.print("[red]Give an ssh command, or --self -- not both, not neither.[/red]")
+        raise typer.Exit(2)
+    if name is not None and not name.strip():
+        # `--name ""` was taken as no --name at all, and the host's name used instead.
+        err.print("[red]--name needs a name[/red]  [dim]or leave it out, and fleet names "
+                  "it after the host[/dim]")
         raise typer.Exit(2)
     _usable_names(name=name, alias=alias)
     if kind is not None:
@@ -696,6 +700,9 @@ def cmd_add(ssh_command: str = typer.Argument(None, help='e.g. "ssh -p 58418 roo
             err.print(f"[red]--kind {escape(repr(kind))}[/red] is not a kind  [dim]one "
                       f"of {', '.join(k.value for k in Kind)}[/dim]")
             raise typer.Exit(2)
+    # Once what was asked is known to make sense: `fleet add ... --kind weird` recorded
+    # this machine and said "✓ fleet is ready here" before refusing.
+    _first_run("add")
     devices = inv.load()
     taken = inv.handles(devices)
     if alias and alias in taken:
@@ -758,7 +765,8 @@ def cmd_add(ssh_command: str = typer.Argument(None, help='e.g. "ssh -p 58418 roo
                       else "endpoint_added" if new_eps else "unchanged")
             # What the real add would change on it, as that answers.
             if action == "unchanged" and ((kind and dev.kind is not known.kind) or any(
-                    t not in known.tags for t in (_tags(tag) or []))):
+                    t not in known.tags for t in (_tags(tag) or [])) or (
+                    alias and not known.alias and alias != known.name)):
                 action = "updated"
         else:
             action = "added"
@@ -861,6 +869,13 @@ def cmd_add(ssh_command: str = typer.Argument(None, help='e.g. "ssh -p 58418 roo
             else:
                 console.print(f"  [dim]it keeps its name; to rename it: [bold]fleet edit "
                               f"{dev.name} --name {asked}[/bold][/dim]")
+        if action != "added" and alias and survivor and survivor.alias \
+                and survivor.alias != alias:
+            # Said as for --name: `--alias lb` on a machine already called `l` was dropped
+            # without a word.
+            console.print(f"  [dim]it keeps its alias {escape(survivor.alias)}; to change "
+                          f"it: [bold]fleet edit {dev.name} --alias {escape(alias)}[/bold]"
+                          "[/dim]")
         if action == "added":
             console.print(f"[green]✓[/green] added [bold]{dev.name}[/bold] {what}")
             if not name:

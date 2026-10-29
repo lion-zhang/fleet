@@ -684,3 +684,19 @@ def test_a_folder_must_be_a_full_path(tmp_path, monkeypatch):
         r = runner.invoke(cli.app, ["edit", "box", "--path", f"models={good}"])
         assert r.exit_code == 0, (good, r.output)
         assert asked[-1]["paths"] == {"models": [good]}
+
+
+def test_a_re_add_says_when_it_keeps_the_alias_and_a_dry_run_sees_a_new_one(tmp_path, monkeypatch):
+    """`fleet add ... --alias lb` on a machine already called `l` was dropped without a
+    word, and `--dry-run` with an alias for a machine that had none said "unchanged"."""
+    import json
+
+    runner = _cli(tmp_path, monkeypatch, [
+        Device(id="linux:machine-id:box", name="box", kind=Kind.PERMANENT,
+               endpoints=[{"target": "10.0.0.5", "user": "root", "port": 22}])])
+    _readd(monkeypatch)
+    r = runner.invoke(cli.app, ["add", "ssh root@10.0.0.5", "--alias", "b", "--dry-run"])
+    assert json.loads(r.stdout)["action"] == "updated", r.output
+    assert runner.invoke(cli.app, ["add", "ssh root@10.0.0.5", "--alias", "b"]).exit_code == 0
+    r = runner.invoke(cli.app, ["add", "ssh root@10.0.0.5", "--alias", "bx"])
+    assert "it keeps its alias b; to change it: fleet edit box --alias bx" in r.output, r.output
