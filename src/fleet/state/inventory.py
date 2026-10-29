@@ -361,8 +361,17 @@ def handles(devices: list[Device], *, excluding: str = "") -> set[str]:
 def near_matches(devices: list[Device], name: str, limit: int = 5) -> list[str]:
     """Handles worth suggesting after `find_exact` came back empty."""
     lowered = name.lower()
-    return sorted(h for h in handles(devices)
-                  if lowered in h.lower() or h.lower().startswith(lowered))[:limit]
+    near = sorted(h for h in handles(devices)
+                  if lowered in h.lower() or h.lower().startswith(lowered))
+    if not near:
+        # A slip of a key -- `nod1`, `ndoe1` -- found nothing to suggest: only a part of a
+        # name did, so the one misspelt was answered with no name at all.
+        import difflib
+
+        lowers = {h.lower(): h for h in handles(devices)}
+        near = [lowers[m] for m in difflib.get_close_matches(lowered, lowers, n=limit,
+                                                              cutoff=0.75)]
+    return near[:limit]
 
 
 # How long a removed machine's record is kept, so a list shared between machines with

@@ -124,6 +124,31 @@ def test_the_installer_hands_the_checkout_to_uv(tmp_path):
     assert "tool install" in log.read_text(encoding="utf-8")
 
 
+def test_a_device_that_cannot_fetch_uv_says_so(tmp_path):
+    """`curl ... | sh` exits as sh does, and sh given nothing succeeds: a device with no
+    internet went on to "uv: not found", exit 127, and never got the exit that says the
+    device could not fetch uv."""
+    import os
+    import shutil
+
+    bin_dir = tmp_path / "bare"
+    bin_dir.mkdir()
+    for tool in ("sh", "git", "grep", "dirname", "mkdir", "mktemp", "rm", "cat"):
+        if found := shutil.which(tool):
+            os.symlink(found, bin_dir / tool)
+    curl = bin_dir / "curl"
+    curl.write_text("#!/bin/sh\necho 'curl: (6) Could not resolve host' >&2\nexit 6\n")
+    curl.chmod(0o755)
+    from fleet.install import NO_UV
+
+    script = install_script(str(_origin(tmp_path)))
+    for _ in range(2):
+        result = subprocess.run(["sh", "-c", script], capture_output=True, text=True,
+                                timeout=60, env={"HOME": str(tmp_path), "PATH": str(bin_dir)})
+        assert result.returncode == NO_UV, (result.returncode, result.stderr)
+        curl.unlink(missing_ok=True)          # and with no curl at all
+
+
 def test_a_repo_url_cannot_inject_shell(tmp_path):
     """The URL comes from config and lands in a remote shell command."""
     marker = tmp_path / "pwned"

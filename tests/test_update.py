@@ -241,6 +241,18 @@ def test_an_install_the_installer_kept_is_named_not_ticked(fleet_of, monkeypatch
     assert "✓ this machine" not in r.output
 
 
+def test_an_install_that_found_a_source_checkout_says_it_kept_it(fleet_of, monkeypatch):
+    """`fleet install` on a machine running your own checkout keeps it, and the installer
+    says so; the CLI printed only its last line, "✓ oracle: fleet 0.6.1", under
+    "installing fleet on oracle from <url> (main)", which reads as main installed."""
+    runner, _, _ = fleet_of
+    said = "fleet here is installed from a source checkout; kept as it is\nfleet 0.6.1\n"
+    monkeypatch.setattr(cli, "run_installer", lambda ep, script, **kw: (0, said))
+    r = runner.invoke(cli.app, ["install", "oracle"])
+    assert r.exit_code == 0, r.output
+    assert "kept as it is" in r.output and "✓ oracle" not in r.output, r.output
+
+
 def test_an_update_names_a_git_source_only_when_it_uses_one(fleet_of):
     """Without --repo or --ref an install is upgraded where it came from, PyPI for most,
     and "updating this machine from https://github.com/... (main)" said otherwise."""
