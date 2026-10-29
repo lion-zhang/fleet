@@ -210,6 +210,11 @@ def test_the_windows_runner_waits_for_fleet_then_reports_how_it_ended(tmp_path):
     assert "Wait-Process" in text
     assert "it''s.ps1" in text, "the path is quoted for PowerShell"
     assert text.rstrip().endswith(f'"{install.UPDATE_EXIT_MARK} $LASTEXITCODE"')
+    # A log line that could not be written at once is tried again, not lost: the first
+    # one lost, fleet waited for it and said the update had not started (Windows CI).
+    say = text.split("function Say", 1)[1].split("\n}\n", 1)[0]
+    assert "AppendAllText" in say and "catch" in say and "Start-Sleep" in say
+    assert "Add-Content" not in text
 
 
 def test_a_background_update_that_never_started_is_a_failure(fleet_of, monkeypatch):

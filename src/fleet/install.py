@@ -592,9 +592,19 @@ def _windows_update_runner(inner: Path, pids: list[int], log: Path | None = None
     start = ", ".join(str(p) for p in pids)
     # Every line appended to the log as it happens. Written to stdout instead, it sat in
     # PowerShell's buffer until the runner exited, so nobody could see it had started.
+    # Appended, and tried again while something else has the file open: Add-Content
+    # gave up at once on a log another process was reading ("Stream was not readable"),
+    # the runner's first line never came, and fleet said the update had not started
+    # while it ran.
     return f"""$ErrorActionPreference = 'Continue'
 $log = '{log_lit}'
-function Say($text) {{ Add-Content -LiteralPath $log -Value $text -Encoding utf8 }}
+$utf8 = New-Object System.Text.UTF8Encoding $false
+function Say($text) {{
+  for ($n = 0; $n -lt 50; $n++) {{
+    try {{ [System.IO.File]::AppendAllText($log, "$text`r`n", $utf8); return }}
+    catch {{ Start-Sleep -Milliseconds 100 }}
+  }}
+}}
 Say "update runner started (pid $PID)"
 # Up from this fleet to the fleet.exe that started it, and no further: whatever ran
 # fleet.exe -- a shell, an agent, a test written in python -- is not ours to wait for,

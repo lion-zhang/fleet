@@ -988,3 +988,17 @@ def test_a_declared_server_that_answers_without_a_model_list_is_still_listed():
     text = " ".join(map(str, render_models(models_view(
         [{"name": "lab", "status": "ok", "models": rows}]))[0].columns[0]._cells))
     assert "no model list there" in text, text
+
+
+def test_paths_names_every_place_a_machine_keeps_its_notes():
+    """It listed ~/.config and /etc alone: on a Mac or a Windows machine, where the
+    notes live elsewhere, the place to look was not among them."""
+    from typer.testing import CliRunner
+
+    from fleet import cli
+
+    out = " ".join(CliRunner().invoke(cli.app, ["paths"], env={"COLUMNS": "300"}).output.split())
+    for where in ("~/.config/fleet/machine.yaml", "/etc/fleet/machine.yaml",
+                  "~/Library/Application Support/fleet/machine.yaml",
+                  "%LOCALAPPDATA%\\fleet\\machine.yaml", "%ProgramData%\\fleet\\machine.yaml"):
+        assert where in out, (where, out)

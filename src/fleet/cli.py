@@ -2054,8 +2054,13 @@ def cmd_paths():
                   "with your dotfiles if you like)[/dim]")
     console.print(f"config     {_cfg.CONFIG_PATH}")
     console.print(f"cache      {store.DB_PATH}   [dim](disposable — delete and re-probe)[/dim]")
+    # Every place the probe reads one: this listed the Linux two alone, and a Mac or a
+    # Windows machine keeps its own somewhere else.
     console.print("notes      ~/.config/fleet/machine.yaml, /etc/fleet/machine.yaml   "
-                  "[dim](on each machine, about itself: fleet edit --path)[/dim]")
+                  "[dim](on each machine, about itself: fleet edit --path)[/dim]\n"
+                  "           [dim]on a Mac also ~/Library/Application Support/fleet/"
+                  "machine.yaml; on Windows %LOCALAPPDATA%\\fleet\\machine.yaml and "
+                  "%ProgramData%\\fleet\\machine.yaml[/dim]")
     if _cfg.CONFIG_DIR == _cfg.STATE_DIR:
         # Worth saying out loud: it is why every filename above is distinct, and why
         # nothing here may ever be cleaned up by globbing a directory.
