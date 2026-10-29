@@ -850,3 +850,29 @@ def test_finding_no_agent_names_the_folder_hermes_home_points_at(tmp_path, monke
     assert result.exit_code == 1, result.output
     said = "".join(result.output.split())      # a long path may be folded mid-word
     assert "~/.hermes" not in said and "elsewhere" in said, result.output
+
+
+def test_a_config_with_comments_is_left_alone_with_the_entry_to_add(tmp_path, monkeypatch):
+    """VS Code's mcp.json may hold comments and trailing commas. It was left alone, which
+    is right, but called "not UTF-8 text" and answered "add fleet to it by hand" with
+    nothing to add."""
+    import sys
+    from pathlib import Path
+
+    from typer.testing import CliRunner
+
+    from fleet.agents import MCP_CLIENTS
+    from fleet.cli import app
+
+    monkeypatch.setattr(Path, "home", classmethod(lambda cls: tmp_path))
+    (vscode,) = [c for c in MCP_CLIENTS if c.name == "vscode"]
+    path = vscode.path(tmp_path, sys.platform)
+    path.parent.mkdir(parents=True)
+    text = '// mine\n{"servers": {"other": {"command": "x",},},}\n'
+    path.write_text(text, encoding="utf-8")
+    result = CliRunner().invoke(app, ["setup", "--target", "vscode"])
+    assert result.exit_code == 0, result.output
+    assert path.read_text(encoding="utf-8") == text
+    out = " ".join(result.output.split())
+    assert "comments or trailing commas" in out
+    assert 'under "servers"' in out and '"fleet": {"command": ' in out and '"args": ["mcp"]' in out

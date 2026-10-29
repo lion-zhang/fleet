@@ -2193,12 +2193,25 @@ def cmd_setup(
         colour = {"created": "green", "updated": "green", "removed": "yellow",
                   "unreadable": "yellow", "taken": "yellow"}.get(c.action, "dim")
         console.print(f"  [{colour}]{c.action:<9}[/{colour}] {escape(str(c.path))}")
-    for action, why in (("unreadable", "not UTF-8 text fleet can parse, so it was left "
-                         "exactly as it was; add fleet to it by hand"),
+    for action, why in (("unreadable", "not plain JSON or text fleet can rewrite safely "
+                         "(not UTF-8, or JSON with comments or trailing commas, which VS "
+                         "Code allows), so it was left exactly as it was; add fleet to it "
+                         "by hand"),
                         ("taken", "already has a server of its own called fleet, which "
                          "was left in place")):
         if any(c.action == action for c in changes):
             err.print(f"[yellow]![/yellow] {action}: {why}")
+    if not remove:
+        # "add fleet to it by hand" gave nothing to add: VS Code's mcp.json usually has
+        # comments, so this was the answer every VS Code user with one got.
+        from .agents.clients import mcp_entry
+
+        keys = {c.name: c.key for c in MCP_CLIENTS}
+        for c in changes:
+            if c.action == "unreadable" and c.target in keys:
+                entry = jsonlib.dumps({"fleet": mcp_entry(config_command())})[1:-1]
+                err.print(f"  [dim]{escape(c.target)}: under \"{keys[c.target]}\" in "
+                          f"{escape(str(c.path))}, add[/dim]  {escape(entry)}")
     if dry_run:
         console.print("\n[dim]--dry-run: nothing was written.[/dim]")
     elif not remove and cmd != "fleet":
