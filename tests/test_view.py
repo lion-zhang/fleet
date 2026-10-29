@@ -370,3 +370,15 @@ def test_a_machine_that_failed_its_last_try_is_aged_by_its_last_reading(capsys):
     ok = device_view(make(), {**STATE_OK, "last_probe_at": now - 2}, {**snap, "ts": now - 2},
                      Detail.FULL)
     assert staleness(ok, live_within=10) == ""
+
+
+def test_an_alert_from_a_machine_that_did_not_answer_says_it_is_from_its_last_reading():
+    """Refusing us, a machine went on saying "disk /: 97% full" and "folder does not exist
+    there" from a reading hours old, as if they were true now."""
+    snap = {**snap_of("gpu-box"),
+            "storage": [{"kind": "models", "path": "/data/m", "exists": False}]}
+    down = device_view(make(), STATE_AUTH_FAILED, snap)["alerts"]
+    assert "models folder /data/m does not exist there (when last read)" in down, down
+    assert any("refused us" in a and "last read" not in a for a in down)
+    up = device_view(make(), STATE_OK, snap)["alerts"]
+    assert "models folder /data/m does not exist there" in up, up
