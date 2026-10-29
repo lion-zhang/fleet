@@ -490,3 +490,32 @@ def test_output_cut_to_its_end_says_so(monkeypatch):
     out = asyncio.run(server.call_tool("run_on_machine", {"machine": "gpu", "command": "ls"}))
     assert "stdout_cut" not in json.dumps([getattr(c, "text", str(c)) for c in
                                             (out[0] if isinstance(out, tuple) else out)])
+
+
+def test_an_empty_or_malformed_argument_is_not_taken_as_none(monkeypatch):
+    """`show_machine(name="")` answered with this machine and `edit_machine(rename="")`
+    with an edit that changed nothing, which the agent took as done; a kind with an `=`
+    recorded the rest of it as part of the folder; an empty command came back ok."""
+    pytest.importorskip("mcp", reason="the mcp extra is optional")
+    import asyncio
+
+    from fleet import mcpserver
+
+    ran = []
+    monkeypatch.setattr(mcpserver, "_run", lambda args, *a: ran.append(args) or {"ok": True})
+    monkeypatch.setattr(mcpserver, "_exec", lambda *a, **k: pytest.fail("ran nothing"))
+    server = mcpserver.build_server()
+
+    def call(tool, args):
+        return asyncio.run(server.call_tool(tool, args))
+
+    call("show_machine", {"name": ""})
+    call("edit_machine", {"name": "gpu", "rename": "", "ssh_command": ""})
+    assert ran == [["show", "--json", "--refresh", "--", ""],
+                   ["edit", "--json", "--name", "", "--ssh", "", "--", "gpu"]]
+    ran.clear()
+    out = str(call("set_machine_paths", {"machine": "gpu", "kind": "models=x",
+                                         "paths": ["/data"]}))
+    assert "is not a kind" in out and not ran
+    assert "no command to run" in str(call("run_on_machine", {"machine": "gpu",
+                                                              "command": "  "}))

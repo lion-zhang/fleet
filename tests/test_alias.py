@@ -577,3 +577,83 @@ def test_an_alias_spelt_none_is_not_shown_as_no_alias():
     dev = Device(id="id:a", name="box", kind=Kind.PERMANENT)
     assert apply_edits(dev, alias="none").changes == ["alias (none) -> none"]
     assert apply_edits(dev, alias="").changes == ["alias none -> (none)"]
+
+
+def test_an_edit_that_is_refused_writes_nothing_to_the_machine(tmp_path, monkeypatch):
+    """`--tag x --name taken` and `--tag x --ssh` that reaches another machine said
+    "nothing changed" -- after the tag had already gone onto the machine's own file."""
+    from fleet.ops import machinefile
+
+    runner = _cli(tmp_path, monkeypatch, [
+        Device(id="id:box", name="box", kind=Kind.PERMANENT,
+               endpoints=[{"target": "10.0.0.5", "user": "root", "port": 22}]),
+        Device(id="id:other", name="other", kind=Kind.PERMANENT)])
+    wrote = []
+    monkeypatch.setattr(machinefile, "change",
+                        lambda *a, **k: wrote.append(k) or ("", "tags: [x]\n"))
+    r = runner.invoke(cli.app, ["edit", "box", "--tag", "x", "--name", "other"])
+    assert r.exit_code == 2 and "already answers to 'other'" in r.output, r.output
+    from fleet.ssh.cmd import Endpoint
+
+    monkeypatch.setattr(cli, "resolve_command",
+                        lambda cmd, **kw: Endpoint(target="10.0.0.9", user="root", port=22))
+    monkeypatch.setattr(cli, "_answers_as_another", lambda *a: "other")
+    r = runner.invoke(cli.app, ["edit", "box", "--tag", "x", "--ssh", "ssh root@10.0.0.9"])
+    assert r.exit_code == 2 and "reaches other" in r.output, r.output
+    assert not wrote, "refused, and nothing was written there"
+
+
+def test_an_empty_value_is_refused_not_taken_as_nothing_to_do(tmp_path, monkeypatch):
+    """`--tag ""` said "machine.yaml already says that" and `--ssh ""` "nothing to
+    change", as though each had been kept; port 0 was "not NAME=PORT", which it was; and
+    one folder given twice was recorded twice."""
+    from fleet.ops import machinefile
+
+    runner = _cli(tmp_path, monkeypatch, [
+        Device(id="id:box", name="box", kind=Kind.PERMANENT,
+               endpoints=[{"target": "10.0.0.5", "user": "root", "port": 22}])])
+    asked = []
+    monkeypatch.setattr(machinefile, "change", lambda *a, **k: asked.append(k) or ("", "x: 1\n"))
+    for args, says in ((["--tag", ""], "is not a tag"), (["--untag", " "], "is not a tag"),
+                       (["--ssh", ""], "--ssh needs how you connect"),
+                       (["--endpoint", "x=0"], "port 0 is not a port"),
+                       (["--endpoint", "x=70000"], "ports run from 1 to 65535")):
+        r = runner.invoke(cli.app, ["edit", "box", *args])
+        assert r.exit_code == 2 and says in r.output, (args, r.output)
+    assert not asked
+    runner.invoke(cli.app, ["edit", "box", "--path", "models=/m", "--path", "models=/m"])
+    assert asked[-1]["paths"] == {"models": ["/m"]}
+
+
+def test_a_re_add_that_changes_the_record_says_what_it_changed(tmp_path, monkeypatch):
+    """`fleet add ... --kind rental` on a machine already recorded made it a rental and
+    said "already recorded with this endpoint", action "unchanged" -- --dry-run too."""
+    import json
+
+    runner = _cli(tmp_path, monkeypatch, [
+        Device(id="linux:machine-id:box", name="box", kind=Kind.PERMANENT,
+               endpoints=[{"target": "10.0.0.5", "user": "root", "port": 22}])])
+    _readd(monkeypatch)
+    r = runner.invoke(cli.app, ["add", "ssh root@10.0.0.5", "--kind", "rental",
+                                "--dry-run"])
+    assert json.loads(r.stdout)["action"] == "updated", r.output
+    r = runner.invoke(cli.app, ["add", "ssh root@10.0.0.5", "--kind", "rental",
+                                "--tag", "web"])
+    assert r.exit_code == 0 and "already recorded with this endpoint" in r.output
+    assert "kind permanent -> rental" in r.output and "tags (none) -> web" in r.output
+    r = runner.invoke(cli.app, ["add", "ssh root@10.0.0.5", "--kind", "rental", "--json"])
+    assert json.loads(r.stdout)["action"] == "unchanged", "and once it is, it is"
+
+
+def test_a_kind_or_tag_that_is_no_such_thing_says_what_would_do(tmp_path, monkeypatch):
+    """`--kind weird` was refused only after the machine was reached, as "'weird' is
+    not a valid Kind"; `ls --tag ""` listed every machine and `doctor ""` checked them
+    all, as though no tag or name had been given."""
+    runner = _cli(tmp_path, monkeypatch)
+    monkeypatch.setattr(cli, "onboard", lambda *a, **k: pytest.fail("reached it"))
+    r = runner.invoke(cli.app, ["add", "ssh root@10.0.0.5", "--kind", "weird"])
+    assert r.exit_code == 2 and "one of permanent, rental" in r.output, r.output
+    r = runner.invoke(cli.app, ["ls", "--tag", ""])
+    assert r.exit_code == 2 and "is not a tag" in r.output, r.output
+    r = runner.invoke(cli.app, ["doctor", ""])
+    assert r.exit_code == 1 and "No machine named ''" in r.output, r.output
