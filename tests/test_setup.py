@@ -876,3 +876,36 @@ def test_a_config_with_comments_is_left_alone_with_the_entry_to_add(tmp_path, mo
     out = " ".join(result.output.split())
     assert "comments or trailing commas" in out
     assert 'under "servers"' in out and '"fleet": {"command": ' in out and '"args": ["mcp"]' in out
+
+
+def test_taking_fleet_out_of_a_file_kept_does_not_say_the_file_was_removed(tmp_path, monkeypatch):
+    """`fleet setup --uninstall`, and setup moving an old region out of GEMINI.md, printed
+    "removed ~/.gemini/GEMINI.md" for a file that is still there with the user's own text:
+    only fleet's part went. `fleet uninstall` already said "removed fleet from"."""
+    import sys
+    from pathlib import Path
+
+    from typer.testing import CliRunner
+
+    from fleet.agents import MCP_CLIENTS
+    from fleet.cli import app
+
+    monkeypatch.setattr(Path, "home", classmethod(lambda cls: tmp_path))
+    (cursor,) = [c for c in MCP_CLIENTS if c.name == "cursor"]
+    path = cursor.path(tmp_path, sys.platform)
+    path.parent.mkdir(parents=True)
+    path.write_text('{"mcpServers": {"other": {"command": "x"}}}\n', encoding="utf-8")
+    runner = CliRunner()
+    assert runner.invoke(app, ["setup", "--target", "cursor"]).exit_code == 0
+    for args in (["--dry-run"], []):
+        result = runner.invoke(app, ["setup", "--target", "cursor", "--uninstall", *args])
+        assert result.exit_code == 0, result.output
+        out = " ".join(result.output.split())
+        assert f"removed fleet from {path}" in out, out
+    assert '"other"' in path.read_text(encoding="utf-8")
+
+    skill = tmp_path / ".claude" / "skills" / "fleet" / "SKILL.md"
+    assert runner.invoke(app, ["setup", "--target", "claude"]).exit_code == 0
+    result = runner.invoke(app, ["setup", "--target", "claude", "--uninstall"])
+    out = " ".join(result.output.split())
+    assert f"removed {skill}" in out and "fleet from" not in out

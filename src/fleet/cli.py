@@ -2192,7 +2192,13 @@ def cmd_setup(
     for c in changes:
         colour = {"created": "green", "updated": "green", "removed": "yellow",
                   "unreadable": "yellow", "taken": "yellow"}.get(c.action, "dim")
-        console.print(f"  [{colour}]{c.action:<9}[/{colour}] {escape(str(c.path))}")
+        # A file that is still there held more than fleet -- the user's GEMINI.md, an
+        # app's MCP config -- and only fleet's part went: "removed" beside its path read
+        # as the whole file deleted. As `fleet uninstall` says it.
+        kept = c.action == "removed" and (c.path.name != "SKILL.md" if dry_run
+                                          else c.path.exists())
+        console.print(f"  [{colour}]{c.action:<9}[/{colour}] "
+                      f"{'fleet from ' if kept else ''}{escape(str(c.path))}")
     for action, why in (("unreadable", "not plain JSON or text fleet can rewrite safely "
                          "(not UTF-8, or JSON with comments or trailing commas, which VS "
                          "Code allows), so it was left exactly as it was; add fleet to it "
