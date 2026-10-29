@@ -131,7 +131,9 @@ of them, and treats them as blocking:
 
 - the machine is up but **refused us** — this is not "offline"; `fleet doctor NAME` says
   why ([more](reaching-machines.md#when-a-machine-refuses));
-- **VRAM held by processes fleet cannot see** — do not treat it as free;
+- **VRAM held by processes fleet cannot see** — 4 GiB or more is someone's job, so do
+  not treat that GPU as free; less, perhaps a desktop's own windows, is a reason to ask
+  before using it;
 - a **disk at 90%** or more;
 - **`nvidia-smi` failing**, or an AMD tool (`amd-smi`, `rocm-smi`) that reads no card;
 - a **shared multi-user host** — not for claiming;

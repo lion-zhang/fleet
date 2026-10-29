@@ -78,12 +78,17 @@ NOTE column. In order:
 | *gpuN: … MiB held by processes not visible to us -- do not treat as free* | a GPU's used memory exceeds what its visible processes account for by 4096 MiB or more; the GPU counts as busy |
 | *gpuN: … MiB held by processes not visible to us -- a desktop's windows, or a job just starting* | the same by 256 MiB or more, but less than 4096: the GPU still counts as idle |
 | *disk MOUNT: N% full, NG left -- a long job will die on this* | a writable volume is at least 90% full |
+| *disk path PATH is not there -- `fleet edit NAME --disk-path` with the right one* | a path set with `fleet edit --disk-path` is not on the machine |
 | *nvidia-smi present but failing: …* | `nvidia-smi` is installed but failing |
-| *amd-smi is installed but read no GPU -- is the amdgpu driver loaded?* | `amd-smi` or `rocm-smi` is there, and lists no card |
+| *amd-smi is installed but read no GPU -- is the amdgpu driver loaded?* (or *an AMD GPU tool is here but read no GPU*) | `amd-smi` or `rocm-smi` is there, and lists no card |
 | *… -- its notes and paths were not read* | the machine's [`machine.yaml`](../guides/resources.md#machineyaml) could not be read |
+| *… left out: …* | a field of `machine.yaml` fleet does not read, or of the wrong shape (a cost that is not a number, a folder kind that is not one word…); the rest of the file is read |
 | *KIND folder PATH does not exist there* | a folder named in `machine.yaml` is not on the machine |
 | *shared multi-user host -- not claimable* | always, for a `shared` machine |
 | *RENTAL is idle -- this is costing money* | a `rental` with at least one GPU, none of them busy |
+
+On a machine that did not answer this time, the alerts that come from its last reading
+end in *(when last read)*.
 
 A GPU counts as **busy** at 10% utilisation or more, with 1 GiB or more of compute
 memory in use, or with 4 GiB or more held by processes fleet cannot see (a job in a
