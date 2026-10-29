@@ -348,6 +348,29 @@ def resolve(parsed: ParsedSsh, *, timeout: float = 10.0) -> Endpoint:
     )
 
 
+def recorded_identity(path: str) -> str:
+    """A key path as machines.yaml keeps it: under your home, as `~/...`.
+
+    The list is shared with dotfiles, and `-i ~/.ssh/work` was recorded as
+    /home/lin/.ssh/work -- a path a Mac (/Users/lin) or another user does not have, so
+    there the key was dropped and the machine refused fleet while `ssh` got in.
+    """
+    if not path:
+        return ""
+    try:
+        rel = Path(os.path.abspath(os.path.expanduser(path))).relative_to(Path.home())
+    except ValueError:
+        return path
+    return "~/" + rel.as_posix()
+
+
+def same_key(a: str, b: str) -> bool:
+    """Whether two recorded key paths name one file here, `~/...` or spelled out."""
+    def here(p: str) -> str:
+        return os.path.normcase(os.path.normpath(os.path.expanduser(p))) if p else ""
+    return here(a) == here(b)
+
+
 # The keys ssh offers on its own, without -i, from ~/.ssh.
 _DEFAULT_IDENTITIES = frozenset({"id_rsa", "id_ecdsa", "id_ecdsa_sk", "id_ed25519",
                                  "id_ed25519_sk", "id_xmss", "id_dsa"})

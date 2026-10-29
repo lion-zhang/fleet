@@ -84,8 +84,13 @@ def atomic_write(path: Path, text: str, *, mode: int = 0o600) -> None:
     used to share `access.tmp`, and one of them crashed renaming a file the other had
     already moved). Permissions are set before a byte is written, and the data is synced
     before the rename, so the file is never seen half-written or briefly world-readable.
+
+    A symlink is written through, as `replace_file` does: the guides say to share
+    machines.yaml with your dotfiles, and the first `fleet edit` after linking it in
+    renamed a plain file over the link, so the change never reached the repo and the
+    next machine's copy never reached this one.
     """
-    path = Path(path)
+    path = Path(os.path.realpath(path)) if os.path.islink(path) else Path(path)
     try:
         path.parent.mkdir(parents=True, exist_ok=True)
         fd, tmp = tempfile.mkstemp(dir=str(path.parent), prefix=f".{path.name}.",

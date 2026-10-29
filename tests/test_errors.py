@@ -160,6 +160,16 @@ def test_a_yes_or_no_is_not_taken_for_a_number(cfg_at, capsys):
     assert "probe_timeout_s: a yes/no value is not a number; using 20" in capsys.readouterr().err
 
 
+def test_a_number_written_with_an_exponent_is_a_number(cfg_at, capsys):
+    """YAML reads `1e3` without a dot as text, and fleet said "'1e3' is not a number"
+    and used the default."""
+    cfg_at.write_text("snapshot_retention: 1e3\ntelemetry_ttl_s: 5m\n", encoding="utf-8")
+    cfg = config.load_config()
+    assert (cfg.snapshot_retention, cfg.telemetry_ttl_s) == (1000, 60)
+    err = capsys.readouterr().err
+    assert "snapshot_retention" not in err and "'5m' is not a number" in err
+
+
 @pytest.mark.parametrize("value", [".inf", "-.inf", ".nan"])
 def test_infinity_or_nan_in_a_setting_falls_back_to_the_default(cfg_at, capsys, value):
     """`max_workers: .inf` is YAML for infinity, and int() refused it with OverflowError:

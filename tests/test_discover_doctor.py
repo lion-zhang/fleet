@@ -375,6 +375,21 @@ def test_the_first_run_says_fleet_0_5s_list_is_not_read(home, monkeypatch):
     assert any("inventory.yaml" in s and "2 other machine" in s for s in said)
 
 
+def test_a_0_5_members_list_counts_the_center_it_copied(home, monkeypatch):
+    """A member's inventory.yaml was the center's copy: the center there is another
+    machine, and leaving it out said one machine fewer than the file holds."""
+    from fleet import config
+    from fleet.ops import firstrun
+
+    config.CONFIG_DIR.mkdir(parents=True, exist_ok=True)
+    (config.CONFIG_DIR / "inventory.yaml").write_text(
+        "version: 1\ndevices:\n- {id: 'net:10.0.0.5:22', name: gpu, role: center}\n"
+        "- {id: 'net:10.0.0.6:22', name: cpu}\n- {id: 'id:me', name: laptop}\n")
+    assert firstrun._left_by_0_5(Device(id="id:me", name="laptop")) == 2
+    # Not found by id (0.5 wrote none on some systems): the center is taken for this one.
+    assert firstrun._left_by_0_5(Device(id="id:other", name="laptop")) == 2
+
+
 def test_the_first_run_says_nothing_of_a_0_5_list_that_is_not_there(home, monkeypatch):
     from fleet.ops import firstrun, identity
 

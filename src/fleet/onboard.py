@@ -8,7 +8,8 @@ import unicodedata
 
 from .models import Device, Kind, ProbeResult, Snapshot, Status
 from .probe.runner import run_probe, run_probe_local
-from .ssh.cmd import Endpoint, classify_route, parse_ssh_command, resolve
+from .ssh.cmd import (Endpoint, classify_route, parse_ssh_command, recorded_identity,
+                      resolve)
 
 _RENTAL_HOST_RE = re.compile(r"(vast\.ai|runpod|autodl|seetacloud|lambdalabs|paperspace)", re.I)
 
@@ -124,7 +125,7 @@ def endpoint_dict(ep: Endpoint, *, name: str = "primary", preference: int = 10,
     d = {"name": name, "target": ep.target, "user": ep.user, "port": ep.port,
          "preference": preference}
     if ep.identity:
-        d["identity"] = ep.identity
+        d["identity"] = recorded_identity(ep.identity)
     if ep.jump:
         d["jump"] = ep.jump
     if ep.host:
