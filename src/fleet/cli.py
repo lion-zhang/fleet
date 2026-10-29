@@ -1279,6 +1279,12 @@ def cmd_edit(name: str = typer.Argument(None, help="defaults to this machine"),
         conn = store.connect()
         store.rename_device(conn, result.previous_id, dev.id)
         conn.close()
+    if any(c.startswith("disk paths ") for c in result.changes):
+        # The reading cached a minute ago measured the old mounts: `fleet ls` straight
+        # after `--disk-path /data` showed every disk but /data, as if it were ignored.
+        conn = store.connect()
+        store.expire(conn, dev.id)
+        conn.close()
 
     # A cost kept here is only the fallback: the machine's own file wins. "cost none ->
     # $0.5/hr" with $1.75 still in `ls` read as an edit that had not taken.

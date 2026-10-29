@@ -441,3 +441,20 @@ def test_untagging_a_tag_set_machine_wide_says_who_keeps_it(tmp_path, monkeypatc
     assert "lab is set machine-wide" in result.output, result.output
     result = runner.invoke(app, ["edit", "box", "--untag", "zz"])
     assert "has no tag zz" in result.output
+
+
+def test_a_new_disk_path_is_read_on_the_next_look(tmp_path, monkeypatch):
+    """`fleet ls` straight after `edit --disk-path /data` showed the reading cached a minute
+    before, of every disk but /data, as if the flag had been ignored."""
+    from fleet import cli
+    from fleet.cli import app
+
+    runner, _ = _cli_env(tmp_path, monkeypatch, _dev())
+    expired = []
+    monkeypatch.setattr(cli.store, "expire", lambda conn, dev_id: expired.append(dev_id))
+    for args in (["--disk-path", "/data"], ["--clear-disk-paths"]):
+        result = runner.invoke(app, ["edit", "box", *args])
+        assert result.exit_code == 0, result.output
+    assert expired == [_dev().id] * 2
+    runner.invoke(app, ["edit", "box", "--alias", "b"])
+    assert len(expired) == 2
