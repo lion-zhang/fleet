@@ -322,9 +322,11 @@ else, and fleet runs on Windows too. See [Windows](docs/guides/windows.md).
 <details>
 <summary><b>Does anything keep running in the background?</b></summary>
 
-No. fleet runs only when you or an agent use it. On a machine it looks at, a `du` of the
-folders you named may run in the background now and then, so their sizes are known
-without making a probe wait.
+No service. fleet runs only when you or an agent use it. The ssh connection it opened to
+each machine stays open for two minutes after the command (on Linux and macOS), so the
+next one does not dial again, and then closes by itself. On a machine it looks at, a
+`du` of the folders you named may run in the background now and then, so their sizes
+are known without making a probe wait.
 </details>
 
 <details>

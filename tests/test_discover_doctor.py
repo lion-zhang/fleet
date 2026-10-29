@@ -330,8 +330,10 @@ def test_ssh_copy_id_argv_carries_port_identity_and_jump(tmp_path, monkeypatch):
     monkeypatch.setattr(keys.shutil, "which", lambda name: "/usr/bin/ssh-copy-id")
     argv = keys.copy_id_argv(Endpoint(target="1.2.3.4", user="root", port=40001,
                                       identity="/k", jump="bastion"))
+    # RemoteCommand=none: one in your ssh config stopped it on "Cannot execute
+    # command-line and remote command", so the key never went on.
     assert argv == ["/usr/bin/ssh-copy-id", "-p", "40001", "-i", "/k", "-o",
-                    "ProxyJump=bastion", "root@1.2.3.4"]
+                    "ProxyJump=bastion", "-o", "RemoteCommand=none", "root@1.2.3.4"]
 
 
 # ---------------------------------------------------------------- first run
@@ -586,3 +588,4 @@ def test_doctor_on_this_machine_needs_no_address(monkeypatch):
     assert v.status == Status.OK.value and "this machine" in v.why and not v.fix
     other = Device(id="linux:machine-id:other", name="far", kind=Kind.PERMANENT)
     assert doctor.diagnose(other, state=None, snap=None).status == "unreachable"
+

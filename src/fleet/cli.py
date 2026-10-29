@@ -2055,6 +2055,9 @@ def cmd_ssh(ctx: typer.Context,
                                  here_windows=local_platform() == WINDOWS,
                                  there_windows=platform == "windows"):
             err.print(f"[yellow]![/yellow] {hint}")
+        # Your config's RemoteCommand is for a shell; with a command of its own ssh
+        # refused both ("Cannot execute command-line and remote command").
+        argv[1:1] = ["-o", "RemoteCommand=none"]
         argv.append(remote_command(extra, windows=platform == "windows"))
 
     if sys.platform == "win32":

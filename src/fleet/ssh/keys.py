@@ -100,6 +100,9 @@ def copy_id_argv(ep: Endpoint) -> list[str] | None:
         argv += ["-i", ep.identity]
     if ep.jump:
         argv += ["-o", f"ProxyJump={ep.jump}"]
+    # It runs a command there, which ssh refuses beside a RemoteCommand from your ssh
+    # config ("Cannot execute command-line and remote command"), so the key never went on.
+    argv += ["-o", "RemoteCommand=none"]
     argv.append(f"{ep.user}@{ep.target}" if ep.user else ep.target)
     return argv
 

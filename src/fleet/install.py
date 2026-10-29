@@ -17,7 +17,7 @@ import shlex
 from pathlib import Path
 
 from . import config
-from .ssh.cmd import WINDOWS, Endpoint, jump_args, local_platform
+from .ssh.cmd import NOT_A_SESSION, WINDOWS, Endpoint, jump_args, local_platform
 
 INSTALL_DIR = "$HOME/.local/share/fleet"
 WINDOWS_INSTALL_DIR = "$env:USERPROFILE\\.local\\share\\fleet"
@@ -254,7 +254,10 @@ def build_install_argv(ep: Endpoint, *, forward_agent: bool = True,
     a repo, so no BatchMode timeout games. -A forwards the agent so the clone can
     authenticate as you without a credential at rest.
     """
-    opts = ["-o", f"ConnectTimeout={connect_timeout}", "-o", "StrictHostKeyChecking=accept-new"]
+    # The script arrives on stdin: a RemoteCommand of yours in its place, or a terminal
+    # your config asks for, would have it typed into a shell instead.
+    opts = ["-o", f"ConnectTimeout={connect_timeout}", "-o", "StrictHostKeyChecking=accept-new",
+            *NOT_A_SESSION]
     argv = ["ssh", *opts]
     if forward_agent:
         argv.append("-A")
