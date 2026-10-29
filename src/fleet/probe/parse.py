@@ -309,7 +309,7 @@ def parse_payload(stdout: str) -> Snapshot:
 def _parse_resources(snap: Snapshot, kv: dict[str, str], rows: dict[str, list[str]]) -> None:
     """The machine's own notes, its folders, its software and what its servers serve."""
     snap.light = kv.get("probe.light") == "1"
-    snap.notes, snap.notes_error = machine_notes.from_probe(kv)
+    snap.notes, snap.notes_error = machine_notes.from_probe(kv, snap.notes_skipped)
 
     for ln in rows.get("STORE", []):
         f = ln.split("|")

@@ -657,3 +657,10 @@ def test_a_kind_or_tag_that_is_no_such_thing_says_what_would_do(tmp_path, monkey
     assert r.exit_code == 2 and "is not a tag" in r.output, r.output
     r = runner.invoke(cli.app, ["doctor", ""])
     assert r.exit_code == 1 and "No machine named ''" in r.output, r.output
+
+
+def test_show_takes_r_as_ls_and_models_do(tmp_path, monkeypatch):
+    """`fleet ls -r` and `fleet models -r`; `fleet show box -r` said "No such option"."""
+    runner = _cli(tmp_path, monkeypatch)
+    r = runner.invoke(cli.app, ["show", "-r", "--help"])
+    assert r.exit_code == 0 and "No such option" not in r.output, r.output

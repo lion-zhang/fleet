@@ -322,7 +322,7 @@ def _print_discovered(json_out: bool, *, hide: list[str] = (), unhide: list[str]
 @app.command("show")
 def cmd_show(name: str = typer.Argument(None, help="defaults to this machine"),
              json_out: bool = typer.Option(False, "--json", help="print JSON instead of a table, for scripts and agents"),
-             refresh: bool = typer.Option(True, "--refresh/--no-refresh", help="probe it now; --no-refresh shows the last reading"),
+             refresh: bool = typer.Option(True, "--refresh/--no-refresh", "-r", help="probe it now; --no-refresh shows the last reading"),
              rescan: bool = typer.Option(False, "--rescan", help="also re-read software versions and folder sizes, which machines otherwise cache for 6 hours"),
              wait: int = typer.Option(0, "--wait", metavar="SECONDS",
                                       help="with --rescan: wait up to this long for the folder sizes it started measuring")):

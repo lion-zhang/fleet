@@ -78,7 +78,7 @@ fleet show machine_A
 | Option | |
 |---|---|
 | `--json` | print JSON instead of a table, for scripts and agents |
-| `--refresh`, `--no-refresh` | probe it now; --no-refresh shows the last reading |
+| `--refresh`, `-r`, `--no-refresh` | probe it now; --no-refresh shows the last reading |
 | `--rescan` | also re-read software versions and folder sizes, which machines otherwise cache for 6 hours |
 | `--wait` `SECONDS` | with --rescan: wait up to this long for the folder sizes it started measuring |
 
