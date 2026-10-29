@@ -850,3 +850,118 @@ def test_finding_no_agent_names_the_folder_hermes_home_points_at(tmp_path, monke
     assert result.exit_code == 1, result.output
     said = "".join(result.output.split())      # a long path may be folded mid-word
     assert "~/.hermes" not in said and "elsewhere" in said, result.output
+
+
+def test_a_config_with_comments_is_left_alone_with_the_entry_to_add(tmp_path, monkeypatch):
+    """VS Code's mcp.json may hold comments and trailing commas. It was left alone, which
+    is right, but called "not UTF-8 text" and answered "add fleet to it by hand" with
+    nothing to add."""
+    import sys
+    from pathlib import Path
+
+    from typer.testing import CliRunner
+
+    from fleet.agents import MCP_CLIENTS
+    from fleet.cli import app
+
+    monkeypatch.setattr(Path, "home", classmethod(lambda cls: tmp_path))
+    (vscode,) = [c for c in MCP_CLIENTS if c.name == "vscode"]
+    path = vscode.path(tmp_path, sys.platform)
+    path.parent.mkdir(parents=True)
+    text = '// mine\n{"servers": {"other": {"command": "x",},},}\n'
+    path.write_text(text, encoding="utf-8")
+    result = CliRunner().invoke(app, ["setup", "--target", "vscode"])
+    assert result.exit_code == 0, result.output
+    assert path.read_text(encoding="utf-8") == text
+    out = " ".join(result.output.split())
+    assert "comments or trailing commas" in out
+    assert 'under "servers"' in out and '"fleet": {"command": ' in out and '"args": ["mcp"]' in out
+
+
+def test_taking_fleet_out_of_a_file_kept_does_not_say_the_file_was_removed(tmp_path, monkeypatch):
+    """`fleet setup --uninstall`, and setup moving an old region out of GEMINI.md, printed
+    "removed ~/.gemini/GEMINI.md" for a file that is still there with the user's own text:
+    only fleet's part went. `fleet uninstall` already said "removed fleet from"."""
+    import sys
+    from pathlib import Path
+
+    from typer.testing import CliRunner
+
+    from fleet.agents import MCP_CLIENTS
+    from fleet.cli import app
+
+    monkeypatch.setattr(Path, "home", classmethod(lambda cls: tmp_path))
+    (cursor,) = [c for c in MCP_CLIENTS if c.name == "cursor"]
+    path = cursor.path(tmp_path, sys.platform)
+    path.parent.mkdir(parents=True)
+    path.write_text('{"mcpServers": {"other": {"command": "x"}}}\n', encoding="utf-8")
+    runner = CliRunner()
+    assert runner.invoke(app, ["setup", "--target", "cursor"]).exit_code == 0
+    for args in (["--dry-run"], []):
+        result = runner.invoke(app, ["setup", "--target", "cursor", "--uninstall", *args])
+        assert result.exit_code == 0, result.output
+        out = " ".join(result.output.split())
+        assert f"removed fleet from {path}" in out, out
+    assert '"other"' in path.read_text(encoding="utf-8")
+
+    skill = tmp_path / ".claude" / "skills" / "fleet" / "SKILL.md"
+    assert runner.invoke(app, ["setup", "--target", "claude"]).exit_code == 0
+    result = runner.invoke(app, ["setup", "--target", "claude", "--uninstall"])
+    out = " ".join(result.output.split())
+    assert f"removed {skill}" in out and "fleet from" not in out
+
+
+def test_several_targets_at_once_and_a_shared_skill_taken_out_of_both(tmp_path, monkeypatch):
+    """`--target claude --target codex` set up codex alone, silently. And with Codex and
+    Gemini CLI both here, the skill they share was "kept for gemini" when uninstalling
+    codex and "kept for codex" when uninstalling gemini: one at a time never removed it,
+    and nothing said how."""
+    from pathlib import Path
+
+    from typer.testing import CliRunner
+
+    from fleet.cli import app
+
+    monkeypatch.setattr(Path, "home", classmethod(lambda cls: tmp_path))
+    for d in (".codex", ".gemini", ".claude"):
+        (tmp_path / d).mkdir()
+    runner = CliRunner()
+    r = runner.invoke(app, ["setup", "--target", "claude", "--target", "codex"])
+    assert r.exit_code == 0, r.output
+    claude = tmp_path / ".claude" / "skills" / "fleet" / "SKILL.md"
+    shared = tmp_path / ".agents" / "skills" / "fleet" / "SKILL.md"
+    assert claude.exists() and shared.exists()
+
+    r = runner.invoke(app, ["setup", "--uninstall", "--target", "codex"])
+    assert shared.exists()
+    out = " ".join(r.output.split())
+    assert "fleet setup --uninstall --target codex --target gemini" in out, out
+    r = runner.invoke(app, ["setup", "--uninstall", "--target", "codex,gemini"])
+    assert r.exit_code == 0, r.output
+    assert not shared.exists() and claude.exists()
+    assert runner.invoke(app, ["setup", "--target", "codex,nosuch"]).exit_code == 2
+
+
+def test_refresh_keeps_a_skill_a_newer_fleet_wrote(tmp_path, monkeypatch):
+    """`fleet setup --refresh` -- run by every install and update -- from an older fleet
+    on the machine put its older words back over a skill a newer fleet had written, which
+    is what the version in the stamp is there to stop."""
+    from pathlib import Path
+
+    from typer.testing import CliRunner
+
+    from fleet.agents import package_version
+    from fleet.cli import app
+
+    monkeypatch.setattr(Path, "home", classmethod(lambda cls: tmp_path))
+    (tmp_path / ".claude").mkdir()
+    runner = CliRunner()
+    assert runner.invoke(app, ["setup", "--target", "claude"]).exit_code == 0
+    skill = tmp_path / ".claude" / "skills" / "fleet" / "SKILL.md"
+    newer = skill.read_text().replace(f"<!-- fleet {package_version()} #", "<!-- fleet 99.0 #")
+    assert newer != skill.read_text()
+    skill.write_text(newer + "\nwords from the newer fleet\n")
+    r = runner.invoke(app, ["setup", "--refresh"])
+    assert r.exit_code == 0, r.output
+    assert "words from the newer fleet" in skill.read_text()
+    assert "newer fleet" in r.output

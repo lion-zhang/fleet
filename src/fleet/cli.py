@@ -31,7 +31,7 @@ from . import notes as notes_mod
 from .agents import (MCP_CLIENTS, TARGETS, config_command, detect_mcp_clients,
                      detect_targets, fleet_command, fleet_executable, install,
                      install_mcp, installed_mcp_clients, installed_targets, package_version,
-                     stale_mcp_clients, stale_targets, uninstall, uninstall_mcp)
+                     plan, stale_mcp_clients, stale_targets, uninstall, uninstall_mcp)
 from .config import INVENTORY_PATH, load_config
 from .edit import apply_edits, check_name, is_full_path
 from .install import (NOTHING_TO_UPDATE, build_install_argv, install_script, needs_agent,
@@ -2098,8 +2098,10 @@ def _ago(seconds: int) -> str:
 
 @app.command("setup")
 def cmd_setup(
-    target: str = typer.Option("auto", "--target",
-                               help="an agent name, or all | auto (whatever is installed)"),
+    target: list[str] = typer.Option([], "--target",
+                                     help="an agent name, or all | auto (whatever is "
+                                          "installed; the default); repeat it, or use "
+                                          "commas, for several"),
     project: bool = typer.Option(False, "--project",
                                  help="write into the current directory, not your home"),
     dry_run: bool = typer.Option(False, "--dry-run", help="show what would change; write nothing"),
@@ -2118,15 +2120,35 @@ def cmd_setup(
     """
     root = Path.cwd() if project else Path.home()
     # MCP clients are a second namespace: a desktop app is registered, not written to.
-    # `--project` never touches them -- their config is per-user, not per-repo.
+    # `--project` touches only those that read a config in the repository.
 
     mcp_names = tuple(c.name for c in MCP_CLIENTS)
     if refresh:
         # Run by every install and update, on the machine being updated. So it may only
         # rewrite what is already there -- never teach an agent fleet that someone chose
         # to leave alone -- and finding nothing to refresh is not a failure.
+        from .agents.usage import written_by_newer
+
+        def read_text(path: Path) -> str:
+            try:
+                return path.read_text(encoding="utf-8")
+            except (OSError, UnicodeDecodeError):
+                return ""
+
         targets = installed_targets(root, project=project)
         clients = [] if project else installed_mcp_clients(root)
+        # A copy a newer fleet wrote is not "older": refreshed from an older fleet on the
+        # same machine (a checkout beside the uv install, a remote's own copy), it put the
+        # older words back over the newer ones.
+        paths = plan(root, project=project)
+        newer = [t for t in targets if written_by_newer(read_text(paths[t]))]
+        targets = [t for t in targets if t not in newer]
+        if newer:
+            console.print(f"[dim]· kept: {', '.join(newer)} "
+                          f"read{'s' if len(newer) == 1 else ''} what a newer fleet "
+                          "wrote[/dim]")
+        if not targets and not clients and newer:
+            return
         if not targets and not clients:
             console.print("[dim]· no agent here has fleet installed; nothing to refresh"
                           "[/dim]")
@@ -2135,34 +2157,43 @@ def cmd_setup(
                    + install_mcp(root, clients, config_command(), dry_run=dry_run))
         changed = [c for c in changes if c.action != "unchanged"]
         for c in changed:
-            console.print(f"  [green]{c.action:<9}[/green] {c.path}")
+            _print_change(c, dry_run)
         if not changed:
             console.print("[dim]· agent skills already match this fleet[/dim]")
         return
-    if target == "auto":
+    # Several at once: `--target claude --target codex` kept the last alone, silently, and
+    # an agent's skill shared with another (~/.agents/skills) could only be taken out
+    # of one by naming both -- each alone answered "kept for" the other.
+    names = list(dict.fromkeys(t.strip() for item in target for t in item.split(",")
+                               if t.strip())) or ["auto"]
+    if unknown := [t for t in names if t not in (*TARGETS, *mcp_names, "all", "auto")]:
+        err.print(f"[red]Unknown target {unknown[0]!r}[/red]  "
+                  f"({' | '.join((*TARGETS, *mcp_names))} | all | auto)")
+        raise typer.Exit(2)
+    if "all" in names:
+        targets = list(TARGETS)
+        clients = [] if project else list(mcp_names)
+    elif names == ["auto"]:
         # cwd tells us nothing about which agents you use, so a project install
         # assumes the one whose layout is identical in both scopes.
         targets = ["claude"] if project else detect_targets(root)
         clients = [] if project else detect_mcp_clients(root)
-    elif target == "all":
-        targets = list(TARGETS)
-        clients = [] if project else list(mcp_names)
     else:
-        targets = [target] if target in TARGETS else []
-        clients = [target] if target in mcp_names else []
-        if clients and project and target != "cursor":
+        if "auto" in names:
+            names.remove("auto")
+            names += [t for t in (["claude"] if project else detect_targets(root))
+                      + ([] if project else detect_mcp_clients(root)) if t not in names]
+        targets = [t for t in names if t in TARGETS]
+        clients = [t for t in names if t in mcp_names]
+        per_user = {c.name for c in MCP_CLIENTS if not c.project}
+        if project and (one := next((t for t in clients if t in per_user), None)):
             # It wrote .config/Claude/claude_desktop_config.json into the repo, where no
-            # desktop app looks, and said "created". Cursor alone reads the same path,
-            # .cursor/mcp.json, in a project as in your home.
-            err.print(f"[red]{target} keeps one config for you, not one per project[/red]  "
-                      f"[dim]-- run [bold]fleet setup --target {target}[/bold] without "
+            # desktop app looks, and said "created". Cursor (.cursor/mcp.json) and VS Code
+            # (.vscode/mcp.json) read one in a project; VS Code was refused as if not.
+            err.print(f"[red]{one} keeps one config for you, not one per project[/red]  "
+                      f"[dim]-- run [bold]fleet setup --target {one}[/bold] without "
                       "--project[/dim]")
             raise typer.Exit(2)
-
-    if unknown := [t for t in [target] if t not in (*TARGETS, *mcp_names, "all", "auto")]:
-        err.print(f"[red]Unknown target {unknown[0]!r}[/red]  "
-                  f"({' | '.join((*TARGETS, *mcp_names))} | all | auto)")
-        raise typer.Exit(2)
     # Only once the target is known to be one: `--target nosuch` recorded this machine
     # and said "✓ fleet is ready here" before refusing.
     if not (remove or dry_run):
@@ -2183,26 +2214,56 @@ def cmd_setup(
     cmd = fleet_command()
     if remove:
         changes = (uninstall(root, targets, dry_run=dry_run, project=project)
-                   + uninstall_mcp(root, clients, dry_run=dry_run))
+                   + uninstall_mcp(root, clients, dry_run=dry_run, project=project))
     else:
 
         changes = (install(root, targets, cmd, dry_run=dry_run, project=project)
-                   + install_mcp(root, clients, config_command(), dry_run=dry_run))
+                   + install_mcp(root, clients, config_command(), dry_run=dry_run,
+                                 project=project))
 
     for c in changes:
-        colour = {"created": "green", "updated": "green", "removed": "yellow",
-                  "unreadable": "yellow", "taken": "yellow"}.get(c.action, "dim")
-        console.print(f"  [{colour}]{c.action:<9}[/{colour}] {escape(str(c.path))}")
-    for action, why in (("unreadable", "not UTF-8 text fleet can parse, so it was left "
-                         "exactly as it was; add fleet to it by hand"),
+        _print_change(c, dry_run)
+    if kept := [c for c in changes if c.action.startswith("kept for ")]:
+        others = [o for c in kept for o in c.action.removeprefix("kept for ").split(", ")]
+        named = " ".join(f"--target {t}" for t in dict.fromkeys([*targets, *others]))
+        err.print("[dim]· kept: other agents read the same skill file. To take it out of "
+                  f"them too: [bold]fleet setup --uninstall {named}"
+                  f"{' --project' if project else ''}[/bold][/dim]")
+    for action, why in (("unreadable", "not plain JSON or text fleet can rewrite safely "
+                         "(not UTF-8, or JSON with comments or trailing commas, which VS "
+                         "Code allows), so it was left exactly as it was; add fleet to it "
+                         "by hand"),
                         ("taken", "already has a server of its own called fleet, which "
                          "was left in place")):
         if any(c.action == action for c in changes):
             err.print(f"[yellow]![/yellow] {action}: {why}")
+    if not remove:
+        # "add fleet to it by hand" gave nothing to add: VS Code's mcp.json usually has
+        # comments, so this was the answer every VS Code user with one got.
+        from .agents.clients import mcp_entry
+
+        keys = {c.name: c.key for c in MCP_CLIENTS}
+        for c in changes:
+            if c.action == "unreadable" and c.target in keys:
+                entry = jsonlib.dumps({"fleet": mcp_entry(config_command())})[1:-1]
+                err.print(f"  [dim]{escape(c.target)}: under \"{keys[c.target]}\" in "
+                          f"{escape(str(c.path))}, add[/dim]  {escape(entry)}")
     if dry_run:
         console.print("\n[dim]--dry-run: nothing was written.[/dim]")
     elif not remove and cmd != "fleet":
         err.print(f"\n[dim]{_short_name_hint(cmd)}[/dim]")
+
+
+def _print_change(c, dry_run: bool) -> None:
+    colour = {"created": "green", "updated": "green", "removed": "yellow",
+              "unreadable": "yellow", "taken": "yellow"}.get(c.action, "dim")
+    # A file that is still there held more than fleet -- the user's GEMINI.md, an app's
+    # MCP config -- and only fleet's part went: "removed" beside its path read as the
+    # whole file deleted. As `fleet uninstall` says it.
+    kept = c.action == "removed" and (c.path.name != "SKILL.md" if dry_run
+                                      else c.path.exists())
+    console.print(f"  [{colour}]{c.action:<9}[/{colour}] "
+                  f"{'fleet from ' if kept else ''}{escape(str(c.path))}")
 
 
 def _missing_key(ssh_command: str) -> str:

@@ -255,9 +255,13 @@ class McpClient:
     macos: str                             # path under the home directory
     windows: str = ""
     linux: str = ""
+    project: str = ""                      # under a repository, for those that read one
 
-    def path(self, root: Path, platform: str) -> Path | None:
-        rel = {"darwin": self.macos, "win32": self.windows}.get(platform, self.linux)
+    def path(self, root: Path, platform: str, *, project: bool = False) -> Path | None:
+        if project:
+            rel = self.project
+        else:
+            rel = {"darwin": self.macos, "win32": self.windows}.get(platform, self.linux)
         return root.joinpath(*rel.split("/")) if rel else None
 
 
@@ -268,13 +272,14 @@ MCP_CLIENTS = (
               windows="AppData/Roaming/Claude/claude_desktop_config.json",
               linux=".config/Claude/claude_desktop_config.json"),
     McpClient("cursor", key="mcpServers", macos=".cursor/mcp.json",
-              windows=".cursor/mcp.json", linux=".cursor/mcp.json"),
+              windows=".cursor/mcp.json", linux=".cursor/mcp.json",
+              project=".cursor/mcp.json"),
     # VS Code names the object `servers`, not `mcpServers`, which is why the key is a
     # field here rather than a constant.
     McpClient("vscode", key="servers",
               macos="Library/Application Support/Code/User/mcp.json",
               windows="AppData/Roaming/Code/User/mcp.json",
-              linux=".config/Code/User/mcp.json"),
+              linux=".config/Code/User/mcp.json", project=".vscode/mcp.json"),
     McpClient("windsurf", key="mcpServers",
               macos=".codeium/windsurf/mcp_config.json",
               windows=".codeium/windsurf/mcp_config.json",

@@ -54,6 +54,20 @@ def _read(path: Path) -> str | None:
     return text.replace("\r\n", "\n").replace("\r", "\n")
 
 
+def _write(path: Path, text: str) -> None:
+    """Write `text` with the line ends the file already has.
+
+    `_read` gives every file "\n" ends, so comparing a Windows copy is fair -- and the
+    file went back with "\n" too: an AGENTS.md with Windows line ends came out of `fleet
+    setup` with every one of the user's own lines changed, the whole file a diff.
+    """
+    try:
+        crlf = b"\r\n" in path.read_bytes()
+    except OSError:
+        crlf = False
+    replace_file(path, text.replace("\n", "\r\n") if crlf else text)
+
+
 def apply_block(existing: str, body: str) -> str:
     """Insert or update our region, leaving every other byte of the file alone."""
     block = f"{BEGIN}\n{body}\n{END}"
@@ -192,7 +206,7 @@ def install(root: Path, targets: list[str], cmd: str, *,
                   else "created" if current is None else "updated")
         if action != "unchanged" and not dry_run:
             path.parent.mkdir(parents=True, exist_ok=True)
-            replace_file(path, desired)
+            _write(path, desired)
         changes.append(Change(target, path, action))
         changes += _drop_legacy(root, target, seen, dry_run=dry_run)
     return changes
@@ -241,7 +255,7 @@ def _drop_legacy(root: Path, target: str, seen: set[Path], *, dry_run: bool) -> 
             # Nothing but our region was ever in it -- that file existed because fleet
             # made it -- so leaving an empty one behind is litter, not caution.
             if stripped.strip():
-                replace_file(path, stripped)
+                _write(path, stripped)
             else:
                 path.unlink()
         out.append(Change(target, path, "removed"))
@@ -301,7 +315,7 @@ def uninstall(root: Path, targets: list[str], *,
         if action == "removed" and not dry_run:
             # As in _drop_legacy: a file that held only our region was made by fleet.
             if stripped.strip():
-                replace_file(path, stripped)
+                _write(path, stripped)
             else:
                 path.unlink()
         changes.append(Change(target, path, action))

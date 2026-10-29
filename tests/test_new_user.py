@@ -11,6 +11,7 @@ import base64
 import json
 import os
 import subprocess
+from pathlib import Path
 
 import pytest
 from rich.console import Console
@@ -187,7 +188,7 @@ def test_the_compact_software_view_names_the_newest_version():
 
 
 # ------------------------------------------------------------------ setup
-@pytest.mark.parametrize("target", ["claude-desktop", "vscode", "windsurf"])
+@pytest.mark.parametrize("target", ["claude-desktop", "windsurf"])
 def test_project_setup_is_refused_for_an_app_with_one_config(tmp_path, monkeypatch, target):
     """It wrote the desktop app's config into the repo, where no app looks, and said
     "created"."""
@@ -196,6 +197,23 @@ def test_project_setup_is_refused_for_an_app_with_one_config(tmp_path, monkeypat
     assert r.exit_code == 2, r.output
     assert "not one per project" in " ".join(r.output.split())
     assert not any(tmp_path.iterdir())
+
+
+def test_project_setup_for_vscode_writes_the_workspace_config(tmp_path, monkeypatch):
+    """VS Code reads .vscode/mcp.json in a workspace, as agents.md says, but it was
+    refused as keeping "one config for you, not one per project"."""
+
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(Path, "home", classmethod(lambda cls: tmp_path / "home"))
+    runner = CliRunner()
+    r = runner.invoke(cli.app, ["setup", "--target", "vscode", "--project"])
+    assert r.exit_code == 0, r.output
+    path = tmp_path / ".vscode" / "mcp.json"
+    assert json.loads(path.read_text())["servers"]["fleet"]["args"][-1] == "mcp"
+    assert not (tmp_path / "home").exists()
+    r = runner.invoke(cli.app, ["setup", "--target", "vscode", "--project", "--uninstall"])
+    assert r.exit_code == 0, r.output
+    assert "fleet" not in json.loads(path.read_text())["servers"]
 
 
 # ------------------------------------------------------------------ the write queue

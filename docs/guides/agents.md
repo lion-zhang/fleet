@@ -281,7 +281,9 @@ so no agent ever reads fleet twice.
 
 `fleet setup --project` writes into the current repository instead:
 `.claude/skills/fleet/SKILL.md`, or with `--target codex` (or `hermes`, `gemini`) a marked
-region in the `AGENTS.md` / `GEMINI.md` those agents read. Updating fleet (`fleet update`)
+region in the `AGENTS.md` / `GEMINI.md` those agents read; with `--target cursor` or
+`vscode`, the MCP server in the repository's `.cursor/mcp.json` or `.vscode/mcp.json`.
+Updating fleet (`fleet update`)
 refreshes what every agent is told, on every machine.
 
 **Using the installed CLI instead of `uvx`:** put the full path that `which fleet` prints
