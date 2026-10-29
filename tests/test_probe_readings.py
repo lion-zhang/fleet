@@ -254,6 +254,13 @@ def test_a_folder_that_is_a_link_is_measured_by_what_it_holds(tmp_path):
     ("psql postgres://me:hunter2@db/prod", "hunter2"),
     ('python serve.py --token "two words"', "words"),
     ("HF_TOKEN='a b' python serve.py", "b'"),
+    # These went through as they were.
+    ("curl -H 'Authorization: Bearer abcdef123456' http://x", "abcdef123456"),
+    ("python a.py github_pat_11ABCDEFG0123456789abcdefghijk", "github_pat_11ABCDEFG"),
+    ("git clone https://glpat-abcdefghijklmnopqrstu@gitlab.com/x", "glpat-abcdefghij"),
+    ("redis-server --requirepass s3cret", "s3cret"),
+    ("python a.py --db-pass=s3cret", "s3cret"),
+    ("gpg --passphrase 'my phrase' --batch", "phrase'"),
 ])
 def test_a_secret_in_a_job_s_command_line_stays_on_the_machine(line, secret):
     from fleet.probe.parse import redact
@@ -264,7 +271,8 @@ def test_a_secret_in_a_job_s_command_line_stays_on_the_machine(line, secret):
 def test_redaction_leaves_ordinary_flags_alone():
     from fleet.probe.parse import redact
 
-    line = "python train.py --keyframes 3 --monkey 2 --lr 3e-4 http://host:8000/v1"
+    line = ("python train.py --keyframes 3 --monkey 2 --lr 3e-4 http://host:8000/v1 "
+            "--passes 3 --bypass-cache 1")
     assert redact(line) == line
 
 
