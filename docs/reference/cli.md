@@ -278,7 +278,7 @@ fleet top machine_A -i 1
 
 Stop watching a machine: take it out of this machine's list.
 
-Nothing is changed on the machine itself -- fleet put nothing there but the notes `fleet edit --path` wrote, which stay with it.
+Nothing is changed on the machine itself: what `fleet edit` wrote to its machine.yaml (tags, cost, a note, folders, servers), and fleet if you installed it there, stay with it.
 
 ```
 fleet rm [OPTIONS] NAME

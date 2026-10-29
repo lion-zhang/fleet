@@ -44,6 +44,7 @@ for those there is one command: `fleet doctor NAME` says why, and what to do.
 | `claude reads an older description of fleet` (or several agents) | `fleet setup --refresh`. |
 | `fleet ls --tag …` finds nothing, and says machines were skipped | Those machines have never been measured, so they have no measured facts yet. `fleet ls -r` measures them; a shared or mobile machine is measured only when named: `fleet ls NAME`. |
 | `… is not valid YAML`, or `device X in the inventory is malformed: …` | `machines.yaml` was edited by hand and no longer parses. The message names the file; fix it or restore a copy. fleet changes nothing until it parses. |
+| `two machines in the inventory answer to 'NAME'` | Two entries in `machines.yaml` share a name or alias -- often two copies merged in dotfiles. Rename or remove one by hand; until then fleet will not guess which one you meant. |
 | `fleet: cannot write PATH (…)` | fleet could not save one of its own files: a read-only folder, a full disk, a folder `sudo` left owned by root. Nothing was changed; free the space or fix the folder's owner and run it again. |
 | `cannot write its cache at …; carrying on without saving what this run sees` | The same for the cache. Commands still work and show what they just read; they keep none of it until the folder can be written. |
 | `Could not change NAME's machine.yaml: cannot write …/.config/fleet` | That folder, on that machine, is not yours to write. Fix its owner there, or keep tags and cost here with `--local`. |

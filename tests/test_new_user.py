@@ -286,3 +286,29 @@ def test_show_of_a_machine_never_reached_ends_on_what_it_knows(capsys):
     cli._print_show(row)
     (head,) = [ln for ln in capsys.readouterr().out.splitlines() if "quiet" in ln][:1]
     assert head.rstrip().endswith("permanent · timeout")
+
+
+@pytest.mark.parametrize("argv", [["--target", "nosuch"], ["--target", "Claude"],
+                                  ["--target", "claude-desktop", "--project"]])
+def test_setup_refuses_a_target_before_recording_this_machine(tmp_path, monkeypatch, argv):
+    """`fleet setup --target nosuch` recorded this machine and said "✓ fleet is ready
+    here" before it said there is no such target."""
+    monkeypatch.chdir(tmp_path)
+    ran = []
+    monkeypatch.setattr(cli, "_first_run", lambda *a, **k: ran.append(a))
+    r = CliRunner().invoke(cli.app, ["setup", *argv])
+    assert r.exit_code == 2, r.output
+    assert not ran
+    assert "ready here" not in r.output
+
+
+@pytest.mark.parametrize("argv", [["add", "ssh x", "--kind", "weird"], ["add", "ssh x", "--self"],
+                                  ["add", "ssh x", "--name", ""], ["ls", "--tag", ""]])
+def test_a_refused_command_does_not_record_this_machine_first(tmp_path, monkeypatch, argv):
+    """`fleet add ... --kind weird` said "✓ fleet is ready here: recorded vm" and then
+    that weird is not a kind."""
+    ran = []
+    monkeypatch.setattr(cli, "_first_run", lambda *a, **k: ran.append(a))
+    r = CliRunner().invoke(cli.app, argv)
+    assert r.exit_code == 2, r.output
+    assert not ran

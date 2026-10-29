@@ -348,3 +348,24 @@ def test_two_agents_editing_at_once_keep_both_edits(tmp_path, monkeypatch):
     result = runner.invoke(app, ["edit", "box", "--tag", "mine", "--local"])
     assert result.exit_code == 0, result.output
     assert {"theirs", "mine"} <= set(inv.load(path)[0].tags)
+
+
+def test_local_refuses_a_note_folder_or_server_rather_than_writing_the_machine(tmp_path, monkeypatch):
+    """--local is for a machine you would rather not write to. A note, a folder or a
+    server has no place in this machine's list, so `edit --note ... --local` wrote the
+    machine's own file all the same and said ✓."""
+    from fleet import cli
+    from fleet.state import inventory as inv
+    from fleet.cli import app
+
+    runner, path = _cli_env(tmp_path, monkeypatch, _dev())
+    wrote = []
+    monkeypatch.setattr(cli, "_edit_machine_file", lambda *a, **k: wrote.append(a))
+    for extra in (["--note", "docs"], ["--path", "models=/data"], ["--endpoint", "mine=9000"],
+                  ["--note", "", "--tag", "x"]):
+        result = runner.invoke(app, ["edit", "box", *extra, "--local"])
+        assert result.exit_code == 2, result.output
+        assert "--local keeps only tags and cost" in result.output
+        assert extra[0] in result.output
+    assert not wrote
+    assert inv.load(path)[0].tags == _dev().tags

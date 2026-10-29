@@ -160,6 +160,21 @@ def _devices_from(raw: dict) -> list[Device]:
             label = d.get("name") if isinstance(d, dict) else None
             raise InventoryError(
                 f"device {label or f'#{i + 1}'} in the inventory is malformed: {exc}") from exc
+    # Two entries answering to one name -- typed by hand, or two lists merged in
+    # dotfiles -- loaded without a word, and every command took the first: `fleet ssh
+    # lab` reached the other machine, and `fleet rm lab` would have removed it.
+    ids: set[str] = set()
+    handles: set[str] = set()
+    for d in live(devices):
+        if d.id in ids:
+            raise InventoryError(f"machine {d.id} is in the inventory twice (one as "
+                                 f"{d.name}); remove one entry by hand")
+        ids.add(d.id)
+        for handle in dict.fromkeys(h for h in (d.name, d.alias) if h):
+            if handle in handles:
+                raise InventoryError(f"two machines in the inventory answer to {handle!r}; "
+                                     "rename one by hand, or remove it")
+            handles.add(handle)
     return devices
 
 
@@ -172,7 +187,27 @@ def _device_from(d) -> Device:
     for key in ("id", "name"):
         if not d.get(key):
             raise ValueError(f"it has no {key}; fix the entry by hand, or remove it")
+    # `name: 5` is YAML for a number: every view then failed in a traceback on an int
+    # where text was expected.
+    for key in ("id", "name", "alias"):
+        if isinstance(d.get(key), (int, float)) and not isinstance(d[key], bool):
+            d[key] = str(d[key])
+        elif d.get(key) is not None and not isinstance(d[key], str):
+            raise ValueError(f"{key} {d[key]!r} is not text")
     d["kind"] = Kind(d.get("kind", "permanent"))
+    # Anything else was taken for on_demand: the machine was never probed, and `ls`
+    # showed it as "?" with nothing said.
+    if d.get("probe_policy") not in (None, "auto", "on_demand", "never"):
+        raise ValueError(f"probe_policy {d['probe_policy']!r} is not auto, on_demand or "
+                         "never")
+    # `disk_paths: /data` -- no brackets -- was watched letter by letter: "disk path d is
+    # not there".
+    if isinstance(d.get("disk_paths"), str):
+        d["disk_paths"] = [d["disk_paths"]]
+    if d.get("disk_paths") is not None:
+        if not isinstance(d["disk_paths"], list):
+            raise ValueError(f"disk_paths {d['disk_paths']!r} is not a list of folders")
+        d["disk_paths"] = [str(p) for p in d["disk_paths"] if p not in (None, "")]
     # `tags: gpu` -- no brackets -- is the likeliest typo in a file whose docstring
     # promises it stays fixable in vim, and without this it loads as the string
     # "gpu", which every consumer then iterates into ["g", "p", "u"].
@@ -205,6 +240,11 @@ def _device_from(d) -> Device:
             if e.get(field) not in (None, "") and not str(e[field]).strip().isdigit():
                 raise ValueError(f"endpoint {e.get('target', '?')}: {field} "
                                  f"{e[field]!r} is not a number")
+        # Port 99999 reached the probe as ssh's "Bad port", and port 0 was read as 22 by
+        # `fleet ssh` but not by the probe.
+        if e.get("port") not in (None, "") and not 1 <= int(str(e["port"]).strip()) <= 65535:
+            raise ValueError(f"endpoint {e.get('target', '?')}: port {e['port']!r} is not a port "
+                             "(1 to 65535)")
     known = {f for f in Device.__slots__}
     return Device(**{k: v for k, v in d.items() if k in known})
 
