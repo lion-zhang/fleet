@@ -1227,9 +1227,28 @@ def cmd_edit(name: str = typer.Argument(None, help="defaults to this machine"),
         if not more:
             return
     if not result.changes:
-        if _emit({**(on_machine_doc or {}), "name": dev.name, "changes": []}, json_out):
+        # `--untag g4 --local` with g4 in the machine's own file said "nothing to
+        # change", and `ls` went on showing g4 with no word of where it came from.
+        theirs_tags: list[str] = []
+        if local and untag:
+            conn = store.connect()
+            _, snap = store.latest(conn, dev.id)
+            conn.close()
+            on_file = ((snap or {}).get("notes") or {}).get("tags") or []
+            theirs_tags = [t for t in (_tags(untag, untag=True) or []) if t in on_file]
+        if _emit({**(on_machine_doc or {}), "name": dev.name, "changes": [],
+                  **({"kept_on_machine": theirs_tags} if theirs_tags else {})}, json_out):
             return
-        console.print(f"[dim]· nothing to change on {dev.name}.[/dim]")
+        if theirs_tags:
+            console.print(f"[yellow]· {dev.name}'s own machine.yaml has "
+                          f"{escape(', '.join(theirs_tags))}, and --local cannot take it "
+                          "off[/yellow]  [dim]drop --local to remove it there[/dim]")
+        elif local and untag and not (tag or cost is not None or new_name or new_alias
+                                      or ssh_command or disk_path or clear_disk_paths):
+            console.print(f"[dim]· {dev.name} has no tag "
+                          f"{escape(', '.join(_tags(untag, untag=True) or []))} here.[/dim]")
+        else:
+            console.print(f"[dim]· nothing to change on {dev.name}.[/dim]")
         return
 
     def _apply(current):

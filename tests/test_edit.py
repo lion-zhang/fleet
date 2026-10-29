@@ -393,3 +393,22 @@ def test_a_cost_kept_here_says_when_the_machines_own_cost_wins(tmp_path, monkeyp
     snap = {"notes": {}}                               # nothing there: no word of it
     result = runner.invoke(app, ["edit", "box", "--cost", "0.7", "--local"])
     assert result.exit_code == 0 and "wins" not in result.output
+
+
+def test_a_local_untag_of_a_tag_the_machine_itself_holds_says_where_it_is(tmp_path, monkeypatch):
+    """`edit --untag g4 --local`, with g4 in the machine's own machine.yaml, said "nothing
+    to change", and `ls` went on showing g4 with no word of where it came from."""
+    import json
+
+    from fleet import cli
+    from fleet.cli import app
+
+    runner, _ = _cli_env(tmp_path, monkeypatch, _dev())
+    monkeypatch.setattr(cli.store, "latest", lambda conn, dev_id: ({}, {"notes": {"tags": ["g4"]}}))
+    result = runner.invoke(app, ["edit", "box", "--untag", "g4", "--local"])
+    assert result.exit_code == 0, result.output
+    assert "own machine.yaml has g4" in result.output and "drop --local" in result.output
+    result = runner.invoke(app, ["edit", "box", "--untag", "g4", "--local", "--json"])
+    assert json.loads(result.output)["kept_on_machine"] == ["g4"]
+    result = runner.invoke(app, ["edit", "box", "--untag", "zz", "--local"])
+    assert "has no tag zz here" in result.output
