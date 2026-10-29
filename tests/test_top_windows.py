@@ -48,4 +48,9 @@ def test_a_key_is_read_from_the_console(monkeypatch):
 
 def test_no_key_waits_out_the_interval(monkeypatch):
     _windows(monkeypatch, [])
-    assert cli._key_pressed(0.1) is None
+    assert cli._key_pressed(0.1) == ""
+
+
+def test_keys_typed_together_are_all_read(monkeypatch):
+    _windows(monkeypatch, ["r", "q"])
+    assert cli._key_pressed(1.0) == "rq"

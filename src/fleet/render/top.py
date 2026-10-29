@@ -300,7 +300,17 @@ def jobs_cell(row: dict[str, Any]) -> str:
     return "\n".join(lines) if lines else "[dim]-[/dim]"
 
 
-_TOP_FIT = ("disk_paths", "note_short", "jobs_short", "note", "disk_paths_short")
+_TOP_FIT = ("disk_paths", "note_short", "jobs_short", "note", "disk_paths_short",
+            "dot_in_name")
+
+
+def dotted(dot: str, name: str) -> str:
+    """The up-or-down dot written into the name, for a terminal too narrow for the table.
+
+    In a column of its own, with no header, it was the first thing Rich cut to make the
+    rest fit: on a phone-width terminal no row said whether its machine was up.
+    """
+    return f"{dot} " + name.replace("\n", "\n  ")
 
 
 def render_fleet(rows: list[dict[str, Any]], summary: dict[str, Any],
@@ -344,6 +354,7 @@ def _fleet_table(rows: list[dict[str, Any]], live_within: int, gave_up: set[str]
     # has more than one card or mount. A fleet of plain boxes renders as it always did.
     tall = any(device_lines(r) > 1 for r in rows)
     show_note = "note" not in gave_up
+    inline = "dot_in_name" in gave_up
     for col, kw in (("", {}), ("NAME", {"no_wrap": True}),
                     # "RTX PRO 6000 Blackwell Workstation Edition" is 41 characters of
                     # column; stripping the vendor prefix is not enough to stop a name
@@ -361,7 +372,7 @@ def _fleet_table(rows: list[dict[str, Any]], live_within: int, gave_up: set[str]
                     ("AGE", {"justify": "right", "no_wrap": True}),
                     ("NOTE", {"no_wrap": True, "overflow": "ellipsis",
                               "max_width": 20 if "note_short" in gave_up else 34})):
-        if col != "NOTE" or show_note:
+        if (col != "NOTE" or show_note) and (col or not inline):
             t.add_column(col, **kw)
     for row in rows:
         gpu, util, vram = gpu_cells(row)
@@ -369,9 +380,10 @@ def _fleet_table(rows: list[dict[str, Any]], live_within: int, gave_up: set[str]
         stale = staleness(row, live_within)
         note = escape((row.get("error", {}).get("detail", "") if row["status"] != "ok"
                        else (row["alerts"][0] if row.get("alerts") else "")) or "")
+        dot = _DOT.get(row["status"], "?")
         cells = [
-            _DOT.get(row["status"], "?"),
-            name_cell(row),
+            *(() if inline else (dot,)),
+            dotted(dot, name_cell(row)) if inline else name_cell(row),
             gpu,
             util,
             vram,
@@ -381,9 +393,10 @@ def _fleet_table(rows: list[dict[str, Any]], live_within: int, gave_up: set[str]
             jobs_cell(row),
             # "live" only for a machine that answered: one that just failed to was
             # probed a second ago too, and calling it live beside "no answer" was a
-            # contradiction in the one view meant to be watched.
+            # contradiction in the one view meant to be watched. Its last figures are
+            # still shown, so their age is too: "-" beside them hid that they were old.
             (f"[dim]{stale}[/dim]" if stale else "[green]live[/green]")
-            if row["status"] == "ok" else "[dim]-[/dim]",
+            if row["status"] == "ok" else f"[dim]{stale or '-'}[/dim]",
         ]
         t.add_row(*cells, *([note] if show_note else []))
     return t
@@ -480,7 +493,7 @@ def render_device(row: dict[str, Any], live_within: int = 10) -> Table:
 
 # What `fleet ls` gives up, in order, to fit a narrower terminal.
 _LS_FIT = ("disk_paths", "age", "price_if_none", "kind", "note_short", "price", "note",
-           "disk_paths_short")
+           "disk_paths_short", "dot_in_name")
 
 
 def render_ls(rows: list[dict[str, Any]], width: int | None = None) -> Table:
@@ -507,7 +520,7 @@ def _ls_table(rows: list[dict[str, Any]], gave_up: set[str]) -> Table:
     # Not with nothing in it: at 80 columns an empty NOTE cost the kind and the price.
     shown = {"KIND": "kind" not in gave_up, "AGE": "age" not in gave_up,
              "$/HR": "price" not in gave_up and (priced or "price_if_none" not in gave_up),
-             "NOTE": "note" not in gave_up and any(notes)}
+             "NOTE": "note" not in gave_up and any(notes), "": "dot_in_name" not in gave_up}
     columns = (("", {}), ("NAME", {"no_wrap": True}), ("KIND", {"no_wrap": True}),
                ("GPU", {"no_wrap": True, "overflow": "ellipsis", "max_width": 24}),
                ("VRAM FREE", {"justify": "left" if tall else "right", "no_wrap": True}),
@@ -526,7 +539,9 @@ def _ls_table(rows: list[dict[str, Any]], gave_up: set[str]) -> Table:
         gpu, vram = gpu_cells_compact(r)
         # "86400s" for a reading a day old: in the units `staleness` uses.
         age = staleness(r, -1) if r["telemetry_age_s"] is not None else "-"
-        cells = {"": DOT.get(r["status"], "?"), "NAME": name_cell(r), "KIND": escape(r["kind"]),
+        dot = DOT.get(r["status"], "?")
+        cells = {"": dot, "NAME": name_cell(r) if shown[""] else dotted(dot, name_cell(r)),
+                 "KIND": escape(r["kind"]),
                  "GPU": gpu, "VRAM FREE": vram, "CPU": str(r["cpu_cores"] or "-"),
                  "RAM FREE": f"{r['ram_free_gb']:.0f}G" if r["ram_free_gb"] is not None else "-",
                  "DISK FREE": disk_cell(r),

@@ -1790,24 +1790,28 @@ def cmd_top(name: str = typer.Argument(None, help="one device, instead of the wh
     detail = Detail.FULL
     live_within = max(int(interval * 3), 5)
 
-    def frame(keys: bool = True, probe: bool = True):
+    # No keys to press when they cannot be read: stdin is not this terminal.
+    def frame(keys: bool = sys.stdin.isatty(), probe: bool = True, live: bool = True):
         rows = (_live_tick(conn, devices, schedule, cfg, detail, named=bool(name)) if probe
                 else rows_mod.render(conn, devices, detail))
         if name:
             return render_device(rows[0], live_within)
         view = fleet_view(rows)
-        table = render_fleet(rows, view["summary"], live_within, width=console.width)
+        shown = _rows_that_fit(rows, console.height - 3) if live else rows
+        table = render_fleet(shown, view["summary"], live_within, width=console.width)
         s = view["summary"]
+        more = len(rows) - len(shown)
         return Group(table, Text.from_markup(
             f"\n[dim]{s['online']}/{s['total']} online · {s['gpus_free']} free GPU(s)"
             + (f" · {view_mod.usd(s['hourly_burn'])}/hr" if s["hourly_burn"] else "")
+            + (f" · {more} more machine(s) below: make the window taller" if more else "")
             + ("  ·  q quit   r refresh" if keys else "") + "[/dim]"))
 
     # A live loop in a pipe would spin forever, and an agent is exactly what would run
     # it that way. One frame is also the more useful thing for a script -- and no keys
     # to press: "q quit  r refresh" under a frame that had already ended.
     if not sys.stdout.isatty() or os.environ.get("TERM") == "dumb":
-        console.print(frame(keys=False))
+        console.print(frame(keys=False, live=False))
         if sys.stdout.isatty():
             # A terminal that cannot move the cursor: the live view drew nothing at all
             # and said nothing about why, so one frame and the reason instead.
@@ -1827,10 +1831,10 @@ def cmd_top(name: str = typer.Argument(None, help="one device, instead of the wh
                                 refresh_per_second=8) as live:
             while True:
                 # At least once a second, so a machine that just answered shows up.
-                key = _key_pressed(min(interval, 1.0))
-                if key in ("q", "Q", "\x03", "\x04"):
+                keys = _key_pressed(min(interval, 1.0))
+                if any(k in keys for k in ("q", "Q", "\x03", "\x04")):
                     break
-                if key in ("r", "R"):
+                if "r" in keys or "R" in keys:
                     probes.again()
                 # Another terminal or an agent may add, rename or remove a machine
                 # while this is open: the window went on showing a removed one online,
@@ -1865,6 +1869,22 @@ def _list_now(devices: list, seen, *, one: str | None = None):
     return fresh, now
 
 
+def _rows_that_fit(rows: list[dict], lines: int) -> list[dict]:
+    """The machines whose rows fit in `lines` of the window, below the table's header.
+
+    The window is cut at its bottom edge: on a terminal shorter than the fleet the rest
+    of it, and the line that counts what is online and says how to quit, were cut off
+    without a word.
+    """
+    shown, used = [], 1
+    for row in rows:
+        used += device_lines(row)
+        if used > lines and shown:
+            break
+        shown.append(row)
+    return shown
+
+
 @contextmanager
 def _raw_stdin():
     """cbreak mode so single keys arrive without Enter. Restored no matter how we
@@ -1887,11 +1907,18 @@ def _raw_stdin():
         termios.tcsetattr(fd, termios.TCSADRAIN, saved)
 
 
-def _key_pressed(timeout: float) -> str | None:
-    """Doubles as the frame delay: waits for a key, or returns when the interval is up."""
+def _key_pressed(timeout: float) -> str:
+    """Doubles as the frame delay: waits for a key, or returns when the interval is up.
+
+    Every key waiting, not one: `rq` typed together left the q in sys.stdin's buffer,
+    where select() never saw it, and `fleet top` did not quit. And with no terminal to
+    read keys from (`fleet top < /dev/null`) it still waits: returning at once spun the
+    loop at a whole core.
+    """
     import select as _select
     if not sys.stdin.isatty():
-        return None
+        time.sleep(timeout)
+        return ""
     if sys.platform == "win32":
         # select() takes only sockets on Windows; the console is polled instead.
         import msvcrt
@@ -1899,12 +1926,17 @@ def _key_pressed(timeout: float) -> str | None:
         deadline = time.monotonic() + timeout
         while time.monotonic() < deadline:
             if msvcrt.kbhit():
-                return msvcrt.getwch()
+                keys = ""
+                while msvcrt.kbhit():
+                    keys += msvcrt.getwch()
+                return keys
             time.sleep(0.05)
-        return None
-    if _select.select([sys.stdin], [], [], timeout)[0]:
-        return sys.stdin.read(1)
-    return None
+        return ""
+    fd = sys.stdin.fileno()
+    if _select.select([fd], [], [], timeout)[0]:
+        # Nothing at all from a ready terminal is one that hung up: quit, not spin.
+        return os.read(fd, 1024).decode(errors="replace") or "\x04"
+    return ""
 
 
 @app.command("rm")

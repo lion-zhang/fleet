@@ -11,6 +11,12 @@ not to hammer, and would redial a dead host hundreds of times an hour.
 
 from __future__ import annotations
 
+import os
+import sys
+
+import pytest
+
+from fleet import cli
 from fleet.models import Device, Kind
 from fleet.render.top import (EMPTY, FILLED, Schedule, cpu_pct, device_lines, disk_cell,
                        gpu_cells, gpu_cells_compact, gpu_pct, meter, name_cell,
@@ -522,3 +528,43 @@ def test_a_machine_added_while_the_view_is_open_is_probed(monkeypatch):
     finally:
         bg.stop()
 
+
+
+# ------------------------------------------------------------------ keys
+
+@pytest.mark.skipif(sys.platform == "win32", reason="a POSIX terminal")
+def test_keys_typed_together_are_all_read(monkeypatch):
+    # `rq` typed at once: the q stayed in sys.stdin's buffer, out of select()'s sight,
+    # and `fleet top` went on running.
+    import pty
+
+    master, slave = pty.openpty()
+    with os.fdopen(slave, "r") as term:
+        monkeypatch.setattr(sys, "stdin", term)
+        with cli._raw_stdin():
+            os.write(master, b"rq")
+            assert cli._key_pressed(1.0) == "rq"
+            assert cli._key_pressed(0.05) == ""
+    os.close(master)
+
+
+def test_with_no_terminal_to_read_top_still_waits(monkeypatch):
+    # `fleet top < /dev/null` spun at a whole core: nothing to wait on, so no wait.
+    class NoTty:
+        def isatty(self):
+            return False
+    waited = []
+    monkeypatch.setattr(sys, "stdin", NoTty())
+    monkeypatch.setattr(cli.time, "sleep", waited.append)
+    assert cli._key_pressed(0.7) == "" and waited == [0.7]
+
+
+def test_a_window_shorter_than_the_fleet_keeps_what_fits_and_says_so():
+    # The window was cut at its bottom edge: the rest of the fleet, and the line that
+    # counts what is online and says how to quit, went without a word.
+    one = {"gpus": [], "disks": []}
+    two = {"gpus": [{}, {}], "disks": []}
+    rows = [one, two, one, one, one]
+    assert cli._rows_that_fit(rows, 5) == [one, two, one]       # header + 1 + 2 + 1
+    assert cli._rows_that_fit(rows, 100) == rows
+    assert cli._rows_that_fit([two], 1) == [two]                # never an empty table
