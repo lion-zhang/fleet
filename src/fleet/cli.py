@@ -51,8 +51,8 @@ from .render.top import (Schedule, device_lines, disk_cell, gpu_cells_compact, r
                          render_ps, runtime as runtime_text, size as size_text, reading_age,
                          name_cell, render_device, render_fleet, render_ls, _gb as gb_text)
 from .render.view import Detail, auth_of, device_view, fleet_view, matches_tag
-from .ssh.cmd import (WINDOWS, build_argv, local_platform, local_shell_argv, remote_command,
-                      run as sshrun,
+from .ssh.cmd import (WINDOWS, build_argv, jump_args, local_platform, local_shell_argv,
+                      remote_command, run as sshrun,
                       parse_ssh_command, remote_platform, resolve_command)
 from .state import inventory as inv
 from .state import store
@@ -815,8 +815,8 @@ def cmd_add(ssh_command: str = typer.Argument(None, help='e.g. "ssh -p 58418 roo
         # real add said "restored".
         known = None if split else next((d for d in devices if d.id == dev.id), None)
         if known is not None:
-            have = {(e.target, e.user, e.port) for e in inv.endpoints_of(known)}
-            new_eps = [e for e in inv.endpoints_of(dev) if (e.target, e.user, e.port) not in have]
+            new_eps = [e for e in dev.endpoints
+                       if not any(inv.same_route(e, old) for old in known.endpoints)]
             action = ("restored" if known.deleted_at
                       else "endpoint_added" if new_eps else "unchanged")
             # What the real add would change on it, as that answers.
@@ -2027,12 +2027,13 @@ def cmd_ssh(ctx: typer.Context,
     # changed one is still refused -- an agent has no terminal to answer ssh's question.
     # Keys only, in batch: fleet never handles a password, and a prompt here reads as
     # though typing one would work for the agent that asked.
-    argv = ["ssh", "-o", "StrictHostKeyChecking=accept-new",
+    opts = ["-o", "StrictHostKeyChecking=accept-new",
             "-o", "PasswordAuthentication=no", "-o", "KbdInteractiveAuthentication=no",
             # A port that takes the connection and never speaks ssh held `fleet ssh`, and
             # the agent's run_on_machine, until its own limit, which then said the
             # command "may still be running" when it had never started.
             "-o", f"ConnectTimeout={int(load_config().get('connect_timeout_s') or 8)}"]
+    argv = ["ssh", *opts]
     if ep.port and ep.port != 22:
         argv += ["-p", str(ep.port)]
     if ep.identity:
@@ -2042,7 +2043,7 @@ def cmd_ssh(ctx: typer.Context,
         # pinned to the key, reached it fine.
         argv += ["-o", "IdentitiesOnly=yes", "-i", ep.identity]
     if ep.jump:
-        argv += ["-J", ep.jump]
+        argv += jump_args(ep.jump, opts)
     argv += ["--", f"{ep.user}@{ep.target}" if ep.user else ep.target]
     # click has already taken the separator. Any `--` left is the command's own, and
     # dropping it ran `fleet ssh box -- git log -- README.md` as `git log README.md`.

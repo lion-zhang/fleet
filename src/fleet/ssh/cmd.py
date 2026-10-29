@@ -8,6 +8,7 @@ built-in defaults -- it is the only source that cannot disagree with the real co
 
 from __future__ import annotations
 
+import hashlib
 import os
 import shlex
 import subprocess
@@ -67,6 +68,79 @@ class Endpoint:
             bits += ["-J", self.jump]
         bits.append(f"{self.user}@{self.target}" if self.user else self.target)
         return " ".join(bits)
+
+
+@dataclass(slots=True, frozen=True)
+class Hop:
+    """One jump host of `-J a,b`, as ssh dials it."""
+
+    user: str
+    host: str
+    port: int = 22
+
+    @property
+    def shown(self) -> str:
+        name = f"{self.user}@{self.host}" if self.user else self.host
+        return f"{name}:{self.port}" if self.port != 22 else name
+
+    def ssh_command(self) -> str:
+        bits = ["ssh"] + (["-p", str(self.port)] if self.port != 22 else [])
+        return " ".join(bits + [f"{self.user}@{self.host}" if self.user else self.host])
+
+    @property
+    def spec(self) -> str:
+        """As `-J` takes it."""
+        host = f"[{self.host}]" if ":" in self.host else self.host
+        name = f"{self.user}@{host}" if self.user else host
+        return f"{name}:{self.port}" if self.port != 22 else name
+
+
+def jump_hops(jump: str) -> list[Hop]:
+    """`-J` as hops: `[user@]host[:port]`, comma-separated, `ssh://` and `[v6]` allowed."""
+    hops = []
+    for word in filter(None, (w.strip() for w in (jump or "").split(","))):
+        word = word.removeprefix("ssh://")
+        user, _, rest = word.rpartition("@")
+        host, port = rest, 22
+        if rest.startswith("["):
+            host, _, tail = rest[1:].partition("]")
+            port = int(tail[1:]) if tail[1:].isdigit() else 22
+        elif rest.count(":") == 1 and rest.partition(":")[2].isdigit():
+            host, _, p = rest.partition(":")
+            port = int(p)
+        hops.append(Hop(user, host, port))
+    return hops
+
+
+def jump_args(jump: str, opts: list[str]) -> list[str]:
+    """`-J jump`, with `opts` given to the jump host's own ssh as well.
+
+    ssh hands its command-line options to the machine and none of them to a `-J` jump
+    host. So the jump host was asked about its host key with no terminal to answer -- a
+    jump host never dialled before failed every probe, `fleet add` and `fleet ssh` with
+    "Host key verification failed", which doctor read as the machine's key having
+    changed -- and was given no ConnectTimeout, so one that was down held the probe to
+    its deadline. The last hop is dialled here as ProxyJump would, with them; any hops
+    before it are still `-J` to that one. On Windows -J stays: its ssh does not run a
+    ProxyCommand through a POSIX shell, which is what the quoting here is for."""
+    hops = jump_hops(jump)
+    if not hops or IS_WINDOWS:
+        return ["-J", jump]
+    *before, last = hops
+    # Shorter than the machine's own: that one is spent waiting for the jump host to hand
+    # it a connection, and given the same, a jump host that was down read as a port that
+    # "answers, but never speaks ssh".
+    inner = ["ssh", *(f"ConnectTimeout={max(1, int(o.partition('=')[2]) - 2)}"
+                      if o.startswith("ConnectTimeout=") and o.partition("=")[2].isdigit()
+                      else o for o in opts)]
+    if before:
+        inner += ["-J", ",".join(h.spec for h in before)]
+    if last.port != 22:
+        inner += ["-p", str(last.port)]
+    if last.user:
+        inner += ["-l", last.user]
+    inner += ["-W", "[%h]:%p", "--", last.host]
+    return ["-o", "ProxyCommand=" + " ".join(shlex.quote(w) for w in inner)]
 
 
 def _quoted(word: str, *, windows: bool = os.name == "nt") -> str:
@@ -521,8 +595,7 @@ def classify_route(target: str) -> str:
 
 def build_argv(ep: Endpoint, *, connect_timeout: int = 8, multiplex: bool = True,
                remote: str = "sh -s", env: dict[str, str] | None = None) -> list[str]:
-    argv = [
-        "ssh",
+    opts = [
         "-o", "BatchMode=yes",
         "-o", f"ConnectTimeout={connect_timeout}",
         "-o", "ServerAliveInterval=5",
@@ -535,6 +608,7 @@ def build_argv(ep: Endpoint, *, connect_timeout: int = 8, multiplex: bool = True
         # unclassifiable). Keep full stderr and scrub known-benign lines in Python.
         "-o", "LogLevel=INFO",
     ]
+    argv = ["ssh", *opts]
     # Otherwise ssh answers exactly as it would for you: your ~/.ssh/config, your agent,
     # your keys, Tailscale SSH. Only a machine recorded with a key of its own (a rental's
     # `ssh -i ~/.ssh/vast`) is pinned to it -- IdentitiesOnly, so the five default
@@ -544,9 +618,15 @@ def build_argv(ep: Endpoint, *, connect_timeout: int = 8, multiplex: bool = True
     if ep.port and ep.port != 22:
         argv += ["-p", str(ep.port)]
     if ep.jump:
-        argv += ["-J", ep.jump]
+        argv += jump_args(ep.jump, opts)
     if multiplex and (cdir := control_dir()):
-        argv += ["-o", "ControlMaster=auto", "-o", f"ControlPath={cdir}/%C",
+        # %C is the user, host and port alone: a master opened by one route answered for
+        # another to the same address, so `fleet add` through a jump host that was down,
+        # or with a key the machine refuses, said "ok" on the first route's connection.
+        route = (hashlib.sha1(f"{ep.jump}\0{ep.identity}".encode()).hexdigest()[:8]
+                 if ep.jump or ep.identity else "")
+        argv += ["-o", "ControlMaster=auto",
+                 "-o", f"ControlPath={cdir}/%C{'-' + route if route else ''}",
                  "-o", "ControlPersist=120"]
     argv += ["--", f"{ep.user}@{ep.target}" if ep.user else ep.target]
     # Through `env`, which every login shell runs: `KEY=value cmd` is sh's syntax, and

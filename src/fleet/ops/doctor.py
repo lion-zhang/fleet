@@ -11,11 +11,12 @@ from __future__ import annotations
 
 import re
 import subprocess
-from dataclasses import asdict, dataclass, field
+from dataclasses import asdict, dataclass, field, replace
 
 from ..models import Device, Kind, ProbeResult, Status
 from ..ssh import keys
-from ..ssh.cmd import Endpoint, build_argv, run as sshrun
+from ..probe.runner import JUMP_DETAIL
+from ..ssh.cmd import Endpoint, build_argv, jump_hops, run as sshrun
 from ..state import inventory as inv
 
 _PROVIDERS = {
@@ -137,11 +138,29 @@ def advise(dev: Device, status: str, detail: str, *, snap: dict | None = None,
         v.fix = [f"if you know why it changed:  ssh-keygen -R {ep.address}" if ep.port in (22, None)
                  else f"if you know why it changed:  ssh-keygen -R '[{ep.address}]:{ep.port}'"]
         return v
+    if ep.jump and detail.startswith(JUMP_DETAIL):
+        # Said of the machine, this sent people to enable sshd on it, to put the key on
+        # it, or to look for it on another address -- when nothing ever reached it.
+        hop = next((h for h in jump_hops(ep.jump) if f" {h.shown} " in detail),
+                   None) or jump_hops(ep.jump)[0]
+        v.why = f"{detail[:200]}, so {ep.target} behind it was never reached"
+        v.fix = [f"check the jump host on its own:  {hop.ssh_command()} -v"]
+        if "did not let us in" in detail:
+            v.fix.append(f"-i is offered to {ep.target} only: for the jump host, put "
+                         f"IdentityFile under Host {hop.host} in ~/.ssh/config, or "
+                         "ssh-add the key")
+        v.fix.append("if the jump host moved:  "
+                     + readdress(replace(ep, jump="user@jump-host").ssh_command()))
+        return v
     if status == Status.TIMEOUT.value and "never speaks ssh" in text:
         v.why = ("something takes the connection on that port, but never speaks ssh: "
                  "another program holds the port, or the ssh server there is stuck")
         v.fix = [f"check the port:  {ep.ssh_command()} -v",
                  f"if it moved:  {readdress('ssh -p PORT user@host')}"]
+        if ep.jump:
+            # Which one never spoke ssh, ssh does not say: the jump host is checked alone.
+            v.fix.insert(1, "check the jump host on its own:  "
+                            f"{jump_hops(ep.jump)[0].ssh_command()} -v")
         if dev.kind is Kind.RENTAL:
             v.fix.insert(0, "a rental's port given to another instance does this; check "
                             "the provider's dashboard for its current port")
@@ -150,6 +169,11 @@ def advise(dev: Device, status: str, detail: str, *, snap: dict | None = None,
         # "it is off, asleep" sent people to check a machine whose name was mistyped.
         v.why = (f"no machine goes by the name {ep.address}: it is misspelt, or only a "
                  "VPN's or tailnet's own DNS knows it")
+        if ep.jump:
+            # Looked up by the jump host, not here: this machine's DNS is not the question.
+            v.why = (f"the jump host {ep.jump} knows no machine by the name {ep.address}: "
+                     "it is misspelt, or a name only DNS on this side knows -- give the "
+                     "address the jump host reaches it at")
         v.fix = ["check the spelling; on a VPN or tailnet, that this machine is connected",
                  f"if it moved:  {readdress('ssh user@new-address')}"]
         return v

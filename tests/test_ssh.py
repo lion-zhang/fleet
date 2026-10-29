@@ -15,6 +15,7 @@ import pytest
 from typer.testing import CliRunner
 
 from fleet import cli
+from fleet.ssh import cmd as sshcmd
 from fleet.state import inventory as inv
 from fleet.state import store
 from fleet.models import Device, Kind
@@ -97,7 +98,13 @@ def test_a_non_default_port_and_a_jump_host_are_carried(tmp_path, monkeypatch):
     CliRunner().invoke(cli.app, ["ssh", "vast2"])
     argv = seen[-1][1]
     assert argv[argv.index("-p") + 1] == "58418"
-    assert argv[argv.index("-J") + 1] == "bastion"
+    if sshcmd.IS_WINDOWS:
+        assert argv[argv.index("-J") + 1] == "bastion"
+    else:
+        # The jump host dialled with the same options, not asked a question it has no
+        # terminal to answer.
+        proxy = next(a for a in argv if a.startswith("ProxyCommand="))
+        assert proxy.endswith("-- bastion") and "StrictHostKeyChecking=accept-new" in proxy
 
 
 def test_a_host_that_rejected_our_key_says_how_to_fix_it(box, monkeypatch):

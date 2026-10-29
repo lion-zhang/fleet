@@ -13,6 +13,7 @@ import concurrent.futures
 import os
 import signal
 import base64
+import re
 import shlex
 import subprocess
 import time
@@ -20,7 +21,7 @@ from contextlib import suppress
 from pathlib import Path
 
 from ..models import ProbeResult, Snapshot, Status
-from ..ssh.cmd import (IS_WINDOWS, WINDOWS, Endpoint, build_argv,
+from ..ssh.cmd import (IS_WINDOWS, WINDOWS, Endpoint, build_argv, jump_hops,
                       local_platform, local_shell_argv)
 from .parse import MissingSentinel, parse_payload
 
@@ -81,6 +82,10 @@ _BENIGN_STDERR = (
     "debug1:",
     "Authenticated to",
     "Connection to ",
+    # The far end of a jump host's stdio forward, after any failure through it. It
+    # matched "Connection closed by" ahead of what actually went wrong: a jump host whose
+    # name did not resolve, or a machine its jump host had never heard of, read "closed".
+    "Connection closed by UNKNOWN port",
 )
 
 
@@ -101,6 +106,37 @@ def classify_stderr(stderr: str) -> tuple[Status, str]:
         # banner exchange, which is what a recycled rental port looks like.
         return Status.CLOSED, "peer closed the connection without a diagnostic"
     return Status.PROBE_ERROR, last
+
+
+JUMP_DETAIL = "the jump host"
+
+
+def through_jump(ep: Endpoint, stderr: str, detail: str) -> str:
+    """The detail of a failure that happened at a jump host, said of the jump host.
+
+    ssh reports a jump host's failures in the same words as the machine's, so a jump
+    host whose name did not resolve, that refused, or that turned the key away read as
+    the machine itself being down or saying no -- and doctor sent people to enable sshd
+    on a machine nothing had reached. The jump host's own name in what ssh printed is
+    what tells them apart: a failure behind it comes back as `channel 0: open failed`."""
+    if not ep.jump or "channel 0: open failed" in stderr:
+        return detail
+    cleaned = scrub_stderr(stderr)
+    for hop in jump_hops(ep.jump):
+        if hop.host == ep.target and hop.port == ep.port and hop.user == ep.user:
+            continue                        # one name for both: nothing tells them apart
+        h = re.escape(hop.host)
+        if re.search(rf"Could not resolve hostname {h}:", cleaned):
+            return f"{JUMP_DETAIL} {hop.shown} has no address: DNS lookup failed"
+        if m := re.search(rf"connect to host {h} port {hop.port}: (.+)", cleaned):
+            return f"{JUMP_DETAIL} {hop.shown} did not answer: {m.group(1).strip()}"
+        for m in re.finditer(rf"(\S+)@{h}: Permission denied", cleaned):
+            if hop.host != ep.target or (hop.user and m.group(1) == hop.user != ep.user):
+                return f"{JUMP_DETAIL} {hop.shown} did not let us in: credentials rejected"
+    if "timed out during banner exchange" in cleaned:
+        hops = jump_hops(ep.jump)
+        return f"{detail}: the jump host {hops[0].shown}, or the machine behind it"
+    return detail
 
 
 def _kill(proc: subprocess.Popen) -> None:
@@ -292,6 +328,17 @@ def run_probe(ep: Endpoint, *, mode: str = "full", timeout: float = 20.0,
                           refresh=refresh)
     if res.ok:
         return res
+    if multiplex and ep.jump and not res.stderr_tail and res.error_class in (
+            Status.CLOSED.value, Status.TIMEOUT.value) and "within" not in res.error_detail:
+        # A master connection hands its jump host's ssh no stderr to write to, so every
+        # failure through a jump host -- its name, its port, its key, or the machine
+        # behind it refusing -- came back as one bare "Connection closed", and `fleet
+        # add` said to enable sshd. Asked once more without one, ssh says which it was.
+        res = _run_probe_once(ep, mode=mode, timeout=timeout,
+                              connect_timeout=connect_timeout, multiplex=False,
+                              disk_paths=disk_paths, light=light, refresh=refresh)
+        if res.ok:
+            return res
     again = {"windows": True} if _looks_like_cmd_exe(res) else \
         {"in_sh": True} if _looks_like_another_shell(res) else None
     if again is None:
@@ -387,6 +434,7 @@ def _run_probe_once(ep: Endpoint, *, mode: str = "full", timeout: float = 20.0,
     # warnings to stderr, and merging them would corrupt the line protocol.
     if rc != 0 and not stdout.strip():
         status, detail = classify_stderr(stderr)
+        detail = through_jump(ep, stderr, detail)
         return ProbeResult(status=status, error_class=status.value, error_detail=detail,
                            endpoint_used=ep.name, latency_ms=elapsed,
                            stderr_tail=scrub_stderr(stderr)[-400:])
