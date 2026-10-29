@@ -34,6 +34,17 @@ def test_a_new_ssh_command_replaces_the_primary_address():
     assert dev.endpoints[0]["port"] == 2222
 
 
+def test_pointing_at_an_address_it_already_has_leaves_it_there_once():
+    """`fleet add` at a second address, then `edit --ssh` to that address: it was kept as
+    well, and the machine had the same address twice, dialled twice when it was down."""
+    dev = _dev(endpoints=[
+        {"target": "1.2.3.4", "user": "root", "port": 22, "name": "default", "preference": 10},
+        {"target": "5.6.7.8", "user": "root", "port": 2222, "name": "default", "preference": 10}])
+    out = apply_edits(dev, endpoint=_ep())
+    assert [(e["target"], e["port"]) for e in dev.endpoints] == [("5.6.7.8", 2222)]
+    assert out.changes[0] == "address root@1.2.3.4:22 -> root@5.6.7.8:2222"
+
+
 def test_replacing_an_address_keeps_the_endpoint_name_and_preference():
     """The endpoint is the same route to the same box; only where it points changed."""
     dev = _dev(endpoints=[{"target": "1.2.3.4", "user": "root", "port": 22,
