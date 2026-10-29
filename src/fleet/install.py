@@ -56,8 +56,17 @@ fi
 
 if [ "$MODE" = git ]; then
   if ! command -v uv >/dev/null 2>&1; then
-    curl -LsSf https://astral.sh/uv/install.sh | sh >/dev/null 2>&1 || exit 90
+    # Fetched, then run: `curl ... | sh` is as good as its last command, and sh given
+    # nothing succeeds, so a device with no internet (or no curl) went on to fail at
+    # "uv: not found", exit 127, never with the exit that says why.
+    uv_sh=$(mktemp 2>/dev/null || echo "/tmp/fleet-uv-install.$$")
+    if ! curl -LsSf https://astral.sh/uv/install.sh -o "$uv_sh" 2>/dev/null \
+        || ! sh "$uv_sh" >/dev/null 2>&1; then
+      rm -f "$uv_sh"; exit 90
+    fi
+    rm -f "$uv_sh"
     if [ -f "$HOME/.local/bin/env" ]; then . "$HOME/.local/bin/env"; fi
+    command -v uv >/dev/null 2>&1 || exit 90
   fi
   if [ -d "$DIR/.git" ]; then
     # The repo we were given, not the one this clone happened to be made with. Without

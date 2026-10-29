@@ -1498,7 +1498,7 @@ def cmd_install(name: str = typer.Argument(None,
         err.print(f"[red]Install failed[/red] (exit {code})\n{escape(output.strip()[-600:])}")
         if code == 90:
             err.print("  [dim]the device could not fetch uv -- it may have no outbound "
-                      "internet.[/dim]")
+                      "internet, or no curl.[/dim]")
         raise typer.Exit(2)
 
     what = output.strip().splitlines()[-1] if output.strip() else "installed"
