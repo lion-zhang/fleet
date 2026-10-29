@@ -102,8 +102,21 @@ if [ "$is_container" = "0" ] && [ -r /proc/1/cgroup ]; then
   grep -qE '(docker|lxc|kubepods|containerd)' /proc/1/cgroup 2>/dev/null && is_container=1
 fi
 emit host.is_container "$is_container"
-emit host.vast_label "$( [ -r /etc/vast_containerlabel ] && cat /etc/vast_containerlabel 2>/dev/null | clean )"
-emit host.runpod_id "$(printf '%s' "${RUNPOD_POD_ID:-}" | clean)"
+# vast.ai's own .bashrc takes the label from ~/.vast_containerlabel, and the instance's
+# VAST_CONTAINERLABEL is in its first process's environment, not in an ssh session's.
+vl=${VAST_CONTAINERLABEL:-}
+for f in /etc/vast_containerlabel "$HOME/.vast_containerlabel"; do
+  [ -z "$vl" ] && [ -r "$f" ] && vl=$(head -1 "$f" 2>/dev/null)
+done
+emit host.vast_label "$(printf '%s' "$vl" | clean)"
+# A pod's RUNPOD_* reach only its first process. RunPod's start script writes them to
+# /etc/rp_environment for interactive shells; the probe's shell is not one, so a pod
+# reached by its own ip and port was never known as a rental.
+rp_id=${RUNPOD_POD_ID:-}
+[ -z "$rp_id" ] && [ -r /etc/rp_environment ] && rp_id=$(sed -n \
+  's/^[[:space:]]*\(export[[:space:]]\{1,\}\)\{0,1\}RUNPOD_POD_ID=["'"'"']\{0,1\}\([^"'"'"']*\).*/\2/p' \
+  /etc/rp_environment 2>/dev/null | head -1)
+emit host.runpod_id "$(printf '%s' "$rp_id" | clean)"
 emit host.autodl "$( [ -d /root/autodl-tmp ] && echo 1 || echo 0 )"
 emit host.slurm "$( have sinfo && echo 1 || echo 0 )"
 
