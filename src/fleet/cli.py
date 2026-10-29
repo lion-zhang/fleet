@@ -2395,8 +2395,31 @@ def cmd_doctor(name: str = typer.Argument(None, help="one machine; all that are 
             _emit({"machines": [v.to_dict() for v in found]}, True)
             return
         if not targets:
-            console.print("[green]✓[/green] every machine fleet watches answered its last "
-                          "probe [dim](fleet doctor NAME looks at one now)[/dim]")
+            remote = [d for d in devices if d.endpoints]
+            if not remote:
+                # With nothing added, "every machine answered" was said of none.
+                console.print("[dim]· fleet watches no machine but this one yet: "
+                              "fleet add \"ssh user@host\" adds one[/dim]")
+                return
+            conn = store.connect()
+            try:
+                unread = sorted(d.name for d in remote
+                                if not (store.latest(conn, d.id)[0] or {}).get("status"))
+            finally:
+                conn.close()
+            if len(unread) == len(remote):
+                console.print(f"[dim]· none of the {len(remote)} machines fleet watches "
+                              "has been probed yet: fleet doctor NAME looks at one now[/dim]")
+                return
+            console.print("[green]✓[/green] every machine fleet "
+                          + ("has probed" if unread else "watches")
+                          + " answered its last probe [dim](fleet doctor NAME looks at one "
+                          "now)[/dim]")
+            if unread:
+                # One never probed (on demand, or a shared host) had not answered anything.
+                console.print(f"  [dim]not probed yet: {escape(', '.join(unread[:6]))}"
+                              f"{f' and {len(unread) - 6} more' if len(unread) > 6 else ''}"
+                              "[/dim]")
             return
         _print_verdicts(found)
     finally:
