@@ -130,6 +130,12 @@ def load_config() -> Config:
                 # machine then showed "no response within 0s", with nothing said.
                 if isinstance(data[key], bool):
                     raise TypeError
+                if isinstance(data[key], str):
+                    # YAML reads `1e3` (no dot) as text: "'1e3' is not a number".
+                    try:
+                        data[key] = float(data[key])
+                    except ValueError:
+                        pass
                 value = int(data[key])
                 if value < least or value > _MOST.get(key, value):
                     raise ValueError

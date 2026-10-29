@@ -110,6 +110,25 @@ def test_a_linked_config_is_written_through_the_link(tmp_path):
     assert json.loads(real.read_text())["mcpServers"]["fleet"]
 
 
+@pytest.mark.skipif(not hasattr(os, "symlink") or os.name == "nt",
+                    reason="symlinks need privileges on Windows")
+def test_a_list_of_machines_shared_with_dotfiles_is_written_through_the_link(tmp_path):
+    """The guides say to share machines.yaml with your dotfiles: the first edit renamed a
+    plain file over the link, and the repo never saw that change or any after it."""
+    from fleet.models import Device
+    from fleet.state import inventory as inv
+
+    real = tmp_path / "dotfiles" / "machines.yaml"
+    real.parent.mkdir()
+    inv.save([Device(id="id:a", name="a")], real)
+    path = tmp_path / "config" / "machines.yaml"
+    path.parent.mkdir()
+    path.symlink_to(real)
+    inv.update(lambda ds: (ds + [Device(id="id:b", name="b")], None), path)
+    assert path.is_symlink()
+    assert [d.name for d in inv.load(real)] == ["a", "b"]
+
+
 # ------------------------------------------------------------------ marked regions
 def test_a_begin_marker_without_its_end_loses_none_of_the_user_s_text():
     """The region ran from the stray BEGIN to the next END, taking what lay between."""

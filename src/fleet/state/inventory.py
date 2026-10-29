@@ -24,7 +24,7 @@ from .writes import QueueTimeout, atomic_write, turn
 
 from ..config import INVENTORY_PATH, ensure_dirs
 from ..models import Device, Kind
-from ..ssh.cmd import Endpoint, is_default_identity, route_of
+from ..ssh.cmd import Endpoint, is_default_identity, route_of, same_key
 
 SCHEMA_VERSION = 1
 
@@ -417,7 +417,7 @@ def same_route(new: dict, old: dict) -> bool:
         return (e.get("target"), e.get("user") or "", int(e.get("port", 22) or 22),
                 e.get("jump") or "")
     return addr(new) == addr(old) and (
-        not new.get("identity") or new.get("identity") == old.get("identity"))
+        not new.get("identity") or same_key(new["identity"], old.get("identity") or ""))
 
 
 def upsert(devices: list[Device], new: Device) -> tuple[list[Device], str]:

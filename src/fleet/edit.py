@@ -15,7 +15,7 @@ from dataclasses import dataclass, field
 
 from .state.inventory import touch
 from .models import Device
-from .ssh.cmd import Endpoint, classify_route
+from .ssh.cmd import Endpoint, classify_route, recorded_identity
 
 
 @dataclass(slots=True)
@@ -48,7 +48,7 @@ def _replace_primary(dev: Device, ep: Endpoint, out: Edits) -> None:
     """
     record: dict = {"target": ep.target, "user": ep.user, "port": ep.port}
     if ep.identity:
-        record["identity"] = ep.identity
+        record["identity"] = recorded_identity(ep.identity)
     if ep.jump:
         record["jump"] = ep.jump
     if ep.host:

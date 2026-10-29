@@ -129,5 +129,9 @@ def _left_by_0_5(me) -> int:
     from . import identity
 
     mine = mine or identity.local_device_id()
-    return sum(1 for d in devices if isinstance(d, dict) and d.get("id") != mine
-               and d.get("role") != "center")
+    devices = [d for d in devices if isinstance(d, dict)]
+    if mine and any(d.get("id") == mine for d in devices):
+        # On a member the center is another machine: leaving it out too said one fewer.
+        return sum(1 for d in devices if d.get("id") != mine)
+    # This machine is not found by id: on the center, it is the one marked center.
+    return sum(1 for d in devices if d.get("role") != "center")

@@ -18,7 +18,7 @@ alone. `fleet paths` prints where the main files are on this machine.
 
 | File | What it is |
 |---|---|
-| `machines.yaml` | the machines you added on this machine: names, ssh commands, and the tags and cost you set with `--local`. Written only here; share it with your dotfiles if you want the same list elsewhere. No keys or passwords are in it. |
+| `machines.yaml` | the machines you added on this machine: names, ssh commands, and the tags and cost you set with `--local`. Written only here; share it with your dotfiles if you want the same list elsewhere (a key under your home, `-i ~/.ssh/work`, is kept as `~/...`, so it is found on a machine whose home is elsewhere). No keys or passwords are in it. |
 | `config.yaml` | the settings below. Optional; fleet never creates it. |
 | `discover-hidden.txt` | names `fleet ls --discover --hide` stopped offering, one per line |
 | `device-id` | only on a machine cloned from another's image: the id fleet gave it, so the two are told apart |
