@@ -1318,8 +1318,16 @@ def cmd_edit(name: str = typer.Argument(None, help="defaults to this machine"),
     theirs = None
     if local and cost and any(c.startswith("cost ") for c in result.changes):
         conn = store.connect()
-        _, snap = store.latest(conn, dev.id)
+        state, snap = store.latest(conn, dev.id)
         conn.close()
+        if state and not state.get("last_probe_at"):
+            # fleet changed the machine's own file since that reading (`fleet edit NAME
+            # --cost 1` a moment ago): it knew nothing of that cost, and "cost none ->
+            # $3/hr" came back while `ls` showed $1. It answered then, so ask it again.
+            _rows([dev.name], refresh=False, rescan=False, detail=Detail.COMPACT)
+            conn = store.connect()
+            _, snap = store.latest(conn, dev.id)
+            conn.close()
         theirs = (((snap or {}).get("notes") or {}).get("cost") or {}).get("usd_per_hour")
     if _emit({**(on_machine_doc or {}), "name": dev.name, "id": dev.id,
               "changes": result.changes,
