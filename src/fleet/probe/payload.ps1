@@ -95,10 +95,13 @@ for ($i = 0; $i -lt 2; $i++) {
         foreach ($v in $vals) {
             $v = ($v -replace '\s+#.*$', '').Trim().Trim('"', "'")
             if ($v -eq '~') { $v = $HOME } elseif ($v.StartsWith('~/') -or $v.StartsWith('~\')) { $v = Join-Path $HOME $v.Substring(2) }
-            if ($kind -and $v) { $storePaths.Add(@($kind, $v)) }
+            if ($kind -and $v) { $storePaths.Add(@($kind, $v, $i)) }
         }
     }
 }
+# The user's file over the machine's, kind by kind, as the parser lays them (see payload.sh).
+$userKinds = @($storePaths | Where-Object { $_[2] -eq 1 } | ForEach-Object { $_[0] })
+$storePaths = @($storePaths | Where-Object { $_[2] -eq 1 -or $userKinds -notcontains $_[0] })
 
 Write-Output "#DISK mount|total_kb|used_kb|avail_kb|rw"
 if ($env:FLEET_DISK_PATHS) {

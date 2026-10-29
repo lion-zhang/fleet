@@ -408,3 +408,23 @@ def test_a_network_share_that_hangs_does_not_hold_the_probe(tmp_path, bin_):
     snap = parse_payload(out)
     assert took < usual + 10
     assert any(d.mount == "/" for d in snap.disks)
+
+
+@linux
+def test_the_users_folders_replace_the_machines_kind_by_kind(tmp_path):
+    """The docs and the parser lay the user's machine.yaml over /etc/fleet's, kind by kind,
+    but the probe sized both: /etc's models folder was listed, and alerted on as missing,
+    beside the user's models folder that replaced it."""
+    sysfile = tmp_path / "etc-machine.yaml"
+    sysfile.write_text("paths:\n  models: /sys/models\n  scratch: /sys/scratch\n")
+    home = tmp_path / "home"
+    (home / ".config" / "fleet").mkdir(parents=True)
+    (home / ".config" / "fleet" / "machine.yaml").write_text("paths:\n  models: [/u/m1, /u/m2]\n")
+    script = tmp_path / "payload.sh"
+    script.write_text(PAYLOAD.read_text().replace("/etc/fleet/machine.yaml", str(sysfile)))
+    out = subprocess.run(["sh", str(script)], capture_output=True, text=True, timeout=60,
+                         env={"PATH": os.environ["PATH"], "HOME": str(home)}).stdout
+    snap = parse_payload(out)
+    assert snap.notes["paths"] == {"models": ["/u/m1", "/u/m2"], "scratch": ["/sys/scratch"]}
+    assert sorted((s.kind, s.path) for s in snap.storage) == [
+        ("models", "/u/m1"), ("models", "/u/m2"), ("scratch", "/sys/scratch")]

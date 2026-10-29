@@ -1051,3 +1051,22 @@ def test_tags_written_as_one_line_are_kept_when_a_tag_is_added():
     """`tags: gpu, training` reads as two tags, and `fleet edit --tag x` replaced both."""
     after = notes.edit("tags: gpu, training\n", tags_add=["x"])
     assert notes.parse(after)["tags"] == ["gpu", "training", "x"]
+
+
+@pytest.mark.skipif(PWSH is None, reason="needs PowerShell")
+def test_the_windows_probe_lays_the_users_folders_over_the_machines(tmp_path):
+    """As on POSIX: a kind the user's file names replaces the machine's."""
+    local, data = tmp_path / "local", tmp_path / "data"
+    (local / "fleet").mkdir(parents=True)
+    (data / "fleet").mkdir(parents=True)
+    (data / "fleet" / "machine.yaml").write_text("paths:\n  models: /sys/m\n  scratch: /sys/s\n")
+    (local / "fleet" / "machine.yaml").write_text("paths:\n  models: /u/m\n")
+    script = tmp_path / "probe.ps1"
+    script.write_text((REPO / "src" / "fleet" / "probe" / "payload.ps1").read_text())
+    p = subprocess.run([PWSH, "-NoProfile", "-File", str(script)], text=True,
+                       capture_output=True, timeout=120, stdin=subprocess.DEVNULL,
+                       env={**os.environ, "TERM": "dumb", "LOCALAPPDATA": str(local),
+                            "ProgramData": str(data)})
+    snap = parse_payload(p.stdout)
+    assert sorted((s.kind, s.path) for s in snap.storage) == [("models", "/u/m"),
+                                                              ("scratch", "/sys/s")]
