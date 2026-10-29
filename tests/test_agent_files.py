@@ -174,3 +174,17 @@ def test_a_copy_with_windows_line_ends_is_current(tmp_path):
     assert docs.stale_targets(tmp_path, "fleet", project=True) == []
     assert [c.action for c in docs.install(tmp_path, ["codex"], "fleet", project=True)] \
         == ["unchanged"]
+
+
+def test_a_file_with_windows_line_ends_keeps_them(tmp_path):
+    """Read with "\n" ends, an AGENTS.md with Windows ones went back with "\n": every one
+    of the user's own lines changed by `fleet setup`, and again by `--uninstall`."""
+    agents = tmp_path / "AGENTS.md"
+    agents.write_bytes(b"# Mine\r\n\r\nUse tabs.\r\n")
+    assert [c.action for c in docs.install(tmp_path, ["codex"], "fleet", project=True)] \
+        == ["updated"]
+    raw = agents.read_bytes()
+    assert raw.startswith(b"# Mine\r\n\r\nUse tabs.\r\n") and b"BEGIN fleet" in raw
+    assert b"\n" not in raw.replace(b"\r\n", b"")
+    docs.uninstall(tmp_path, ["codex"], project=True)
+    assert agents.read_bytes() == b"# Mine\r\n\r\nUse tabs.\r\n"
