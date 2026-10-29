@@ -178,8 +178,8 @@ def facts(dev: Device, snap: dict | None, state: dict | None) -> list[str]:
 def _biggest_volume(snap: dict) -> float:
     """TiB of the largest writable volume. Capacity, not free space -- free space flaps.
 
-    used+avail, never total_kb: filesystems reserve blocks nobody can write, and per
-    _disk_view above macOS differs by tens of percent. Max rather than sum, because
+    used+avail, never total_kb: filesystems reserve blocks nobody can write (see
+    _disk_view below). Max rather than sum, because
     bind mounts and container overlays would be counted twice.
     """
     sizes = [(d.get("used_kb", 0) + d.get("avail_kb", 0)) / 1073741824
@@ -261,7 +261,8 @@ def _disk_view(d: dict) -> dict:
 
     Usage is computed against used+avail, not total: filesystems reserve blocks the
     caller can never write, and dividing by total quietly understates how full a disk
-    is. macOS is the extreme case, where the two differ by tens of percent.
+    is. On a Mac the probe reports as used what is not free: each APFS volume there
+    counts only its own use against the whole disk's size.
     """
     used, avail = d.get("used_kb", 0), d.get("avail_kb", 0)
     writable = used + avail
