@@ -12,6 +12,8 @@ most -- `fleet ssh x`, `fleet rm x` -- so it is refused.
 
 from __future__ import annotations
 
+import json
+
 import pytest
 from typer.testing import CliRunner
 
@@ -463,6 +465,17 @@ def test_a_prefix_that_fits_several_machines_says_which(tmp_path, monkeypatch):
         Device(id="id:2", name="cloud-2", kind=Kind.PERMANENT)])
     r = runner.invoke(cli.app, ["ssh", "cloud", "--", "true"])
     assert r.exit_code == 1 and "did you mean: cloud-1, cloud-2" in r.output, r.output
+    # `ls`, `ps`, `models` and `show` said only "no machine named 'cloud'".
+    for cmd in ("ls", "ps", "models", "show"):
+        r = runner.invoke(cli.app, [cmd, "cloud"])
+        assert r.exit_code == 1 and "did you mean: cloud-1, cloud-2" in r.output, (cmd, r.output)
+    r = runner.invoke(cli.app, ["show", "cloud", "--json"])
+    assert r.exit_code == 1
+    assert json.loads(r.stdout)["did_you_mean"] == {"cloud": ["cloud-1", "cloud-2"]}
+    from fleet.ops import doctor
+    monkeypatch.setattr(doctor, "diagnose", lambda dev, **k: doctor.advise(dev, "unreachable", ""))
+    r = runner.invoke(cli.app, ["doctor", "cloud"])
+    assert "did you mean: cloud-1, cloud-2" in r.output, r.output
 
 
 def test_a_field_that_does_not_exist_is_said_to_not_exist(tmp_path, monkeypatch):

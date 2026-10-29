@@ -156,13 +156,7 @@ def cmd_ls(names: list[str] = typer.Argument(None, help="only these devices"),
         err.print("[dim]· --all applies to --discover[/dim]")
     # A name that matches nothing is said, and fails: `fleet ls TYPO --json` answered an
     # empty list and exit 0, which an agent reads as "nothing wrong, nothing there".
-    unknown = [n for n in (names or []) if inv.find(inv.load(), n) is None]
-    if unknown:
-        if not _emit({"ok": False, "error": f"no machine named {', '.join(unknown)}",
-                      "unknown": unknown}, json_out):
-            err.print(f"[red]No machine named {', '.join(repr(n) for n in unknown)}[/red] "
-                      "[dim]-- `fleet ls` lists them all[/dim]")
-        raise typer.Exit(1)
+    _refuse_unknown(names, json_out)
     rows = _rescanned(list(names) if names else None, refresh=refresh, rescan=rescan,
                       wait=wait, detail=Detail.COMPACT)
     known_rows = bool(rows)
@@ -385,6 +379,7 @@ def cmd_show(name: str = typer.Argument(None, help="defaults to this machine"),
         rows = _rescanned([name], refresh=refresh, rescan=rescan, wait=wait,
                           detail=Detail.FULL)
         if not rows:
+            _refuse_unknown([name], json_out)
             err.print(f"[red]No device named {name!r}.[/red]  Try [bold]fleet ls[/bold]")
             raise typer.Exit(1)
         r = rows[0]
@@ -1693,17 +1688,31 @@ def cmd_update(name: str = typer.Argument(None, help="defaults to this machine")
         raise typer.Exit(1)
 
 
+def _refuse_unknown(names, json_out: bool) -> None:
+    """Fail on a name that matches no machine, with the ones it may have meant: `fleet ls
+    v`, a prefix of both vm and vm-2, said only "no machine named 'v'" where `ssh`, `edit`
+    and `rm` name the two."""
+    devices = inv.load()
+    unknown = [n for n in (names or []) if inv.find(devices, n) is None]
+    if not unknown:
+        return
+    near = {n: m for n in unknown if (m := inv.near_matches(devices, n))}
+    if not _emit({"ok": False, "error": f"no machine named {', '.join(unknown)}",
+                  "unknown": unknown, **({"did_you_mean": near} if near else {})}, json_out):
+        err.print(f"[red]No machine named {', '.join(repr(n) for n in unknown)}[/red] "
+                  "[dim]-- `fleet ls` lists them all[/dim]")
+        for n, m in near.items():
+            err.print(f"  [dim]{escape(n)}: did you mean {escape(', '.join(m))}[/dim]"
+                      if len(near) > 1 or len(unknown) > 1
+                      else f"  [dim]did you mean: {escape(', '.join(m))}[/dim]")
+    raise typer.Exit(1)
+
+
 def _named_rows(names: list[str] | None, json_out: bool, *, refresh: bool,
                 detail: Detail, rescan: bool = False, wait: int = 0) -> list[dict]:
     """The rows for `ps` and `models`: every machine, or the named ones, as `ls` gets them."""
     _first_run("ls")
-    unknown = [n for n in (names or []) if inv.find(inv.load(), n) is None]
-    if unknown:
-        if not _emit({"ok": False, "error": f"no machine named {', '.join(unknown)}",
-                      "unknown": unknown}, json_out):
-            err.print(f"[red]No machine named {', '.join(repr(n) for n in unknown)}[/red] "
-                      "[dim]-- `fleet ls` lists them all[/dim]")
-        raise typer.Exit(1)
+    _refuse_unknown(names, json_out)
     return _rescanned(list(names) if names else None, refresh=refresh, rescan=rescan,
                       wait=wait, detail=detail)
 
@@ -2363,10 +2372,16 @@ def cmd_doctor(name: str = typer.Argument(None, help="one machine; all that are 
         dev = inv.find(devices, name) or _not_added(name)
         if dev is None:
             err.print(f"[red]No machine named {name!r}[/red]")
+            if near := inv.near_matches(devices, name):
+                err.print(f"  [dim]did you mean: {escape(', '.join(near))}[/dim]")
             raise typer.Exit(1)
         if not dev.id and not json_out:
             err.print(f"[dim]{escape(name)} is not in your list: looking at it as an ssh "
                       "address, as `fleet add` would[/dim]")
+            if near := inv.near_matches(devices, name):
+                # `fleet doctor v` for vm or vm-2 looked up a host called v, and said
+                # only that no machine goes by that name.
+                err.print(f"  [dim]did you mean: {escape(', '.join(near))}[/dim]")
         targets = [dev]
     else:
         conn = store.connect()
