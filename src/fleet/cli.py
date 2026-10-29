@@ -33,7 +33,7 @@ from .agents import (MCP_CLIENTS, TARGETS, config_command, detect_mcp_clients,
                      install_mcp, installed_mcp_clients, installed_targets, package_version,
                      stale_mcp_clients, stale_targets, uninstall, uninstall_mcp)
 from .config import INVENTORY_PATH, load_config
-from .edit import apply_edits, check_name
+from .edit import apply_edits, check_name, is_full_path
 from .install import (NOTHING_TO_UPDATE, build_install_argv, install_script, needs_agent,
                       install_source,
                       local_install_argv, payload_for)
@@ -532,7 +532,7 @@ def _edit_machine_file(dev, json_out: bool, *, paths: list[str], endpoints: list
                       "[dim]e.g. --path models=/data/models (kinds: "
                       f"{', '.join(notes_mod.KINDS)}, or your own)[/dim]")
             raise typer.Exit(2)
-        if value.strip() and not re.match(r"(/|~(/|$)|[A-Za-z]:[\\/]|\\\\)", value.strip()):
+        if value.strip() and not is_full_path(value):
             # `models=data/models` was kept as written: relative to wherever the probe's
             # shell started, shown as is beside `~/m` shown in full, and no use to an
             # agent working anywhere else.
