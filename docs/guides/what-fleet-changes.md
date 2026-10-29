@@ -1,8 +1,7 @@
 # What fleet changes on your machines
 
 Very little, and nothing about who may log in. fleet manages no access: it never writes
-`authorized_keys`, never creates a key, and never runs anything in the background. This
-page is the whole list.
+`authorized_keys`, never creates a key, and runs no service. This page is the whole list.
 
 ## On the machines you watch
 
@@ -28,6 +27,8 @@ yours.
 | **the program** | installed with [uv](https://docs.astral.sh/uv) as `agents-fleet` (`uv tool list` shows it). The installer installs uv first if it is missing, and lets uv add its folder of tools to your `PATH`. |
 | **your list of machines** | `machines.yaml` in fleet's configuration folder — `~/.config/fleet` on Linux, `~/Library/Application Support/fleet` on macOS, `%LOCALAPPDATA%\fleet` on Windows |
 | **a cache of readings** | `cache.db` in fleet's state folder — `~/.local/state/fleet` on Linux, the same folder as above elsewhere. Disposable. |
+| **`~/.ssh/known_hosts`** | ssh records the host key of a machine fleet reaches for the first time (`StrictHostKeyChecking=accept-new`, which overrides `yes` or `ask` in your ssh config: an agent has no terminal to answer ssh's question). A key that *changed* is still refused. |
+| **open ssh connections** | Linux and macOS: one per machine, kept for two minutes after a command so the next one does not dial again (`ControlPersist`), then closed by ssh itself. Their sockets are in `/tmp/fleet-UID`, readable by you alone. |
 | **your agents** | a skill file (for example `~/.claude/skills/fleet/SKILL.md`), or an entry in an app's MCP settings. Only for agents found on this machine; `fleet setup` prints each file it writes, and keeps the rest of every settings file as it was. |
 
 Both folders are readable by you alone. Every file is listed in

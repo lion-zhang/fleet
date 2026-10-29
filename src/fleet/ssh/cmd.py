@@ -613,6 +613,15 @@ def classify_route(target: str) -> str:
     return "public" if ip.is_global else ""
 
 
+# Fleet's own command, not the session your ssh config sets up for you: no
+# `RemoteCommand` or terminal in its place, no `LocalCommand` run here on each reading,
+# and none of its `LocalForward`s -- which the connection fleet keeps open for two
+# minutes held, so your own `ssh` to the machine could not open them ("Address already
+# in use") for as long as fleet was in use.
+NOT_A_SESSION = ("-o", "RemoteCommand=none", "-o", "RequestTTY=no",
+                 "-o", "ClearAllForwardings=yes", "-o", "PermitLocalCommand=no")
+
+
 def build_argv(ep: Endpoint, *, connect_timeout: int = 8, multiplex: bool = True,
                remote: str = "sh -s", env: dict[str, str] | None = None) -> list[str]:
     opts = [
@@ -627,6 +636,11 @@ def build_argv(ep: Endpoint, *, connect_timeout: int = 8, multiplex: bool = True
         # needs (a recycled rental port then returns rc=255 with EMPTY stderr, which is
         # unclassifiable). Keep full stderr and scrub known-benign lines in Python.
         "-o", "LogLevel=INFO",
+        # A Host block of yours may start tmux or a shell for you (`RemoteCommand`,
+        # `RequestTTY yes`): ssh then refused fleet's command with "Cannot execute
+        # command-line and remote command", and the machine read as a probe error.
+        # Its port forwards are yours too: see NOT_A_SESSION.
+        *NOT_A_SESSION,
     ]
     argv = ["ssh", *opts]
     # Otherwise ssh answers exactly as it would for you: your ~/.ssh/config, your agent,

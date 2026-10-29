@@ -232,3 +232,31 @@ def test_a_machine_with_a_key_of_its_own_is_offered_that_key_alone(tmp_path, mon
     for argv in (seen[-1][1], build_install_argv(ep), build_argv(ep)):
         opts = argv[:argv.index("--")]
         assert "IdentitiesOnly=yes" in opts and opts[opts.index("-i") + 1] == str(key), " ".join(argv)
+
+
+def test_a_remote_command_in_your_ssh_config_is_kept_for_a_shell_only(box):
+    """`RemoteCommand tmux new -A` in a Host block: ssh refused a command beside it
+    ("Cannot execute command-line and remote command"), so every probe was an error and
+    `fleet ssh NAME -- cmd`, run_on_machine and `fleet install` all failed. A plain
+    `fleet ssh NAME` is still the shell your config asks for."""
+    from fleet.install import build_install_argv
+
+    CliRunner().invoke(cli.app, ["ssh", "lin-xps"])
+    assert "RemoteCommand=none" not in box[-1][1]
+    CliRunner().invoke(cli.app, ["ssh", "lin-xps", "--", "true"])
+    argv = box[-1][1]
+    assert "RemoteCommand=none" in argv[:argv.index("--")]
+    ep = sshcmd.Endpoint(target="h")
+    for built in (sshcmd.build_argv(ep), build_install_argv(ep)):
+        before = built[:built.index("--")]
+        assert "RemoteCommand=none" in before and "RequestTTY=no" in before
+
+
+def test_your_port_forwards_are_left_for_your_own_ssh(box):
+    """`LocalForward 8888 localhost:8888` for Jupyter: the connection fleet keeps open
+    for two minutes after a probe held port 8888, so `ssh gpubox` could not forward it
+    ("Address already in use") for as long as fleet -- or an agent polling it -- ran."""
+    argv = sshcmd.build_argv(sshcmd.Endpoint(target="h"))
+    assert "ClearAllForwardings=yes" in argv[:argv.index("--")]
+    CliRunner().invoke(cli.app, ["ssh", "lin-xps"])
+    assert "ClearAllForwardings=yes" not in box[-1][1], "your own session keeps them"

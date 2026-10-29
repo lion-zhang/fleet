@@ -15,7 +15,7 @@ tidy up by hand.
 | fleet had its own key, `id_ed25519` in its folder, and put it in every machine's `authorized_keys` | fleet has no key. It uses yours, your ssh config and agent, Tailscale SSH, your provider's key |
 | fleet granted and revoked access between machines | access is yours to manage, where it already lives ([how](reaching-machines.md)) |
 | the inventory, `inventory.yaml`, was synced from the center to every member | each machine keeps its own list, `machines.yaml`; share it with your dotfiles if you like |
-| a listener on TCP 7373, kept running by a service | nothing listens, and nothing runs in the background |
+| a listener on TCP 7373, kept running by a service | nothing listens, and no service runs |
 | a machine that only took a password: fleet asked for it once | fleet never asks for a password; at a terminal it offers `ssh-copy-id`, which asks for it itself |
 | the installer took `--join CODE` / `FLEET_JOIN` | not needed: the installer says so and ignores it |
 | `FLEET_NO_AUTO_CENTER` | gone; `FLEET_NO_FIRST_RUN` skips the first-run setup instead |
