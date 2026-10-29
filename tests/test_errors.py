@@ -123,7 +123,17 @@ def test_a_yes_or_no_is_not_taken_for_a_number(cfg_at, capsys):
     cfg_at.write_text("probe_timeout_s: no\nmax_workers: true\n", encoding="utf-8")
     cfg = config.load_config()
     assert (cfg.probe_timeout_s, cfg.max_workers) == (20, 8)
-    assert "probe_timeout_s: False is not a number; using 20" in capsys.readouterr().err
+    # Said as what was written: "False" quoted something nobody typed.
+    assert "probe_timeout_s: a yes/no value is not a number; using 20" in capsys.readouterr().err
+
+
+@pytest.mark.parametrize("value", [".inf", "-.inf", ".nan"])
+def test_infinity_or_nan_in_a_setting_falls_back_to_the_default(cfg_at, capsys, value):
+    """`max_workers: .inf` is YAML for infinity, and int() refused it with OverflowError:
+    every fleet command stopped on a traceback."""
+    cfg_at.write_text(f"max_workers: {value}\n", encoding="utf-8")
+    assert config.load_config().max_workers == 8
+    assert "is not a number; using 8" in capsys.readouterr().err
 
 
 @pytest.mark.parametrize("text,says", [
@@ -212,3 +222,21 @@ def test_an_entry_cut_off_mid_write_names_the_file_and_what_is_missing(tmp_path)
     assert str(exc.value).startswith(str(path))
     assert "device #2" in str(exc.value) and "it has no name" in str(exc.value)
     assert "__init__" not in str(exc.value)
+
+
+def test_a_config_folder_that_is_a_file_is_said_to_be_one(tmp_path):
+    """FLEET_CONFIG_DIR naming a file said "cannot write X (File exists)"."""
+    from fleet.state.writes import CannotWrite, atomic_write
+
+    afile = tmp_path / "cfg"
+    afile.write_text("")
+    with pytest.raises(CannotWrite, match="is a file, where fleet needs a folder"):
+        atomic_write(afile / "machines.yaml", "version: 1\n")
+
+
+@pytest.mark.parametrize("value", ["5", "yes", "[a]"])
+def test_a_repo_that_is_not_text_is_not_cloned(cfg_at, capsys, value):
+    """`repo: 5` became the URL "5", and `fleet install` tried to clone it."""
+    cfg_at.write_text(f"repo: {value}\n", encoding="utf-8")
+    assert config.load_config().get("repo") == ""
+    assert "repo: " in capsys.readouterr().err

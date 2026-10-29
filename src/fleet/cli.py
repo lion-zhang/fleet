@@ -1883,7 +1883,10 @@ def cmd_setup(
         from .agents import registry as agent_registry
 
         # Each agent's own folder: "~/.opencode" was named for one that lives in ~/.config.
-        looked = sorted({"~/" + a.marker for a in agent_registry.AGENTS})
+        # And the folder an agent's own variable names: with HERMES_HOME set, "~/.hermes"
+        # named a place that was not where it looked.
+        looked = sorted({str(Path(os.environ[a.env])) if a.env and os.environ.get(a.env)
+                         else "~/" + a.marker for a in agent_registry.AGENTS})
         err.print("[yellow]No coding agent found.[/yellow]  Looked for "
                   f"{', '.join(looked)} and the desktop clients.  "
                   "Force one with [bold]--target claude[/bold].")

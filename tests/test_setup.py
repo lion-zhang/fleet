@@ -835,3 +835,18 @@ def test_an_mcp_entry_for_another_fleet_is_not_called_an_older_description(monke
     monkeypatch.setattr(cli, "stale_mcp_clients", lambda *a, **k: ["cursor"])
     note = cli._skills_note()
     assert "cursor starts another fleet program" in note and "older" not in note
+
+
+def test_finding_no_agent_names_the_folder_hermes_home_points_at(tmp_path, monkeypatch):
+    """With HERMES_HOME set, "Looked for ... ~/.hermes" named a folder it did not look in."""
+    from typer.testing import CliRunner
+
+    from fleet.cli import app
+
+    monkeypatch.setattr(Path, "home", classmethod(lambda cls: tmp_path / "home"))
+    monkeypatch.setenv("HERMES_HOME", str(tmp_path / "elsewhere"))
+    monkeypatch.setenv("FLEET_NO_FIRST_RUN", "1")
+    result = CliRunner().invoke(app, ["setup"])
+    assert result.exit_code == 1, result.output
+    said = "".join(result.output.split())      # a long path may be folded mid-word
+    assert "~/.hermes" not in said and "elsewhere" in said, result.output

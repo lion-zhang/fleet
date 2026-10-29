@@ -29,6 +29,7 @@ answers to; it is recognised as dead and skipped, so a crash cannot wedge the qu
 from __future__ import annotations
 
 import contextlib
+import errno
 import json
 import os
 import random
@@ -56,7 +57,17 @@ class CannotWrite(OSError):
 
 
 def cannot_write(path: Path, exc: OSError) -> CannotWrite:
-    out = CannotWrite(f"cannot write {path} ({exc.strerror or exc})")
+    said = f"cannot write {path} ({exc.strerror or exc})"
+    if exc.errno in (errno.EEXIST, errno.ENOTDIR):
+        # A FLEET_CONFIG_DIR that names a file: "cannot write X (File exists)" read as
+        # though X were in the way of something, not that X is not a folder.
+        for p in (Path(path), *Path(path).parents):
+            if p.exists() and not p.is_dir():
+                said = (f"cannot write {path}: it is a file, where fleet needs a folder"
+                        if p == Path(path) else
+                        f"cannot write {path} ({p} is a file, where fleet needs a folder)")
+                break
+    out = CannotWrite(said)
     out.errno = exc.errno                  # without "[Errno 30]" in front of the words
     return out
 
