@@ -1756,7 +1756,11 @@ def cmd_ssh(ctx: typer.Context,
     # Keys only, in batch: fleet never handles a password, and a prompt here reads as
     # though typing one would work for the agent that asked.
     argv = ["ssh", "-o", "StrictHostKeyChecking=accept-new",
-            "-o", "PasswordAuthentication=no", "-o", "KbdInteractiveAuthentication=no"]
+            "-o", "PasswordAuthentication=no", "-o", "KbdInteractiveAuthentication=no",
+            # A port that takes the connection and never speaks ssh held `fleet ssh`, and
+            # the agent's run_on_machine, until its own limit, which then said the
+            # command "may still be running" when it had never started.
+            "-o", f"ConnectTimeout={int(load_config().get('connect_timeout_s') or 8)}"]
     if ep.port and ep.port != 22:
         argv += ["-p", str(ep.port)]
     if ep.identity:
@@ -2050,8 +2054,13 @@ def cmd_paths():
                   "with your dotfiles if you like)[/dim]")
     console.print(f"config     {_cfg.CONFIG_PATH}")
     console.print(f"cache      {store.DB_PATH}   [dim](disposable — delete and re-probe)[/dim]")
+    # Every place the probe reads one: this listed the Linux two alone, and a Mac or a
+    # Windows machine keeps its own somewhere else.
     console.print("notes      ~/.config/fleet/machine.yaml, /etc/fleet/machine.yaml   "
-                  "[dim](on each machine, about itself: fleet edit --path)[/dim]")
+                  "[dim](on each machine, about itself: fleet edit --path)[/dim]\n"
+                  "           [dim]on a Mac also ~/Library/Application Support/fleet/"
+                  "machine.yaml; on Windows %LOCALAPPDATA%\\fleet\\machine.yaml and "
+                  "%ProgramData%\\fleet\\machine.yaml[/dim]")
     if _cfg.CONFIG_DIR == _cfg.STATE_DIR:
         # Worth saying out loud: it is why every filename above is distinct, and why
         # nothing here may ever be cleaned up by globbing a directory.

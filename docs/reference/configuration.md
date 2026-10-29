@@ -51,7 +51,7 @@ max_workers: 16
 | `telemetry_ttl_s` | `60` | Seconds a reading counts as fresh. `ls` and `show` measure a machine again once its reading is older. |
 | `offline_backoff_max_s` | `1800` | The longest wait between attempts on a machine that keeps not answering; the wait doubles per miss up to this. |
 | `probe_timeout_s` | `20` | Seconds `ls`, `show` and `top` give a machine to answer. |
-| `connect_timeout_s` | `8` | ssh connection timeout for those readings. |
+| `connect_timeout_s` | `8` | ssh connection timeout for those readings, and for `fleet ssh`. |
 | `max_workers` | `8` | How many machines are measured at once. |
 | `shared_min_interval_s` | `300` | The shortest time between two measurements of a `shared` machine, so a multi-user cluster is never hammered. |
 | `snapshot_retention` | `120` | Readings kept per machine in `cache.db`. |

@@ -52,6 +52,15 @@ def test_no_command_means_a_plain_interactive_shell(box):
     assert not any(a.startswith("sh -lc") for a in argv)
 
 
+def test_a_port_that_never_speaks_ssh_is_given_up_on(box):
+    """No ConnectTimeout: a port that took the connection and never answered held `fleet
+    ssh` for ever, and the MCP run_on_machine for 120s, which then said the command "may
+    still be running" when it had never started."""
+    CliRunner().invoke(cli.app, ["ssh", "lin-xps", "--", "true"])
+    argv = box[-1][1]
+    assert "ConnectTimeout=8" in argv[:argv.index("--")]
+
+
 def test_a_command_after_the_separator_is_run(box):
     CliRunner().invoke(cli.app, ["ssh", "lin-xps", "--", "nvidia-smi"])
     argv = box[-1][1]
