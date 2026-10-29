@@ -144,7 +144,9 @@ reads:
 | `%ProgramData%\fleet\machine.yaml`, `%LOCALAPPDATA%\fleet\machine.yaml` | the same two, on Windows |
 
 The user's file is laid over the machine's: a field in it replaces the same field, and
-for `paths` each kind replaces the same kind. Because the file lives on the machine,
+for `paths` each kind replaces the same kind. Tags are the exception: those of both files
+are kept, so a tag the admin set stays when you add your own, and only the admin can take
+it off. Because the file lives on the machine,
 everyone who looks at the machine — from any other machine, any number of people — sees
 the same answer, and there is nothing to copy between them.
 

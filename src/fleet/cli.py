@@ -629,8 +629,18 @@ def _edit_machine_file(dev, json_out: bool, *, paths: list[str], endpoints: list
             return doc
         if tags_remove and not (paths or endpoints or tags_add or note is not None
                                 or cost is not None):
-            console.print(f"[dim]· {dev.name} has no tag "
-                          f"{escape(', '.join(tags_remove))}.[/dim]")
+            # One set by the machine's admin in /etc/fleet: "has no tag" while `ls`
+            # showed it, and fleet does not write that file.
+            mine = notes_mod.parse(before).get("tags") or []
+            admins = [t for t in tags_remove if t not in mine
+                      and t in ((snap or {}).get("notes") or {}).get("tags", [])]
+            if admins:
+                console.print(f"[yellow]· {escape(', '.join(admins))} is set machine-wide "
+                              f"on {dev.name}[/yellow]  [dim]in the machine.yaml its admin "
+                              "keeps (/etc/fleet); fleet edit writes only yours[/dim]")
+            else:
+                console.print(f"[dim]· {dev.name} has no tag "
+                              f"{escape(', '.join(tags_remove))}.[/dim]")
         elif (servers and all(v is None for v in servers.values())
               and not (paths or tags_add or tags_remove or note is not None
                        or cost is not None)):

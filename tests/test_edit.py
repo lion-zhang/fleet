@@ -412,3 +412,21 @@ def test_a_local_untag_of_a_tag_the_machine_itself_holds_says_where_it_is(tmp_pa
     assert json.loads(result.output)["kept_on_machine"] == ["g4"]
     result = runner.invoke(app, ["edit", "box", "--untag", "zz", "--local"])
     assert "has no tag zz here" in result.output
+
+
+def test_untagging_a_tag_set_machine_wide_says_who_keeps_it(tmp_path, monkeypatch):
+    """`edit --untag lab` with lab in the machine's /etc/fleet/machine.yaml said "has no
+    tag lab" while `ls` showed it."""
+    from fleet import cli
+    from fleet.ops import machinefile
+    from fleet.cli import app
+
+    runner, _ = _cli_env(tmp_path, monkeypatch, _dev())
+    monkeypatch.setattr(cli.store, "latest",
+                        lambda conn, dev_id: ({}, {"notes": {"tags": ["lab", "mine"]}}))
+    monkeypatch.setattr(machinefile, "change", lambda *a, **k: ("tags: [mine]\n",) * 2)
+    result = runner.invoke(app, ["edit", "box", "--untag", "lab"])
+    assert result.exit_code == 0, result.output
+    assert "lab is set machine-wide" in result.output, result.output
+    result = runner.invoke(app, ["edit", "box", "--untag", "zz"])
+    assert "has no tag zz" in result.output
