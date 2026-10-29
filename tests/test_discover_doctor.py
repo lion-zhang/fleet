@@ -284,6 +284,23 @@ def test_doctor_looks_at_the_failing_machines_side_by_side(monkeypatch, mykey):
     assert [ln.split()[1] for ln in r.stdout.splitlines() if ln.startswith("✗")] == names
 
 
+def test_doctor_does_not_say_every_machine_answered_of_none(monkeypatch):
+    """With nothing added, or nothing probed yet, it said "every machine fleet watches
+    answered its last probe"."""
+    from fleet.state import store
+
+    r = CliRunner().invoke(cli.app, ["doctor"])
+    assert r.exit_code == 0 and "answered" not in r.stdout and "fleet add" in r.stdout
+    inv.save([_dev(), _dev(id="id:b2", name="box2")])
+    readings = {"id:b2": {"status": "ok"}}
+    monkeypatch.setattr(store, "latest", lambda conn, dev_id: (readings.get(dev_id), None))
+    r = CliRunner().invoke(cli.app, ["doctor"])
+    assert "has probed answered" in r.stdout and "not probed yet: box" in r.stdout
+    readings.clear()
+    r = CliRunner().invoke(cli.app, ["doctor"])
+    assert "answered" not in r.stdout and "none of the 2" in r.stdout
+
+
 # ---------------------------------------------------------------- add
 def test_a_machine_that_refuses_us_is_not_recorded_and_the_fix_is_said(monkeypatch, mykey):
     monkeypatch.setattr(cli, "onboard", lambda cmd, **k: (

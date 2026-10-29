@@ -406,6 +406,31 @@ def test_a_cost_kept_here_says_when_the_machines_own_cost_wins(tmp_path, monkeyp
     assert result.exit_code == 0 and "wins" not in result.output
 
 
+def test_a_cost_kept_here_right_after_one_on_the_machine_reads_it_again(tmp_path, monkeypatch):
+    """`fleet edit box --cost 1` then `fleet edit box --local --cost 3` said "cost none
+    -> $3.0/hr" and nothing more, while `ls` showed $1: the reading it judged by was from
+    before fleet wrote the machine's file, which marks it stale."""
+    from fleet import cli
+    from fleet.cli import app
+
+    runner, _ = _cli_env(tmp_path, monkeypatch, _dev())
+    readings = {"snap": {"notes": {}}}
+    monkeypatch.setattr(cli.store, "latest",
+                        lambda conn, dev_id: ({"last_probe_at": 0}, readings["snap"]))
+    asked = []
+
+    def probe(names, **kw):
+        asked.append(names)
+        readings["snap"] = {"notes": {"cost": {"usd_per_hour": 1.0}}}
+        return []
+
+    monkeypatch.setattr(cli, "_rows", probe)
+    result = runner.invoke(app, ["edit", "box", "--cost", "3", "--local"])
+    assert result.exit_code == 0, result.output
+    assert asked == [["box"]]
+    assert "$1/hr, and that wins" in result.output
+
+
 def test_a_local_untag_of_a_tag_the_machine_itself_holds_says_where_it_is(tmp_path, monkeypatch):
     """`edit --untag g4 --local`, with g4 in the machine's own machine.yaml, said "nothing
     to change", and `ls` went on showing g4 with no word of where it came from."""

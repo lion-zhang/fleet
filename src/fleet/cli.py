@@ -156,13 +156,7 @@ def cmd_ls(names: list[str] = typer.Argument(None, help="only these devices"),
         err.print("[dim]· --all applies to --discover[/dim]")
     # A name that matches nothing is said, and fails: `fleet ls TYPO --json` answered an
     # empty list and exit 0, which an agent reads as "nothing wrong, nothing there".
-    unknown = [n for n in (names or []) if inv.find(inv.load(), n) is None]
-    if unknown:
-        if not _emit({"ok": False, "error": f"no machine named {', '.join(unknown)}",
-                      "unknown": unknown}, json_out):
-            err.print(f"[red]No machine named {', '.join(repr(n) for n in unknown)}[/red] "
-                      "[dim]-- `fleet ls` lists them all[/dim]")
-        raise typer.Exit(1)
+    _refuse_unknown(names, json_out)
     rows = _rescanned(list(names) if names else None, refresh=refresh, rescan=rescan,
                       wait=wait, detail=Detail.COMPACT)
     known_rows = bool(rows)
@@ -305,12 +299,21 @@ def _print_discovered(json_out: bool, *, hide: list[str] = (), unhide: list[str]
         discover.set_hidden(list(hide), hide=True)
     if unhide:
         discover.set_hidden(list(unhide), hide=False)
-    found = discover.candidates(include_hidden=show_all)
+    found = discover.candidates(include_hidden=True)
     gone = discover.hidden()
 
     def is_hidden(c) -> bool:
         # Under --all a hidden one was listed like any other, with nothing to say which.
         return c.name.lower() in gone or c.target.lower() in gone
+
+    offered = {n for c in found for n in (c.name.lower(), c.target.lower())}
+    if hide and (unseen := [n for n in hide if n.lower() not in offered]):
+        # `--hide old-bx` hid nothing anyone sees, old-box stayed on the list, and the
+        # answer was the list itself: a typo read as a hide that had not taken.
+        err.print(f"[yellow]not offered now: {escape(', '.join(unseen))}[/yellow]  "
+                  "[dim](hidden all the same, should it turn up; --unhide undoes it)[/dim]")
+    if not show_all:
+        found = [c for c in found if not is_hidden(c)]
 
     if _emit({"candidates": [{**c.to_dict(), "hidden": is_hidden(c)} for c in found],
               "hidden": sorted(gone)}, json_out):
@@ -376,6 +379,7 @@ def cmd_show(name: str = typer.Argument(None, help="defaults to this machine"),
         rows = _rescanned([name], refresh=refresh, rescan=rescan, wait=wait,
                           detail=Detail.FULL)
         if not rows:
+            _refuse_unknown([name], json_out)
             err.print(f"[red]No device named {name!r}.[/red]  Try [bold]fleet ls[/bold]")
             raise typer.Exit(1)
         r = rows[0]
@@ -1318,8 +1322,16 @@ def cmd_edit(name: str = typer.Argument(None, help="defaults to this machine"),
     theirs = None
     if local and cost and any(c.startswith("cost ") for c in result.changes):
         conn = store.connect()
-        _, snap = store.latest(conn, dev.id)
+        state, snap = store.latest(conn, dev.id)
         conn.close()
+        if state and not state.get("last_probe_at"):
+            # fleet changed the machine's own file since that reading (`fleet edit NAME
+            # --cost 1` a moment ago): it knew nothing of that cost, and "cost none ->
+            # $3/hr" came back while `ls` showed $1. It answered then, so ask it again.
+            _rows([dev.name], refresh=False, rescan=False, detail=Detail.COMPACT)
+            conn = store.connect()
+            _, snap = store.latest(conn, dev.id)
+            conn.close()
         theirs = (((snap or {}).get("notes") or {}).get("cost") or {}).get("usd_per_hour")
     if _emit({**(on_machine_doc or {}), "name": dev.name, "id": dev.id,
               "changes": result.changes,
@@ -1676,17 +1688,31 @@ def cmd_update(name: str = typer.Argument(None, help="defaults to this machine")
         raise typer.Exit(1)
 
 
+def _refuse_unknown(names, json_out: bool) -> None:
+    """Fail on a name that matches no machine, with the ones it may have meant: `fleet ls
+    v`, a prefix of both vm and vm-2, said only "no machine named 'v'" where `ssh`, `edit`
+    and `rm` name the two."""
+    devices = inv.load()
+    unknown = [n for n in (names or []) if inv.find(devices, n) is None]
+    if not unknown:
+        return
+    near = {n: m for n in unknown if (m := inv.near_matches(devices, n))}
+    if not _emit({"ok": False, "error": f"no machine named {', '.join(unknown)}",
+                  "unknown": unknown, **({"did_you_mean": near} if near else {})}, json_out):
+        err.print(f"[red]No machine named {', '.join(repr(n) for n in unknown)}[/red] "
+                  "[dim]-- `fleet ls` lists them all[/dim]")
+        for n, m in near.items():
+            err.print(f"  [dim]{escape(n)}: did you mean {escape(', '.join(m))}[/dim]"
+                      if len(near) > 1 or len(unknown) > 1
+                      else f"  [dim]did you mean: {escape(', '.join(m))}[/dim]")
+    raise typer.Exit(1)
+
+
 def _named_rows(names: list[str] | None, json_out: bool, *, refresh: bool,
                 detail: Detail, rescan: bool = False, wait: int = 0) -> list[dict]:
     """The rows for `ps` and `models`: every machine, or the named ones, as `ls` gets them."""
     _first_run("ls")
-    unknown = [n for n in (names or []) if inv.find(inv.load(), n) is None]
-    if unknown:
-        if not _emit({"ok": False, "error": f"no machine named {', '.join(unknown)}",
-                      "unknown": unknown}, json_out):
-            err.print(f"[red]No machine named {', '.join(repr(n) for n in unknown)}[/red] "
-                      "[dim]-- `fleet ls` lists them all[/dim]")
-        raise typer.Exit(1)
+    _refuse_unknown(names, json_out)
     return _rescanned(list(names) if names else None, refresh=refresh, rescan=rescan,
                       wait=wait, detail=detail)
 
@@ -2346,10 +2372,16 @@ def cmd_doctor(name: str = typer.Argument(None, help="one machine; all that are 
         dev = inv.find(devices, name) or _not_added(name)
         if dev is None:
             err.print(f"[red]No machine named {name!r}[/red]")
+            if near := inv.near_matches(devices, name):
+                err.print(f"  [dim]did you mean: {escape(', '.join(near))}[/dim]")
             raise typer.Exit(1)
         if not dev.id and not json_out:
             err.print(f"[dim]{escape(name)} is not in your list: looking at it as an ssh "
                       "address, as `fleet add` would[/dim]")
+            if near := inv.near_matches(devices, name):
+                # `fleet doctor v` for vm or vm-2 looked up a host called v, and said
+                # only that no machine goes by that name.
+                err.print(f"  [dim]did you mean: {escape(', '.join(near))}[/dim]")
         targets = [dev]
     else:
         conn = store.connect()
@@ -2378,8 +2410,31 @@ def cmd_doctor(name: str = typer.Argument(None, help="one machine; all that are 
             _emit({"machines": [v.to_dict() for v in found]}, True)
             return
         if not targets:
-            console.print("[green]✓[/green] every machine fleet watches answered its last "
-                          "probe [dim](fleet doctor NAME looks at one now)[/dim]")
+            remote = [d for d in devices if d.endpoints]
+            if not remote:
+                # With nothing added, "every machine answered" was said of none.
+                console.print("[dim]· fleet watches no machine but this one yet: "
+                              "fleet add \"ssh user@host\" adds one[/dim]")
+                return
+            conn = store.connect()
+            try:
+                unread = sorted(d.name for d in remote
+                                if not (store.latest(conn, d.id)[0] or {}).get("status"))
+            finally:
+                conn.close()
+            if len(unread) == len(remote):
+                console.print(f"[dim]· none of the {len(remote)} machines fleet watches "
+                              "has been probed yet: fleet doctor NAME looks at one now[/dim]")
+                return
+            console.print("[green]✓[/green] every machine fleet "
+                          + ("has probed" if unread else "watches")
+                          + " answered its last probe [dim](fleet doctor NAME looks at one "
+                          "now)[/dim]")
+            if unread:
+                # One never probed (on demand, or a shared host) had not answered anything.
+                console.print(f"  [dim]not probed yet: {escape(', '.join(unread[:6]))}"
+                              f"{f' and {len(unread) - 6} more' if len(unread) > 6 else ''}"
+                              "[/dim]")
             return
         _print_verdicts(found)
     finally:
