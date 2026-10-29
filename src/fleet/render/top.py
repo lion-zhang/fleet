@@ -498,7 +498,8 @@ def _ls_table(rows: list[dict[str, Any]], gave_up: set[str]) -> Table:
         gpu, vram = gpu_cells_compact(r)
         note = escape((r.get("error", {}).get("detail", "") if r["status"] != "ok" else (
             r["alerts"][0] if r["alerts"] else "")) or "")
-        age = f"{r['telemetry_age_s']}s" if r["telemetry_age_s"] is not None else "-"
+        # "86400s" for a reading a day old: in the units `staleness` uses.
+        age = staleness(r, -1) if r["telemetry_age_s"] is not None else "-"
         cells = {"": DOT.get(r["status"], "?"), "NAME": name_cell(r), "KIND": escape(r["kind"]),
                  "GPU": gpu, "VRAM FREE": vram, "CPU": str(r["cpu_cores"] or "-"),
                  "RAM FREE": f"{r['ram_free_gb']:.0f}G" if r["ram_free_gb"] is not None else "-",

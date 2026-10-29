@@ -700,3 +700,18 @@ def test_a_re_add_says_when_it_keeps_the_alias_and_a_dry_run_sees_a_new_one(tmp_
     assert runner.invoke(cli.app, ["add", "ssh root@10.0.0.5", "--alias", "b"]).exit_code == 0
     r = runner.invoke(cli.app, ["add", "ssh root@10.0.0.5", "--alias", "bx"])
     assert "it keeps its alias b; to change it: fleet edit box --alias bx" in r.output, r.output
+
+
+def test_a_kind_changed_back_from_mobile_or_shared_is_probed_again(tmp_path, monkeypatch):
+    """`fleet add ... --kind rental` on a machine recorded as mobile kept `probe_policy:
+    never`, so no `fleet ls` looked at the rental again."""
+    from fleet.state import inventory as inv
+
+    runner = _cli(tmp_path, monkeypatch, [
+        Device(id="linux:machine-id:box", name="box", kind=Kind.MOBILE, probe_policy="never",
+               endpoints=[{"target": "10.0.0.5", "user": "root", "port": 22}])])
+    _readd(monkeypatch)
+    r = runner.invoke(cli.app, ["add", "ssh root@10.0.0.5", "--kind", "rental"])
+    assert r.exit_code == 0, r.output
+    (box,) = [d for d in inv.load() if d.name == "box"]
+    assert box.kind is Kind.RENTAL and box.probe_policy == "auto" and box.probeable

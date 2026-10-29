@@ -395,6 +395,13 @@ def _print_show(r: dict) -> None:
                   f"[dim]{escape(' · '.join(h for h in head if h))}[/dim]")
     if r.get("error"):
         console.print(f"  [red]{r['error']['class']}[/red]: {escape(r['error']['detail'] or '')}")
+    # A machine fleet does not probe now -- mobile, or one that backs off -- showed a
+    # reading hours old as though it had just been taken.
+    age = r.get("telemetry_age_s")
+    if age is not None and age > int(load_config().get("telemetry_ttl_s") or 0):
+        why = ("; fleet never probes a mobile device" if r.get("probe_policy") == "never"
+               else "")
+        console.print(f"  [dim]as read {_ago(int(age))} ago{why}[/dim]")
     if r.get("cpu_model"):
         console.print(f"  cpu   {r['cpu_cores']}x {escape(r['cpu_model'])}   load {r.get('load')}")
     if r.get("ram_total_gb"):
@@ -815,9 +822,14 @@ def cmd_add(ssh_command: str = typer.Argument(None, help='e.g. "ssh -p 58418 roo
             # The same for what was said explicitly: `fleet add ... --kind rental` on a
             # machine removed earlier printed "added (rental)" and kept it permanent.
             if kind and survivor.kind is not dev.kind:
-                survivor.kind = dev.kind
-                if dev.kind in (Kind.SHARED, Kind.MOBILE):
+                # Back from shared or mobile, the policy that came with that kind went
+                # too: a rental re-added from mobile kept `never`, and no `fleet ls`
+                # looked at it again. One set by hand is left alone.
+                came_with = {Kind.SHARED: "on_demand", Kind.MOBILE: "never"}
+                if dev.kind in came_with or survivor.probe_policy == came_with.get(
+                        survivor.kind):
                     survivor.probe_policy = dev.probe_policy
+                survivor.kind = dev.kind
                 inv.touch(survivor)
             elif dev.provider and survivor.kind is Kind.PERMANENT:
                 # Unsaid, the probe decides as it would for a new machine: a box that
