@@ -372,6 +372,37 @@ def test_adding_a_known_machine_does_not_also_say_it_was_added(tmp_path, monkeyp
     assert "fleet edit box --name other" in r.output, "it comes back as box, and says so"
 
 
+def test_a_machine_brought_back_after_its_name_was_given_away_takes_another(tmp_path,
+                                                                          monkeypatch):
+    """Removed, its name and alias given to another machine, then added back: it came back
+    under both, two machines answered to one name, and every command refused the list."""
+    import json
+
+    from fleet.state import inventory as inv
+
+    runner = _cli(tmp_path, monkeypatch, [
+        Device(id="linux:machine-id:box", name="box", alias="b", kind=Kind.PERMANENT,
+               endpoints=[{"target": "10.0.0.5", "user": "root", "port": 22}]),
+        Device(id="linux:machine-id:new", name="new", kind=Kind.PERMANENT,
+               endpoints=[{"target": "10.0.0.9", "user": "root", "port": 22}])])
+    _readd(monkeypatch)
+    real = cli.onboard              # named as onboard names it: clear of the names taken
+    monkeypatch.setattr(cli, "onboard", lambda cmd, **k: real(cmd, **{**k, "name": "box-2"}))
+    assert runner.invoke(cli.app, ["rm", "box", "--yes"]).exit_code == 0
+    r = runner.invoke(cli.app, ["edit", "new", "--name", "box", "--alias", "b"])
+    assert r.exit_code == 0, r.output
+    r = runner.invoke(cli.app, ["add", "ssh root@10.0.0.5", "--dry-run"])
+    assert (json.loads(r.stdout)["action"], json.loads(r.stdout)["name"]) == (
+        "restored", "box-2"), r.stdout
+    r = runner.invoke(cli.app, ["add", "ssh root@10.0.0.5"])
+    assert r.exit_code == 0, r.output
+    assert "another machine is called box now" in r.output, r.output
+    live = {d.id: (d.name, d.alias) for d in inv.live(inv.load())}
+    assert live["linux:machine-id:new"] == ("box", "b")
+    assert live["linux:machine-id:box"][0] != "box" and not live["linux:machine-id:box"][1]
+    assert runner.invoke(cli.app, ["ls", "--json"]).exit_code == 0
+
+
 def test_untag_removes_a_tag_that_add_kept_here(tmp_path, monkeypatch):
     """`add --tag web` keeps the tag in this machine's list; `edit --untag web` only
     edited the machine's own file, said "already says that", and `ls` still showed it."""
