@@ -433,6 +433,10 @@ def test_a_field_that_does_not_exist_is_said_to_not_exist(tmp_path, monkeypatch)
     r = runner.invoke(cli.app, ["ls", "--json", "--fields", "alias,nosuchfield"])
     assert r.exit_code == 0, r.output
     assert "no such field: nosuchfield " in " ".join(r.stderr.split()), r.stderr
+    # `--fields ""` printed every field, as though none had been asked for.
+    for empty in ("", " , "):
+        r = runner.invoke(cli.app, ["ls", "--json", "--fields", empty])
+        assert r.exit_code == 2 and "--fields needs the keys" in r.output, r.output
 
 
 @pytest.mark.parametrize("cost", ["-5", "nan", "inf", "2000000"])
@@ -715,3 +719,14 @@ def test_a_kind_changed_back_from_mobile_or_shared_is_probed_again(tmp_path, mon
     assert r.exit_code == 0, r.output
     (box,) = [d for d in inv.load() if d.name == "box"]
     assert box.kind is Kind.RENTAL and box.probe_policy == "auto" and box.probeable
+
+
+@pytest.mark.parametrize("command", ["ls", "models", "show"])
+def test_a_negative_wait_is_refused(tmp_path, monkeypatch, command):
+    """`--rescan --wait -5` was taken as no wait at all, without a word."""
+    runner = _cli(tmp_path, monkeypatch, [
+        Device(id="id:box", name="box", kind=Kind.PERMANENT,
+               endpoints=[{"target": "10.0.0.5", "user": "root", "port": 22}])])
+    monkeypatch.setattr(cli, "_rows", lambda *a, **k: pytest.fail("probed"))
+    r = runner.invoke(cli.app, [command, "box", "--rescan", "--wait", "-5"])
+    assert r.exit_code == 2 and "--wait -5 is not a wait" in r.output, r.output

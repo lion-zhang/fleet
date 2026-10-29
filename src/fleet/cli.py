@@ -142,6 +142,11 @@ def cmd_ls(names: list[str] = typer.Argument(None, help="only these devices"),
         err.print(f"[red]--tag {escape(repr(tag[0]))}[/red] is not a tag  [dim]e.g. "
                   "--tag cuda, or --tag cuda,vram-24g for both[/dim]")
         raise typer.Exit(2)
+    if fields is not None and not any(f.strip() for f in fields.split(",")):
+        # `--fields ""` printed every field, as though none had been asked for.
+        err.print("[red]--fields needs the keys to keep[/red]  [dim]e.g. --fields "
+                  "name,status,free_vram_mib[/dim]")
+        raise typer.Exit(2)
     _first_run("ls")
     if discover or hide or unhide:
         _print_discovered(json_out, hide=hide or [], unhide=unhide or [], show_all=show_all)
@@ -230,6 +235,10 @@ def _rescanned(names: list[str] | None, *, refresh: bool, rescan: bool, wait: in
     newer than they were before (compared with themselves, not with this machine's clock,
     which the other one's need not agree with), or until the time is up.
     """
+    if wait < 0:
+        # `--wait -5` was taken as no wait at all, without a word.
+        err.print(f"[red]--wait {wait}[/red] is not a wait  [dim]seconds, 0 or more[/dim]")
+        raise typer.Exit(2)
     if wait > 0 and not rescan:
         # Nothing was measured to wait for, and it returned at once without a word.
         err.print("[dim]· --wait applies to --rescan[/dim]")
