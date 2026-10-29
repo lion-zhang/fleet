@@ -20,6 +20,7 @@ from pathlib import Path
 
 import pytest
 
+from fleet.config import DEFAULTS
 from fleet.probe.parse import parse_payload
 
 PAYLOAD = Path(__file__).resolve().parent.parent / "src" / "fleet" / "probe" / "payload.sh"
@@ -96,7 +97,9 @@ def test_a_gpu_tool_that_hangs_does_not_make_the_machine_look_off(tmp_path, bin_
     _stub(bin_, "nvidia-smi", "exec sleep 60\n")
     took, out = _seconds(tmp_path)
     snap = parse_payload(out)
-    assert took < usual + 12
+    # The probe gives nvidia-smi 8s; what matters is that it answers before fleet gives
+    # up on the machine (probe_timeout_s, 20s). +12 left a slow macOS runner 0.1s short.
+    assert took < usual + DEFAULTS["probe_timeout_s"] - 4
     assert snap.gpu_present == "err" and "did not answer" in snap.gpu_error
     assert snap.mem_total_kb and snap.hostname
 
