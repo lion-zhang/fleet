@@ -70,13 +70,22 @@ def gpu_pct(row: dict[str, Any]) -> int | None:
     return max(int(g.get("util_pct") or 0) for g in gpus)
 
 
+def reading_age(row: dict[str, Any]) -> int | None:
+    """How old the figures shown for a machine are. Its last try, unless that failed:
+    then they are the last reading that came in, and one refused a moment ago read
+    "0s" over numbers from hours before."""
+    if row.get("status") != "ok" and row.get("snapshot_age_s") is not None:
+        return row["snapshot_age_s"]
+    return row.get("telemetry_age_s")
+
+
 def staleness(row: dict[str, Any], live_within: int) -> str:
     """How out of date this row is, when that is worth saying.
 
     A shared host is polled every few minutes. Rendering its number as though it were
     live would be a lie in exactly the place someone would act on it.
     """
-    age = row.get("telemetry_age_s")
+    age = reading_age(row)
     if age is None:
         return "?"
     if age <= live_within:

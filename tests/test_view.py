@@ -350,3 +350,23 @@ def test_a_gpu_on_a_machine_never_offered_for_work_is_not_idle_or_free():
         assert jobs_view(rows)["idle"] == [] and fleet_view(rows)["summary"]["gpus_free"] == 0
     rows = [device_view(make(), STATE_OK, snap_of("gpu-box"), Detail.FULL)]
     assert len(jobs_view(rows)["idle"]) == 1 and fleet_view(rows)["summary"]["gpus_free"] == 1
+
+
+def test_a_machine_that_failed_its_last_try_is_aged_by_its_last_reading(capsys):
+    """Refused a moment ago, a machine's row said AGE 0s, and `fleet show` gave no age,
+    over memory, disks and models from the reading 17 minutes before."""
+    import time
+
+    from fleet import cli
+    from fleet.render.top import staleness
+
+    now = int(time.time())
+    snap = {**snap_of("gpu-box"), "ts": now - 1013}
+    state = {**STATE_AUTH_FAILED, "last_probe_at": now - 2, "last_ok_at": now - 1013}
+    v = device_view(make(), state, snap, Detail.FULL)
+    assert staleness(v, live_within=10) == "16m"
+    cli._print_show(v)
+    assert "as read 16m ago" in capsys.readouterr().out
+    ok = device_view(make(), {**STATE_OK, "last_probe_at": now - 2}, {**snap, "ts": now - 2},
+                     Detail.FULL)
+    assert staleness(ok, live_within=10) == ""
