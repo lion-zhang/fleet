@@ -95,10 +95,13 @@ for ($i = 0; $i -lt 2; $i++) {
         foreach ($v in $vals) {
             $v = ($v -replace '\s+#.*$', '').Trim().Trim('"', "'")
             if ($v -eq '~') { $v = $HOME } elseif ($v.StartsWith('~/') -or $v.StartsWith('~\')) { $v = Join-Path $HOME $v.Substring(2) }
-            if ($kind -and $v) { $storePaths.Add(@($kind, $v)) }
+            if ($kind -and $v) { $storePaths.Add(@($kind, $v, $i)) }
         }
     }
 }
+# The user's file over the machine's, kind by kind, as the parser lays them (see payload.sh).
+$userKinds = @($storePaths | Where-Object { $_[2] -eq 1 } | ForEach-Object { $_[0] })
+$storePaths = @($storePaths | Where-Object { $_[2] -eq 1 -or $userKinds -notcontains $_[0] })
 
 Write-Output "#DISK mount|total_kb|used_kb|avail_kb|rw"
 if ($env:FLEET_DISK_PATHS) {
@@ -106,8 +109,11 @@ if ($env:FLEET_DISK_PATHS) {
     # path asked about rather than whatever volume happens to hold it, because "819G
     # free on C:" answers a different question from "819G free where my data goes".
     foreach ($path in ($env:FLEET_DISK_PATHS -split '\|' | Where-Object { $_ })) {
-        if (-not (Test-Path -LiteralPath $path)) { continue }
-        $root = [System.IO.Path]::GetPathRoot((Resolve-Path -LiteralPath $path).Path)
+        # `~` is this user's home, as in payload.sh; the row keeps the name it was given.
+        $q = $path
+        if ($q -eq '~') { $q = $HOME } elseif ($q -match '^~[\\/]') { $q = Join-Path $HOME $q.Substring(2) }
+        if (-not (Test-Path -LiteralPath $q)) { continue }
+        $root = [System.IO.Path]::GetPathRoot((Resolve-Path -LiteralPath $q).Path)
         $vol = Get-CimInstance Win32_LogicalDisk -Filter "DeviceID='$($root.TrimEnd('\'))'"
         if (-not $vol) { continue }
         $total = [int64]($vol.Size / 1024)

@@ -964,7 +964,11 @@ def _offer_copy_id(ssh_command: str, dev, res, *, name, kind, alias, taken):
     from .ui import confirm
 
     eps = inv.endpoints_of(dev)
-    if not eps or not sys.stdin.isatty() or public_key() is None:
+    if not eps or not sys.stdin.isatty():
+        return dev, res
+    # The key it is pinned to (`-i`), which ssh-copy-id reads from KEY.pub; else yours.
+    if not (Path(eps[0].identity + ".pub").is_file() if eps[0].identity
+            else public_key() is not None):
         return dev, res
     argv = copy_id_argv(eps[0])
     if argv is None:
@@ -1247,12 +1251,24 @@ def cmd_edit(name: str = typer.Argument(None, help="defaults to this machine"),
         store.rename_device(conn, result.previous_id, dev.id)
         conn.close()
 
+    # A cost kept here is only the fallback: the machine's own file wins. "cost none ->
+    # $0.5/hr" with $1.75 still in `ls` read as an edit that had not taken.
+    theirs = None
+    if local and cost and any(c.startswith("cost ") for c in result.changes):
+        conn = store.connect()
+        _, snap = store.latest(conn, dev.id)
+        conn.close()
+        theirs = (((snap or {}).get("notes") or {}).get("cost") or {}).get("usd_per_hour")
     if _emit({**(on_machine_doc or {}), "name": dev.name, "id": dev.id,
-              "changes": result.changes}, json_out):
+              "changes": result.changes,
+              **({"cost_in_effect": theirs} if theirs is not None else {})}, json_out):
         return
     console.print(f"[green]✓[/green] {dev.name}")
     for line in result.changes:
         console.print(f"  {escape(line)}")
+    if theirs is not None:
+        console.print(f"  [yellow]its own machine.yaml says ${theirs:g}/hr, and that wins[/yellow]  "
+                      "[dim]drop --local to change it there[/dim]")
     if ssh_to is not None:
         console.print(f"  [dim]run `fleet ls {dev.name} -r` to confirm it answers.[/dim]")
 

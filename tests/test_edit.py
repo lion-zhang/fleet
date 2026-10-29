@@ -369,3 +369,27 @@ def test_local_refuses_a_note_folder_or_server_rather_than_writing_the_machine(t
         assert extra[0] in result.output
     assert not wrote
     assert inv.load(path)[0].tags == _dev().tags
+
+
+def test_a_cost_kept_here_says_when_the_machines_own_cost_wins(tmp_path, monkeypatch):
+    """`edit --local --cost 0.5` said "cost none -> $0.5/hr" and `ls` went on showing the
+    $1.75 written in the machine's own machine.yaml, which wins: an edit that seemed not
+    to have taken."""
+    import json
+
+    from fleet import cli
+    from fleet.cli import app
+
+    runner, _ = _cli_env(tmp_path, monkeypatch, _dev())
+    snap = {"notes": {"cost": {"usd_per_hour": 1.75}}}
+    monkeypatch.setattr(cli.store, "latest", lambda conn, dev_id: ({}, snap))
+    result = runner.invoke(app, ["edit", "box", "--cost", "0.5", "--local"])
+    assert result.exit_code == 0, result.output
+    assert "cost none -> $0.5/hr" in result.output
+    assert "$1.75/hr, and that wins" in result.output
+    result = runner.invoke(app, ["edit", "box", "--cost", "0.6", "--local", "--json"])
+    assert json.loads(result.output)["cost_in_effect"] == 1.75
+
+    snap = {"notes": {}}                               # nothing there: no word of it
+    result = runner.invoke(app, ["edit", "box", "--cost", "0.7", "--local"])
+    assert result.exit_code == 0 and "wins" not in result.output

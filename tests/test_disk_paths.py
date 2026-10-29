@@ -593,3 +593,16 @@ def test_a_disk_path_must_be_full_and_is_kept_once():
     out = apply_edits(dev, disk_paths=["/", "/", "/tmp/", "/tmp", "~", "D:\\x"])
     assert dev.disk_paths == ["/", "/tmp/", "~", "D:\\x"]
     assert out.changes == ["disk paths /data -> /, /tmp/, ~, D:\\x"]
+
+
+@pytest.mark.skipif(sys.platform != "win32" or not __import__("shutil").which("pwsh"),
+                    reason="the Windows payload, on Windows")
+def test_a_path_in_the_home_is_found_on_windows_too():
+    """The same `~/data`, on a Windows machine: Test-Path -LiteralPath takes `~` as a
+    folder of that name."""
+    script = Path(__file__).parents[1] / "src" / "fleet" / "probe" / "payload.ps1"
+    out = subprocess.run(["pwsh", "-NoProfile", "-File", str(script)], capture_output=True,
+                         text=True, timeout=120, stdin=subprocess.DEVNULL,
+                         env={**os.environ, "FLEET_MODE": "full",
+                              "FLEET_DISK_PATHS": "~|~\\fleet-not-here-29"}).stdout
+    assert [r.split("|")[0] for r in _disk_rows(out)] == ["~"]

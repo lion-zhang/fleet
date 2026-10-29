@@ -254,6 +254,13 @@ def test_a_folder_that_is_a_link_is_measured_by_what_it_holds(tmp_path):
     ("psql postgres://me:hunter2@db/prod", "hunter2"),
     ('python serve.py --token "two words"', "words"),
     ("HF_TOKEN='a b' python serve.py", "b'"),
+    # These went through as they were.
+    ("curl -H 'Authorization: Bearer abcdef123456' http://x", "abcdef123456"),
+    ("python a.py github_pat_11ABCDEFG0123456789abcdefghijk", "github_pat_11ABCDEFG"),
+    ("git clone https://glpat-abcdefghijklmnopqrstu@gitlab.com/x", "glpat-abcdefghij"),
+    ("redis-server --requirepass s3cret", "s3cret"),
+    ("python a.py --db-pass=s3cret", "s3cret"),
+    ("gpg --passphrase 'my phrase' --batch", "phrase'"),
 ])
 def test_a_secret_in_a_job_s_command_line_stays_on_the_machine(line, secret):
     from fleet.probe.parse import redact
@@ -264,7 +271,8 @@ def test_a_secret_in_a_job_s_command_line_stays_on_the_machine(line, secret):
 def test_redaction_leaves_ordinary_flags_alone():
     from fleet.probe.parse import redact
 
-    line = "python train.py --keyframes 3 --monkey 2 --lr 3e-4 http://host:8000/v1"
+    line = ("python train.py --keyframes 3 --monkey 2 --lr 3e-4 http://host:8000/v1 "
+            "--passes 3 --bypass-cache 1")
     assert redact(line) == line
 
 
@@ -400,3 +408,23 @@ def test_a_network_share_that_hangs_does_not_hold_the_probe(tmp_path, bin_):
     snap = parse_payload(out)
     assert took < usual + 10
     assert any(d.mount == "/" for d in snap.disks)
+
+
+@linux
+def test_the_users_folders_replace_the_machines_kind_by_kind(tmp_path):
+    """The docs and the parser lay the user's machine.yaml over /etc/fleet's, kind by kind,
+    but the probe sized both: /etc's models folder was listed, and alerted on as missing,
+    beside the user's models folder that replaced it."""
+    sysfile = tmp_path / "etc-machine.yaml"
+    sysfile.write_text("paths:\n  models: /sys/models\n  scratch: /sys/scratch\n")
+    home = tmp_path / "home"
+    (home / ".config" / "fleet").mkdir(parents=True)
+    (home / ".config" / "fleet" / "machine.yaml").write_text("paths:\n  models: [/u/m1, /u/m2]\n")
+    script = tmp_path / "payload.sh"
+    script.write_text(PAYLOAD.read_text().replace("/etc/fleet/machine.yaml", str(sysfile)))
+    out = subprocess.run(["sh", str(script)], capture_output=True, text=True, timeout=60,
+                         env={"PATH": os.environ["PATH"], "HOME": str(home)}).stdout
+    snap = parse_payload(out)
+    assert snap.notes["paths"] == {"models": ["/u/m1", "/u/m2"], "scratch": ["/sys/scratch"]}
+    assert sorted((s.kind, s.path) for s in snap.storage) == [
+        ("models", "/u/m1"), ("models", "/u/m2"), ("scratch", "/sys/scratch")]

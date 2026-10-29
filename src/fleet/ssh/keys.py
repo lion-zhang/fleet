@@ -35,6 +35,33 @@ def public_key(ssh_dir: Path | None = None) -> tuple[Path, str] | None:
     return None
 
 
+def pinned_public_key(identity: str) -> tuple[tuple[Path, str] | None, list[str]]:
+    """The public half of the key a machine is pinned to (`-i`), and what to run first.
+
+    Only that key: fleet reaches the machine with IdentitiesOnly, so another key of yours
+    on it lets nothing in. A key from a cloud provider (a `.pem`) has no `.pub` beside
+    it; its public half is worked out with `ssh-keygen -y`, never asking for a passphrase.
+    The lines say how to write the `.pub` once, which `ssh-copy-id -i` needs.
+    """
+    import os
+    import subprocess
+
+    pub = Path(identity + ".pub")
+    if pub.is_file() and (text := pub.read_text(encoding="utf-8").strip()):
+        return (pub, text), []
+    quote = (lambda x: f'"{x}"') if os.name == "nt" else shlex.quote
+    make = [f"its public key is not beside it; write it once:  "
+            f"ssh-keygen -y -f {quote(identity)} > {quote(identity + '.pub')}"]
+    try:
+        out = subprocess.run(["ssh-keygen", "-y", "-P", "", "-f", identity],
+                             capture_output=True, text=True, timeout=10,
+                             stdin=subprocess.DEVNULL)
+    except (OSError, subprocess.SubprocessError):
+        return None, make
+    text = out.stdout.strip() if out.returncode == 0 else ""
+    return ((pub, text) if text.startswith(("ssh-", "ecdsa-", "sk-")) else None), make
+
+
 def posix_install_line(pubkey: str) -> str:
     """What to run on a Linux or macOS machine to let this key in."""
     return ("umask 077; mkdir -p ~/.ssh && "

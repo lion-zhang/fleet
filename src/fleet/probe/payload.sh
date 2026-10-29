@@ -383,10 +383,8 @@ done
 # The `paths:` block of those files, as kind|path lines. Reads the shapes YAML allows for
 # a list of strings -- `models: /a`, `models: [/a, /b]`, and `models:` then `- /a` -- which
 # is everything `fleet edit --path` writes and what people write by hand.
-store_paths() {
-  for f in "$notes_sys" "$notes_user"; do
-    [ -n "$f" ] || continue
-    awk '
+paths_in() {
+  awk '
       function out(k, v) { gsub(/^[ \t"\047]+|[ \t"\047]+$/, "", v); if (k != "" && v != "") print k "|" v }
       /^[^ \t#]/ { inp = ($0 ~ /^paths:[ \t]*(#.*)?$/); k = ""; next }
       !inp || /^[ \t]*(#.*)?$/ { next }
@@ -396,8 +394,19 @@ store_paths() {
         v = $0; sub(/^[^:]*:[ \t]*/, "", v); sub(/[ \t]+#.*/, "", v)
         if (v ~ /^\[/) { gsub(/[][]/, "", v); n = split(v, a, ","); for (i = 1; i <= n; i++) out(k, a[i]) }
         else out(k, v)
-      }' "$f" 2>/dev/null
-  done | while IFS='|' read -r k p; do
+      }' "$1" 2>/dev/null
+}
+store_paths() {
+  # The user's file over the machine's, kind by kind, as the parser lays them: a kind the
+  # user's file names is that file's alone. Both were read whole, and the machine's
+  # folder was sized, listed and alerted on beside the one that replaced it.
+  mine=""; [ -n "$notes_user" ] && mine=$(paths_in "$notes_user")
+  kinds=" $(printf '%s\n' "$mine" | cut -d'|' -f1 | tr '\n' ' ')"
+  { [ -n "$notes_sys" ] && paths_in "$notes_sys" | while IFS='|' read -r k p; do
+      case "$kinds" in *" $k "*) ;; *) printf '%s|%s\n' "$k" "$p" ;; esac
+    done
+    [ -n "$mine" ] && printf '%s\n' "$mine"
+  } | while IFS='|' read -r k p; do
     case "$p" in "~") p=$HOME ;; "~/"*) p="$HOME/${p#\~/}" ;; esac
     printf '%s|%s\n' "$k" "$p"
   done | awk '!seen[$0]++' | head -40

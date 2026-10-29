@@ -63,17 +63,18 @@ def _provider(dev: Device, snap: dict | None) -> str:
     return ""
 
 
-def _key_lines(ep: Endpoint | None, *, windows: bool) -> list[str]:
+def _key_lines(ep: Endpoint | None, *, windows: bool, copy_id: bool = True) -> list[str]:
     # The key this machine is reached with, when the endpoint names one; else yours.
-    found = None
+    # Never yours instead of that one: it is reached with IdentitiesOnly, so the line for
+    # ~/.ssh/id_ed25519.pub let nothing in, and beside a .pem with no .pub it said "you
+    # have no ssh key yet".
+    make_pub: list[str] = []
     if ep is not None and ep.identity:
-        from pathlib import Path
-
-        pub = Path(ep.identity + ".pub")
-        if pub.is_file() and (text := pub.read_text(encoding="utf-8").strip()):
-            found = (pub, text)
-    found = found or keys.public_key()
-    if found is None:
+        found, make_pub = keys.pinned_public_key(ep.identity)
+        if found is None:
+            return make_pub + ["then run fleet doctor again for the line that puts it on "
+                               "the machine"]
+    elif (found := keys.public_key()) is None:
         return ["you have no ssh key yet -- make one first:  ssh-keygen -t ed25519",
                 "then run fleet doctor again for the line that puts it on the machine"]
     _, pub = found
@@ -83,8 +84,9 @@ def _key_lines(ep: Endpoint | None, *, windows: bool) -> list[str]:
                 "or, if that user is an administrator, as administrator:",
                 keys.windows_install_line(pub, admin=True)]
     lines = []
-    if ep is not None and (argv := keys.copy_id_argv(ep)):
-        lines += ["from here, typing its password once:", " ".join(argv),
+    if copy_id and ep is not None and (argv := keys.copy_id_argv(ep)):
+        # ssh-copy-id -i reads KEY.pub, and stopped at "failed to open ID file" without it
+        lines += [*make_pub, "from here, typing its password once:", " ".join(argv),
                   "or on that machine:"]
     else:
         lines += ["on that machine:"]
@@ -197,7 +199,7 @@ def advise(dev: Device, status: str, detail: str, *, snap: dict | None = None,
     if provider in _PROVIDERS:
         v.why = "the rental does not have your public key"
         v.fix = [f"add it to your provider account -- {_PROVIDERS[provider]}"]
-        v.fix += _key_lines(None, windows=False)[-2:]
+        v.fix += _key_lines(ep, windows=False, copy_id=False)[-2:]
         return v
     if "too many authentication failures" in text:
         v.why = "ssh offered too many keys before the right one, and the server gave up"
