@@ -1795,7 +1795,10 @@ def cmd_top(name: str = typer.Argument(None, help="one device, instead of the wh
         rows = (_live_tick(conn, devices, schedule, cfg, detail, named=bool(name)) if probe
                 else rows_mod.render(conn, devices, detail))
         if name:
-            return render_device(rows[0], live_within)
+            # The fleet view said how to leave; one machine's said nothing at all.
+            return Group(render_device(rows[0], live_within),
+                         *([Text.from_markup("\n[dim]q quit   r refresh[/dim]")] if keys
+                           else []))
         view = fleet_view(rows)
         shown = _rows_that_fit(rows, console.height - 3) if live else rows
         table = render_fleet(shown, view["summary"], live_within, width=console.width)

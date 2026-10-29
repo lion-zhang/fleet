@@ -30,6 +30,10 @@ command line. NVIDIA cards are read with `nvidia-smi`, AMD cards with `amd-smi` 
 are not counted as jobs. `fleet top` shows the same in its JOBS column, and `fleet show
 NAME` lists them under each GPU.
 
+A GPU in use by processes your login cannot see, such as a job in a container or another
+user's, is listed under `busy` with the memory it holds and how busy it is
+(`busy_unseen` in `--json`). It is someone's, so it is not listed as idle either.
+
 **Secrets are taken out of command lines before fleet shows or keeps them.** A job
 started with `--hf-token hf_…`, `--api-key=…`, `--password …`, `HF_TOKEN=…`, an
 `Authorization: Bearer …` header, or a value that looks like a key (`sk-…`, `ghp_…`,

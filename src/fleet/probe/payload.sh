@@ -545,7 +545,11 @@ if [ "$FLEET_MODE" != "shared" ]; then
     gpu_apps | while IFS='|' read -r guuid gpid gmem; do
           [ -n "$gpid" ] || continue
           # never trust nvidia-smi's process_name: for GUI apps it is ~1KB of flags.
-          info=$(ps -o user=,etimes=,comm= -p "$gpid" 2>/dev/null | head -1 \
+          # user:64, or procps cuts a name past 8 characters to "research+" whenever
+          # another column follows it: the one thing that says whose job it is. The
+          # plain form is for a ps that takes no width.
+          info=$({ ps -o user:64=,etimes=,comm= -p "$gpid" 2>/dev/null \
+                   || ps -o user=,etimes=,comm= -p "$gpid" 2>/dev/null; } | head -1 \
                  | awk '{u=$1; e=$2; $1=""; $2=""; sub(/^ +/,""); printf "%s|%s|%s", u, e, $0}')
           [ -n "$info" ] || info="||"
           # The command line says what the job is ("python train.py"), where comm only
@@ -572,7 +576,8 @@ if [ "$FLEET_MODE" != "shared" ]; then
               n=split($0,a,"/"); printf "%s|%s|%s|%s|%s|%s\n",p,u,c,r,e,a[n]}' \
       | sort -t'|' -k3 -rn | head -10
   else
-    ps -eo pid=,ppid=,user=,pcpu=,rss=,etimes=,comm= 2>/dev/null \
+    { ps -eo pid=,ppid=,user:64=,pcpu=,rss=,etimes=,comm= 2>/dev/null \
+        || ps -eo pid=,ppid=,user=,pcpu=,rss=,etimes=,comm= 2>/dev/null; } \
       | awk -v me="$$" '$1 != me && $2 != me && $4+0>1.0 && $6+0>=1 {
               c=$7; for (i = 8; i <= NF; i++) c = c " " $i     # "Web Content", not "Web"
               printf "%s|%s|%s|%s|%s|%s\n",$1,$3,$4,$5,$6,c}' \
