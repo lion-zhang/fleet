@@ -229,6 +229,13 @@ def diagnose(dev: Device, *, state: dict | None, snap: dict | None) -> Verdict:
     adding = not dev.id
     eps = inv.endpoints_of(dev)
     if not eps:
+        from .identity import local_device_id
+
+        if dev.id and dev.id == local_device_id():
+            # `fleet doctor vm` on vm itself said "unreachable: no address recorded",
+            # and to give it an ssh address: fleet reads this machine with no ssh at all.
+            return Verdict(name=dev.name, status=Status.OK.value,
+                           why="this machine: fleet reads it here, with no ssh")
         return advise(dev, "unreachable", "", snap=snap, adding=adding)
     # A fresh connection, not a multiplexed one: an open master from a minute ago would
     # answer for a machine that has since stopped letting us in.

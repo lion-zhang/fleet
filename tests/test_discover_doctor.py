@@ -541,3 +541,16 @@ def test_doctor_on_an_address_not_in_the_list_says_add_not_edit(monkeypatch):
     v = doctor.diagnose(dev, state=None, snap=None)
     assert any("fleet add" in f for f in v.fix)
     assert not any("fleet edit" in f for f in v.fix)
+
+
+def test_doctor_on_this_machine_needs_no_address(monkeypatch):
+    """`fleet doctor vm`, vm being the machine it ran on, said "unreachable: there is no
+    address recorded for it" and to give it an ssh address."""
+    from fleet.ops import identity
+
+    me = Device(id="linux:machine-id:me", name="vm", kind=Kind.PERMANENT)
+    monkeypatch.setattr(identity, "local_device_id", lambda: me.id)
+    v = doctor.diagnose(me, state=None, snap=None)
+    assert v.status == Status.OK.value and "this machine" in v.why and not v.fix
+    other = Device(id="linux:machine-id:other", name="far", kind=Kind.PERMANENT)
+    assert doctor.diagnose(other, state=None, snap=None).status == "unreachable"
