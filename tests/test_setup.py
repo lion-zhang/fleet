@@ -909,3 +909,34 @@ def test_taking_fleet_out_of_a_file_kept_does_not_say_the_file_was_removed(tmp_p
     result = runner.invoke(app, ["setup", "--target", "claude", "--uninstall"])
     out = " ".join(result.output.split())
     assert f"removed {skill}" in out and "fleet from" not in out
+
+
+def test_several_targets_at_once_and_a_shared_skill_taken_out_of_both(tmp_path, monkeypatch):
+    """`--target claude --target codex` set up codex alone, silently. And with Codex and
+    Gemini CLI both here, the skill they share was "kept for gemini" when uninstalling
+    codex and "kept for codex" when uninstalling gemini: one at a time never removed it,
+    and nothing said how."""
+    from pathlib import Path
+
+    from typer.testing import CliRunner
+
+    from fleet.cli import app
+
+    monkeypatch.setattr(Path, "home", classmethod(lambda cls: tmp_path))
+    for d in (".codex", ".gemini", ".claude"):
+        (tmp_path / d).mkdir()
+    runner = CliRunner()
+    r = runner.invoke(app, ["setup", "--target", "claude", "--target", "codex"])
+    assert r.exit_code == 0, r.output
+    claude = tmp_path / ".claude" / "skills" / "fleet" / "SKILL.md"
+    shared = tmp_path / ".agents" / "skills" / "fleet" / "SKILL.md"
+    assert claude.exists() and shared.exists()
+
+    r = runner.invoke(app, ["setup", "--uninstall", "--target", "codex"])
+    assert shared.exists()
+    out = " ".join(r.output.split())
+    assert "fleet setup --uninstall --target codex --target gemini" in out, out
+    r = runner.invoke(app, ["setup", "--uninstall", "--target", "codex,gemini"])
+    assert r.exit_code == 0, r.output
+    assert not shared.exists() and claude.exists()
+    assert runner.invoke(app, ["setup", "--target", "codex,nosuch"]).exit_code == 2

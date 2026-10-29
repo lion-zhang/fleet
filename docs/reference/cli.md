@@ -336,7 +336,7 @@ fleet setup --dry-run
 
 | Option | |
 |---|---|
-| `--target` | an agent name, or all \| auto (whatever is installed) (default: `auto`) |
+| `--target` | an agent name, or all \| auto (whatever is installed; the default); repeat it, or use commas, for several |
 | `--project` | write into the current directory, not your home |
 | `--dry-run` | show what would change; write nothing |
 | `--uninstall` | remove what setup installed |

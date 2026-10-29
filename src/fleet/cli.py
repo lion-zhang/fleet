@@ -2098,8 +2098,10 @@ def _ago(seconds: int) -> str:
 
 @app.command("setup")
 def cmd_setup(
-    target: str = typer.Option("auto", "--target",
-                               help="an agent name, or all | auto (whatever is installed)"),
+    target: list[str] = typer.Option([], "--target",
+                                     help="an agent name, or all | auto (whatever is "
+                                          "installed; the default); repeat it, or use "
+                                          "commas, for several"),
     project: bool = typer.Option(False, "--project",
                                  help="write into the current directory, not your home"),
     dry_run: bool = typer.Option(False, "--dry-run", help="show what would change; write nothing"),
@@ -2139,30 +2141,39 @@ def cmd_setup(
         if not changed:
             console.print("[dim]· agent skills already match this fleet[/dim]")
         return
-    if target == "auto":
+    # Several at once: `--target claude --target codex` kept the last alone, silently, and
+    # an agent's skill shared with another (~/.agents/skills) could only be taken out
+    # of one by naming both -- each alone answered "kept for" the other.
+    names = list(dict.fromkeys(t.strip() for item in target for t in item.split(",")
+                               if t.strip())) or ["auto"]
+    if unknown := [t for t in names if t not in (*TARGETS, *mcp_names, "all", "auto")]:
+        err.print(f"[red]Unknown target {unknown[0]!r}[/red]  "
+                  f"({' | '.join((*TARGETS, *mcp_names))} | all | auto)")
+        raise typer.Exit(2)
+    if "all" in names:
+        targets = list(TARGETS)
+        clients = [] if project else list(mcp_names)
+    elif names == ["auto"]:
         # cwd tells us nothing about which agents you use, so a project install
         # assumes the one whose layout is identical in both scopes.
         targets = ["claude"] if project else detect_targets(root)
         clients = [] if project else detect_mcp_clients(root)
-    elif target == "all":
-        targets = list(TARGETS)
-        clients = [] if project else list(mcp_names)
     else:
-        targets = [target] if target in TARGETS else []
-        clients = [target] if target in mcp_names else []
-        if clients and project and not {c.name: c for c in MCP_CLIENTS}[target].project:
+        if "auto" in names:
+            names.remove("auto")
+            names += [t for t in (["claude"] if project else detect_targets(root))
+                      + ([] if project else detect_mcp_clients(root)) if t not in names]
+        targets = [t for t in names if t in TARGETS]
+        clients = [t for t in names if t in mcp_names]
+        per_user = {c.name for c in MCP_CLIENTS if not c.project}
+        if project and (one := next((t for t in clients if t in per_user), None)):
             # It wrote .config/Claude/claude_desktop_config.json into the repo, where no
             # desktop app looks, and said "created". Cursor (.cursor/mcp.json) and VS Code
             # (.vscode/mcp.json) read one in a project; VS Code was refused as if not.
-            err.print(f"[red]{target} keeps one config for you, not one per project[/red]  "
-                      f"[dim]-- run [bold]fleet setup --target {target}[/bold] without "
+            err.print(f"[red]{one} keeps one config for you, not one per project[/red]  "
+                      f"[dim]-- run [bold]fleet setup --target {one}[/bold] without "
                       "--project[/dim]")
             raise typer.Exit(2)
-
-    if unknown := [t for t in [target] if t not in (*TARGETS, *mcp_names, "all", "auto")]:
-        err.print(f"[red]Unknown target {unknown[0]!r}[/red]  "
-                  f"({' | '.join((*TARGETS, *mcp_names))} | all | auto)")
-        raise typer.Exit(2)
     # Only once the target is known to be one: `--target nosuch` recorded this machine
     # and said "✓ fleet is ready here" before refusing.
     if not (remove or dry_run):
@@ -2192,6 +2203,12 @@ def cmd_setup(
 
     for c in changes:
         _print_change(c, dry_run)
+    if kept := [c for c in changes if c.action.startswith("kept for ")]:
+        others = [o for c in kept for o in c.action.removeprefix("kept for ").split(", ")]
+        named = " ".join(f"--target {t}" for t in dict.fromkeys([*targets, *others]))
+        err.print("[dim]· kept: other agents read the same skill file. To take it out of "
+                  f"them too: [bold]fleet setup --uninstall {named}"
+                  f"{' --project' if project else ''}[/bold][/dim]")
     for action, why in (("unreadable", "not plain JSON or text fleet can rewrite safely "
                          "(not UTF-8, or JSON with comments or trailing commas, which VS "
                          "Code allows), so it was left exactly as it was; add fleet to it "
