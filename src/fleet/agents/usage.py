@@ -127,8 +127,10 @@ A name may be omitted where the obvious subject is the machine you are on.
   start work there without asking unless the job is yours.
 - Connect with `{cmd} ssh NAME`. Never hand-build an `ssh` invocation from inventory
   fields: the wrapper resolves the endpoint and connects as the user does.
-- Treat `alerts` as blocking. A device reporting unattributed VRAM is not free, and a
-  rental flagged idle is costing money right now.
+- Treat `alerts` as blocking. A GPU with memory "held by processes not visible to us --
+  do not treat as free" is someone's (fleet counts it busy), and a rental flagged idle
+  is costing money right now. One whose alert says "a desktop's windows, or a job just
+  starting" holds less: ask before using that GPU.
 - `status` is not a boolean. `auth_failed` means the host is UP but refused us. fleet
   manages no access -- it connects exactly as the user does, with their ssh config,
   keys, agent and Tailscale SSH -- so the fix is the user's to make: run `{cmd} doctor
