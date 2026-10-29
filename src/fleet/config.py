@@ -117,7 +117,13 @@ def load_config() -> Config:
     # showed every machine offline, and `snapshot_retention: 0` deleted each reading as
     # it was stored.
     for key, default in DEFAULTS.items():
-        if isinstance(default, int):
+        if isinstance(default, str) and not isinstance(data[key], str):
+            # `repo: 5` or `repo: yes` became the URL "5" or "True" that `fleet install`
+            # then tried to clone.
+            if data[key] is not None:
+                _warn(key, f"{data[key]!r} is not text; using the default")
+            data[key] = default
+        elif isinstance(default, int):
             least = _LEAST.get(key, 0)
             try:
                 # `probe_timeout_s: no` is YAML for False, which int() reads as 0: every
@@ -128,12 +134,22 @@ def load_config() -> Config:
                 if value < least:
                     raise ValueError
                 data[key] = value
-            except (TypeError, ValueError):
-                why = ("is not a number" if isinstance(data[key], bool)
-                       or not isinstance(data[key], (int, float)) else f"is less than {least}")
-                _warn(key, f"{data[key]!r} {why}; using {default}")
+            except (TypeError, ValueError, OverflowError):
+                # `.inf` is YAML for infinity, which int() refuses with OverflowError:
+                # every command stopped on a traceback. It and `.nan` are not numbers here.
+                v = data[key]
+                why = ("is not a number" if isinstance(v, bool)
+                       or not isinstance(v, (int, float)) or v != v or v in (_INF, -_INF)
+                       else f"is less than {least}")
+                # `no`, `off` and `false` all load as False: "False is not a number"
+                # quoted something nobody wrote.
+                shown = "a yes/no value" if isinstance(v, bool) else repr(v)
+                _warn(key, f"{shown} {why}; using {default}")
                 data[key] = default
     return Config(data)
+
+
+_INF = float("inf")
 
 
 def _warn(key: str, what: str) -> None:
