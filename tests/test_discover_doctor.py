@@ -212,7 +212,8 @@ def test_a_machine_pinned_to_a_key_is_told_that_key_not_yours(tmp_path, monkeypa
         v = doctor.advise(dev, Status.AUTH_FAILED.value, "Permission denied (publickey)")
         text = "\n".join(v.fix)
         assert pub in text and mykey not in text and "no ssh key yet" not in text
-        assert f"ssh-keygen -y -f {key}" in text           # ssh-copy-id -i needs the .pub
+        if keys.copy_id_argv(doctor.inv.endpoints_of(dev)[0]):   # it needs the .pub; Windows has none
+            assert f"ssh-keygen -y -f {key}" in text
     v = doctor.advise(_dev(kind=Kind.RENTAL, provider="vastai"), Status.AUTH_FAILED.value, "x")
     assert not any("ssh-copy-id" in f for f in v.fix)
 
