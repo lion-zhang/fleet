@@ -420,10 +420,12 @@ def _print_show(r: dict) -> None:
         return f" [dim]and {more} more[/dim]" if more > 0 else ""
 
     for m in r.get("models", []):
-        where = m["url"] or "local only"
+        down = m.get("reach") == "down"
+        where = "nothing answers there" if down else m["url"] or "local only"
         console.print(f"  [bold]models[/bold] :{m['port']} {escape(m['framework'] or '')} [dim]{escape(where)}[/dim]  "
                       + (escape(", ".join(m["models"][:6])) + _more(m, 6) if m["models"]
                          else "[yellow]wants an API key[/yellow]" if m["status"] == "auth"
+                         else "[yellow]not running[/yellow]" if down
                          else "[dim]none listed[/dim]"))
     sw = r.get("software") or {}
     if sw.get("system"):
@@ -542,7 +544,10 @@ def _edit_machine_file(dev, json_out: bool, *, paths: list[str], endpoints: list
             store.expire(conn, dev.id)
         finally:
             conn.close()
+    had = notes_mod.parse(before).get("endpoints", {})
     doc = {"ok": True, "name": dev.name, "changed": before != after, **result}
+    if missing := [n for n, v in servers.items() if v is None and n not in had]:
+        doc["not_declared"] = missing         # to remove, and never there: a typo, likely
     if json_out:
         if emit:
             _emit(doc, True)
@@ -556,6 +561,12 @@ def _edit_machine_file(dev, json_out: bool, *, paths: list[str], endpoints: list
                                 or cost is not None):
             console.print(f"[dim]· {dev.name} has no tag "
                           f"{escape(', '.join(tags_remove))}.[/dim]")
+        elif (servers and all(v is None for v in servers.values())
+              and not (paths or tags_add or tags_remove or note is not None
+                       or cost is not None)):
+            # A misspelt name to remove said "already says that", and the server stayed.
+            console.print(f"[dim]· {dev.name} declares no server "
+                          f"{escape(', '.join(servers))}.[/dim]")
         else:
             console.print(f"[dim]· {dev.name}'s machine.yaml already says that.[/dim]")
         return doc
@@ -565,6 +576,9 @@ def _edit_machine_file(dev, json_out: bool, *, paths: list[str], endpoints: list
                       + (escape(", ".join(items)) if items else "[dim]cleared[/dim]"))
     for name in servers:
         ep = result.get("endpoints", {}).get(name)
+        if not ep and name not in had:
+            console.print(f"[dim]· {dev.name} declares no server {escape(name)}.[/dim]")
+            continue
         console.print(f"[green]✓[/green] {dev.name} server {escape(name)}: "
                       + (escape(f":{ep['port']}{ep['path']}") if ep else "[dim]removed[/dim]"))
     if tags_add or tags_remove:

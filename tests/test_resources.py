@@ -783,6 +783,26 @@ def test_a_declared_server_on_every_interface_is_reached_at_its_url():
     assert row["reach"] == "network" and row["url"].endswith(":9000/v1")
 
 
+def test_a_declared_server_that_is_not_running_says_so_and_offers_no_tunnel(capsys):
+    """Down, it was listed as "local only, tunnel: ssh -N -L ..." and "none listed": as if
+    it ran and kept to itself, and an agent dug a tunnel to a closed port."""
+    from fleet.render.top import render_models
+    from fleet.render.view import models_view
+
+    out = ("#FLEET v1\nnotes.user=" + base64.b64encode(b"endpoints:\n  mine: 9000\n").decode()
+           + "\n#LISTEN proto|addr|port|pid|comm\n#LLMMODEL port|status|ms|model\n9000|down|0|\n"
+           "#END rc=0\n")
+    snap = parse_payload(out).to_dict()
+    (row,) = model_servers(_dev(), snap)
+    assert row["reach"] == "down" and "tunnel" not in row
+    from rich.console import Console
+    con = Console(width=200, record=True)
+    for part in render_models(models_view([{"name": "lab", "status": "ok", "models": [row]}])):
+        con.print(part)
+    text = con.export_text()
+    assert "not running" in text and "ssh -N" not in text and "local only" not in text, text
+
+
 def test_endpoint_specs_are_checked():
     assert notes.endpoint_spec("9000") == {"port": 9000, "path": ""}
     assert notes.endpoint_spec("9000/v1") == {"port": 9000, "path": "/v1"}
@@ -936,3 +956,19 @@ def test_an_edit_the_reader_would_cut_is_refused_not_cut(edit, said):
 def test_a_file_already_past_a_limit_by_hand_still_takes_other_edits():
     text = "notes: " + "x " * 800 + "\n"
     assert notes.parse(notes.edit(text, cost=2.0))["cost"] == {"usd_per_hour": 2.0}
+
+
+def test_a_machine_that_did_not_answer_is_named_by_models_and_ps():
+    """`fleet models gpu` and `fleet ps gpu` on a machine that was down said "No model
+    servers found" and "No jobs on any GPU." and nothing else, as if it had been read."""
+    from fleet.render.top import render_models, render_ps
+    from fleet.render.view import jobs_view, models_view
+
+    down = {"name": "gpu", "status": "refused", "gpu_count": 0, "gpus": []}
+    seen = {**down, "name": "old", "last_ok_at": 1}
+    ok = {"name": "vm", "status": "ok", "gpu_count": 0, "gpus": []}
+    assert models_view([down, ok])["not_read"] == ["gpu"]
+    # One read before and found with no GPUs is not missed by `ps`; one never read is.
+    assert jobs_view([down, seen, ok])["not_read"] == ["gpu"]
+    for parts in (render_models(models_view([down])), render_ps(jobs_view([down]))):
+        assert "not read just now: gpu" in " ".join(map(str, parts))

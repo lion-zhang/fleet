@@ -43,7 +43,8 @@ A name may be omitted where the obvious subject is the machine you are on.
   long, the command), and which GPUs are idle
 - `{cmd} models --json` -- every model being served: machine, server, `url`, and for a
   server that only listens on its own machine a `tunnel` (an `ssh -L` command) to reach
-  it. Also the folders each machine keeps models in
+  it; `reach: down` is a server the machine declares that is not running. Also the
+  folders each machine keeps models in
 - What is cached, and how to read it again now:
   | what | kept | read again with |
   |---|---|---|

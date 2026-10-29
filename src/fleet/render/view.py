@@ -343,6 +343,9 @@ def model_servers(dev: Device, snap: dict | None, *, here: bool = False,
             continue
         addr, port = str(s.get("addr") or "*"), s.get("port")
         local = addr.startswith(_LOOPBACK)
+        # A declared server with nothing on its port: offering its URL or a tunnel to it
+        # read as "running, but private", and an agent dug a tunnel to a closed port.
+        down = s.get("status") == "down"
         # A server on IPv6 loopback alone is not at 127.0.0.1, here or down a tunnel.
         loop = "[::1]" if addr.strip("[]") == "::1" else "127.0.0.1"
         host = loop if here else _host_of(dev, state)
@@ -356,11 +359,11 @@ def model_servers(dev: Device, snap: dict | None, *, here: bool = False,
             "source": s.get("source") or "discovered",
             "name": s.get("name") if s.get("source") == "declared" else "",
             # here: the machine fleet runs on, where even a localhost-only server answers
-            "reach": "here" if here else "local" if local else "network",
+            "reach": "down" if down else "here" if here else "local" if local else "network",
             "url": None if (local and not here) or not host
             else f"http://{_url_host(host)}:{port}{base}",
         }
-        if eps and not here:
+        if eps and not here and not down:
             # The way fleet itself gets in, key and jump host too: without the machine's
             # own key the tunnel asked for a password a rental does not have.
             row["tunnel"] = (f"ssh -N -L {port}:{loop}:{port}"
@@ -689,7 +692,10 @@ def jobs_view(rows: list[dict]) -> dict:
                              "vram_free_mib": g["vram_free_mib"],
                              "shared_memory": bool(g.get("shared_memory"))})
     return {"jobs": jobs, "idle": idle,
-            "not_read": [r["name"] for r in rows if r["status"] != "ok" and r["gpu_count"]]}
+            # Never read, its GPUs are not known to be none: `fleet ps gpu` on a machine
+            # that was down said "No jobs on any GPU." and nothing else.
+            "not_read": [r["name"] for r in rows if r["status"] != "ok"
+                         and (r["gpu_count"] or not r.get("last_ok_at"))]}
 
 
 def select_fields(row: dict, fields: list[str]) -> dict:
@@ -702,7 +708,10 @@ def models_view(rows: list[dict]) -> dict:
     """`fleet models`: every model server across the fleet, and the model folders."""
     return {"servers": [{"machine": r["name"], **m} for r in rows for m in r.get("models", [])],
             "model_folders": [{"machine": r["name"], **st} for r in rows
-                              for st in (r.get("storage") or {}).get("models", [])]}
+                              for st in (r.get("storage") or {}).get("models", [])],
+            # A machine that did not answer: "No model servers found" was all it said,
+            # as if it had been looked at and serves nothing.
+            "not_read": [r["name"] for r in rows if r["status"] != "ok"]}
 
 
 def fleet_view(rows: list[dict]) -> dict:
