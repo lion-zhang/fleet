@@ -85,6 +85,14 @@ def test_an_alias_equal_to_its_own_name_is_refused():
         apply_edits(dev, alias="lin-xps", taken=set())
 
 
+def test_renaming_a_machine_to_its_alias_drops_the_alias():
+    """`fleet edit lin-xps --name x` left it answering to x twice, shown as "x (x)"."""
+    dev = Device(id="id:xps", name="lin-xps", alias="x", kind=Kind.PERMANENT)
+    out = apply_edits(dev, name="x", taken=set())
+    assert (dev.name, dev.alias) == ("x", "")
+    assert "alias x -> (none): it is the name now" in out.changes
+
+
 def test_a_machine_keeps_its_own_alias_when_edited():
     """`handles(excluding=...)` leaves this machine out, or re-setting the same alias --
     or any other edit that passes it through -- would collide with itself."""

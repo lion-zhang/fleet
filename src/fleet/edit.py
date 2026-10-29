@@ -124,6 +124,11 @@ def apply_edits(dev: Device, *, endpoint: Endpoint | None = None,
             raise ValueError(f"another machine already answers to {name!r}")
         out.changes.append(f"name {dev.name} -> {name}")
         dev.name = name
+        if alias is None and dev.alias == name:
+            # Renamed to its own alias: it went on answering to `l` twice, shown as
+            # "l (l)" -- the alias `--name l --alias l` is refused for.
+            out.changes.append(f"alias {dev.alias} -> (none): it is the name now")
+            dev.alias = ""
     if alias is not None and alias != dev.alias:
         # Empty clears it. Checked against names as well as aliases: the whole point of
         # an alias is that you can type it where a name goes, so one that shadowed
