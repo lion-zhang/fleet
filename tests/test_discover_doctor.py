@@ -194,6 +194,29 @@ def test_a_rental_is_told_to_add_the_key_to_the_provider_account(mykey):
     assert "provider" in v.fix[0] and "vast.ai" in v.fix[0]
 
 
+@pytest.mark.skipif(not __import__("shutil").which("ssh-keygen"), reason="needs ssh-keygen")
+def test_a_machine_pinned_to_a_key_is_told_that_key_not_yours(tmp_path, monkeypatch, mykey):
+    """Added with `-i key.pem` it is reached with IdentitiesOnly, so only that key gets in.
+    With no .pub beside the .pem, doctor gave the line for ~/.ssh/id_ed25519.pub -- which
+    let nothing in -- or, with no key there, "you have no ssh key yet"."""
+    import subprocess
+
+    key = tmp_path / "rental.pem"
+    subprocess.run(["ssh-keygen", "-q", "-t", "ed25519", "-N", "", "-f", str(key)], check=True)
+    pub = (tmp_path / "rental.pem.pub").read_text().strip()
+    (tmp_path / "rental.pem.pub").unlink()
+    dev = _dev()
+    dev.endpoints[0]["identity"] = str(key)
+    for yours in (mykey, None):
+        monkeypatch.setattr(keys, "public_key", lambda *a: yours and (tmp_path / "id.pub", yours))
+        v = doctor.advise(dev, Status.AUTH_FAILED.value, "Permission denied (publickey)")
+        text = "\n".join(v.fix)
+        assert pub in text and mykey not in text and "no ssh key yet" not in text
+        assert f"ssh-keygen -y -f {key}" in text           # ssh-copy-id -i needs the .pub
+    v = doctor.advise(_dev(kind=Kind.RENTAL, provider="vastai"), Status.AUTH_FAILED.value, "x")
+    assert not any("ssh-copy-id" in f for f in v.fix)
+
+
 def test_no_key_at_all_says_to_make_one_first(monkeypatch):
     monkeypatch.setattr(keys, "public_key", lambda *a: None)
     v = doctor.advise(_dev(), Status.AUTH_FAILED.value, "denied")

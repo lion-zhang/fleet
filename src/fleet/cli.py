@@ -964,7 +964,11 @@ def _offer_copy_id(ssh_command: str, dev, res, *, name, kind, alias, taken):
     from .ui import confirm
 
     eps = inv.endpoints_of(dev)
-    if not eps or not sys.stdin.isatty() or public_key() is None:
+    if not eps or not sys.stdin.isatty():
+        return dev, res
+    # The key it is pinned to (`-i`), which ssh-copy-id reads from KEY.pub; else yours.
+    if not (Path(eps[0].identity + ".pub").is_file() if eps[0].identity
+            else public_key() is not None):
         return dev, res
     argv = copy_id_argv(eps[0])
     if argv is None:
