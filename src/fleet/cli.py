@@ -2031,7 +2031,11 @@ def cmd_ssh(ctx: typer.Context,
     if ep.port and ep.port != 22:
         argv += ["-p", str(ep.port)]
     if ep.identity:
-        argv += ["-i", ep.identity]
+        # As the probe does: a machine recorded with a key of its own is offered that key
+        # alone. Without it the agent's keys went first, and a rental with MaxAuthTries
+        # 3 answered `fleet ssh` "Too many authentication failures" while `fleet ls`,
+        # pinned to the key, reached it fine.
+        argv += ["-o", "IdentitiesOnly=yes", "-i", ep.identity]
     if ep.jump:
         argv += ["-J", ep.jump]
     argv += ["--", f"{ep.user}@{ep.target}" if ep.user else ep.target]

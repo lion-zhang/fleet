@@ -252,7 +252,8 @@ def build_install_argv(ep: Endpoint, *, forward_agent: bool = True,
     if ep.port and ep.port != 22:
         argv += ["-p", str(ep.port)]
     if ep.identity:
-        argv += ["-i", ep.identity]
+        # Its own key alone, as the probe and `fleet ssh` offer it: see build_argv.
+        argv += ["-o", "IdentitiesOnly=yes", "-i", ep.identity]
     if ep.jump:
         argv += ["-J", ep.jump]
     argv += ["--", f"{ep.user}@{ep.target}" if ep.user else ep.target]

@@ -201,3 +201,27 @@ def test_the_environment_is_set_in_a_way_every_login_shell_reads():
     argv = build_argv(Endpoint(target="h"), remote="sh -s", env={"FLEET_MODE": "full"})
     assert argv[-1] == "env FLEET_MODE=full sh -s"
     assert build_argv(Endpoint(target="h"), remote="sh -s")[-1] == "sh -s"
+
+
+def test_a_machine_with_a_key_of_its_own_is_offered_that_key_alone(tmp_path, monkeypatch):
+    """`fleet ls` reaches a rental added as `ssh -i ~/.ssh/vast ...` with that key alone;
+    `fleet ssh` and `fleet install` offered the agent's keys first, and a server with
+    MaxAuthTries 3 answered "Too many authentication failures"."""
+    from fleet.install import build_install_argv
+    from fleet.ssh.cmd import Endpoint, build_argv
+
+    monkeypatch.setattr(inv, "INVENTORY_PATH", tmp_path / "inventory.yaml")
+    monkeypatch.setattr(store, "DB_PATH", tmp_path / "cache.db")
+    key = tmp_path / "vast"
+    key.write_text("")
+    inv.save([Device(id="id:r", name="rental", kind=Kind.RENTAL,
+                     endpoints=[{"target": "ssh5.example.ts.net", "user": "root",
+                                 "port": 40001, "identity": str(key)}])],
+             inv.INVENTORY_PATH)
+    seen = []
+    monkeypatch.setattr(os, "execvp", lambda f, a: seen.append((f, a)))
+    CliRunner().invoke(cli.app, ["ssh", "rental", "--", "true"])
+    ep = Endpoint(target="h", user="root", identity=str(key))
+    for argv in (seen[-1][1], build_install_argv(ep), build_argv(ep)):
+        opts = argv[:argv.index("--")]
+        assert "IdentitiesOnly=yes" in opts and opts[opts.index("-i") + 1] == str(key), " ".join(argv)
