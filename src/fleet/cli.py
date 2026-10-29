@@ -189,8 +189,11 @@ def cmd_ls(names: list[str] = typer.Argument(None, help="only these devices"),
                  and not all(matches_tag(r, t) for t in tag)]
         rows = [r for r in rows if all(matches_tag(r, t) for t in tag)]
         if blind:
-            err.print(f"[dim]! {len(blind)} with no telemetry were not considered: "
-                      f"{', '.join(sorted(blind)[:6])}[/dim]")
+            # "1 ... were", and a seventh one cut from the list without a word.
+            more = f" and {len(blind) - 6} more" if len(blind) > 6 else ""
+            err.print(f"[dim]! {len(blind)} with no telemetry "
+                      f"{'was' if len(blind) == 1 else 'were'} not considered: "
+                      f"{', '.join(sorted(blind)[:6])}{more}[/dim]")
     view = fleet_view(rows)
     if fields and json_out:
         wanted = [f.strip() for f in fields.split(",") if f.strip()]

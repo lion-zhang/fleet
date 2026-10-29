@@ -86,7 +86,7 @@ def test_a_tagged_machine_with_no_reading_is_counted_as_not_considered(monkeypat
     r = CliRunner().invoke(cli.app, ["ls", "--json", "--tag", "cuda"])
     assert r.exit_code == 0, r.output
     assert {d["name"] for d in json.loads(r.stdout)["devices"]} == {"read", "unread-but-tagged"}
-    assert "1 with no telemetry were not considered" in " ".join(r.stderr.split())
+    assert "1 with no telemetry was not considered" in " ".join(r.stderr.split())
 
 
 # ------------------------------------------------------------------ this machine

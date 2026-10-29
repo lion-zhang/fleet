@@ -334,13 +334,13 @@ def test_a_machine_whose_only_fact_is_its_kind_is_counted_as_not_judged(tmp_path
     monkeypatch.setattr(cli_mod, "fleet_view", lambda rows: {"devices": rows, "summary": {}})
     r = runner.invoke(cli.app, ["ls", "--tag", "gpu"])
     said = " ".join(r.output.split())
-    assert "1 with no telemetry were not considered: a" in said
+    assert "1 with no telemetry was not considered: a" in said
     # Asked for what the list itself says, both are judged: nothing to report -- and
     # `b`, not a rental, is ruled out by that alone.
     r = runner.invoke(cli.app, ["ls", "--tag", "rental"])
     assert "not considered" not in r.output
     r = runner.invoke(cli.app, ["ls", "--tag", "rental", "--tag", "cuda"])
-    assert "1 with no telemetry were not considered: a" in " ".join(r.output.split())
+    assert "1 with no telemetry was not considered: a" in " ".join(r.output.split())
 
 
 # ------------------------------------------------------------------ portability
@@ -599,3 +599,18 @@ def test_no_ssh_is_spawned_with_a_pipe_for_stdout():
     assert not offenders, (
         "these spawn ssh directly and will hang on a Windows center -- route them "
         "through ssh.cmd.run:\n" + "\n".join(offenders))
+
+
+def test_the_count_of_machines_not_judged_reads_right_and_says_what_it_cut(tmp_path, monkeypatch):
+    """Eight unread machines were named six at a time, the other two dropped without a
+    word."""
+    from fleet import cli as cli_mod
+
+    names = [f"m{i}" for i in range(8)]
+    runner, cli = _cli(tmp_path, monkeypatch, [_dev(name=n) for n in names])
+    monkeypatch.setattr(cli_mod, "_rows", lambda *a, **k: [
+        {"name": n, "tags": [], "facts": [], "status": "timeout",
+         "observed_at": {"probe": None}} for n in names])
+    monkeypatch.setattr(cli_mod, "fleet_view", lambda rows: {"devices": rows, "summary": {}})
+    said = " ".join(runner.invoke(cli.app, ["ls", "--tag", "gpu"]).output.split())
+    assert "8 with no telemetry were not considered: m0, m1, m2, m3, m4, m5 and 2 more" in said
