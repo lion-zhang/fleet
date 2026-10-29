@@ -72,6 +72,34 @@ def test_fleet_top_stays_readable_in_a_normal_terminal(width):
     assert any("RTX 4090" in ln for ln in lines)
 
 
+@pytest.mark.parametrize("width", [50, 60])
+def test_a_phone_width_terminal_still_says_which_machines_are_up(width):
+    """In a column of its own with no header, the dot was the first thing cut to make the
+    rest fit: no row of `fleet ls` or `top` said whether its machine was up."""
+    for table in (render_ls(_rows(), width=width), render_fleet(_rows(Detail.FULL), {},
+                                                                width=width)):
+        lines = _lines(table, width)
+        named = [ln for ln in lines if "gpubox" in ln or "workstation" in ln]
+        assert len(named) == 2 and all(ln.startswith("● ") for ln in named), lines
+        assert all(len(ln.rstrip()) <= width for ln in lines)
+
+
+def test_top_says_how_old_a_down_machines_figures_are():
+    """Its last figures stayed on the row with "-" for their age, as though just read."""
+    import time
+
+    dev = Device(id="id:g", name="gpubox", kind=Kind.PERMANENT,
+                 endpoints=[{"target": "g", "user": "me", "port": 22}])
+    snap = {**_snap(), "ts": time.time() - 180}
+    row = device_view(dev, {"status": "refused", "error_class": "refused",
+                            "error_detail": "nothing listening on that port",
+                            "last_probe_at": time.time()}, snap, Detail.FULL)
+    line = next(ln for ln in _lines(render_fleet([row], {}, width=200), 200)
+                if "gpubox" in ln)
+    assert re.search(r"\b3m\b", line), line
+    assert "live" not in line
+
+
 def test_an_empty_note_column_does_not_cost_the_kind():
     """With nothing to say about any machine, NOTE stayed, empty, and at 100 columns the
     KIND column went to make room for it."""
