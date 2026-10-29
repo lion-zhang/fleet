@@ -715,8 +715,13 @@ def select_fields(row: dict, fields: list[str]) -> dict:
 
 def models_view(rows: list[dict]) -> dict:
     """`fleet models`: every model server across the fleet, and the model folders."""
-    return {"servers": [{"machine": r["name"], **m} for r in rows for m in r.get("models", [])],
-            "model_folders": [{"machine": r["name"], **st} for r in rows
+    # A machine that did not answer keeps its last reading, and that listed its servers
+    # with a tunnel to each, as if they were there now: to a machine refusing us, the
+    # tunnel offered could not even connect. It is named under not_read instead, as
+    # `fleet ps` names it.
+    read = [r for r in rows if r["status"] == "ok"]
+    return {"servers": [{"machine": r["name"], **m} for r in read for m in r.get("models", [])],
+            "model_folders": [{"machine": r["name"], **st} for r in read
                               for st in (r.get("storage") or {}).get("models", [])],
             # A machine that did not answer: "No model servers found" was all it said,
             # as if it had been looked at and serves nothing.

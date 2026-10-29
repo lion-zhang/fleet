@@ -1003,6 +1003,23 @@ def test_a_machine_that_did_not_answer_is_named_by_models_and_ps():
         assert "not read just now: gpu" in " ".join(map(str, parts))
 
 
+def test_a_machine_that_did_not_answer_lists_no_servers_from_its_last_reading():
+    """Refusing us, it was listed under `fleet models` with a tunnel to each server it had
+    served when last read, as if they were there now; the tunnel could not connect."""
+    from fleet.render.view import models_view
+
+    old = {"port": 9000, "framework": "vllm", "models": ["m"], "url": None,
+           "tunnel": "ssh -N -L 9000:127.0.0.1:9000 gpu", "status": "ok"}
+    folder = {"path": "/data/m", "exists": True, "size_gb": 3}
+    down = {"name": "gpu", "status": "auth_failed", "models": [old],
+            "storage": {"models": [folder]}}
+    up = {**down, "name": "vm", "status": "ok"}
+    view = models_view([down, up])
+    assert [s["machine"] for s in view["servers"]] == ["vm"]
+    assert [f["machine"] for f in view["model_folders"]] == ["vm"]
+    assert view["not_read"] == ["gpu"]
+
+
 def test_a_declared_server_that_answers_without_a_model_list_is_still_listed():
     """Declared at the wrong path, it answered 404 and vanished from `fleet models`: the
     one server the machine said it had, gone with no word of why."""
