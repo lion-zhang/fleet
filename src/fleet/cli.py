@@ -1454,7 +1454,13 @@ def cmd_install(name: str = typer.Argument(None,
         _no_such(devices, name)
     eps = inv.endpoints_of(dev)
     if not eps:
-        err.print(f"[red]{dev.name} has no endpoint recorded[/red]")
+        if dev.id and dev.id == identity.local_device_id():
+            # Named, this machine said "has no endpoint recorded", as if it were broken.
+            err.print(f"[red]{dev.name} is this machine[/red], which already runs fleet  "
+                      "[dim]fleet update updates it[/dim]")
+        else:
+            err.print(f"[red]{dev.name} has no endpoint recorded[/red] [dim]-- give it "
+                      f"one: fleet edit {dev.name} --ssh \"ssh user@host\"[/dim]")
         raise typer.Exit(1)
 
     url = repo or configured_repo()

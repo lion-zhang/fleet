@@ -269,6 +269,22 @@ def test_install_names_the_machine(tmp_path, monkeypatch):
     assert r.exit_code == 2 and "fleet update" in r.output
 
 
+def test_install_on_this_machine_by_name_says_it_already_runs_fleet(tmp_path, monkeypatch):
+    """`fleet install vm`, vm being this machine, said "vm has no endpoint recorded", as
+    if its record were broken."""
+    from fleet.cli import app
+    from fleet.models import Device, Kind
+    from fleet.ops import identity
+    from fleet.state import inventory as inv
+
+    runner, path = _cli(tmp_path, monkeypatch)
+    inv.save([*inv.load(path), Device(id="linux:machine-id:me", name="vm",
+                                      kind=Kind.PERMANENT)], path)
+    monkeypatch.setattr(identity, "local_device_id", lambda: "linux:machine-id:me")
+    r = runner.invoke(app, ["install", "vm"])
+    assert r.exit_code == 1 and "this machine" in r.output and "fleet update" in r.output
+
+
 # --------------------------------------------------------------- any operating system
 
 def test_a_windows_device_gets_powershell_not_sh():
