@@ -121,7 +121,7 @@ fleet edit a100 --cost 1.89          # on the machine; --local to keep it here
 ```
 
 The price shows in the `$/HR` column, and `fleet ls --json` adds up the hourly burn of
-everything online. A rental whose GPUs are all idle is flagged *RENTAL is idle -- this is
+everything that is up, including a machine that is up but refusing us. A rental whose GPUs are all idle is flagged *RENTAL is idle -- this is
 costing money*, whatever its price.
 
 ## Alerts

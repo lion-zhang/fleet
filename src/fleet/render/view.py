@@ -723,13 +723,16 @@ def models_view(rows: list[dict]) -> dict:
 
 def fleet_view(rows: list[dict]) -> dict:
     online = [r for r in rows if r["status"] == "ok"]
+    # Up, though refusing us, is still running and still billed: a rental whose key had
+    # gone read as "$0/hr", the one moment its cost mattered.
+    up = [r for r in rows if r["status"] in (Status.OK.value, Status.AUTH_FAILED.value)]
     return {
         "devices": rows,
         "summary": {
             "total": len(rows),
             "online": len(online),
             "gpus_free": sum(1 for r in online for g in r.get("gpus", []) if not g.get("busy")),
-            "rentals_running": sum(1 for r in online if r["kind"] == "rental"),
-            "hourly_burn": round(sum(r.get("usd_per_hour") or 0 for r in online), 4),
+            "rentals_running": sum(1 for r in up if r["kind"] == "rental"),
+            "hourly_burn": round(sum(r.get("usd_per_hour") or 0 for r in up), 4),
         },
     }

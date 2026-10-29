@@ -171,6 +171,19 @@ def test_fleet_summary_counts_and_burn_rate():
     assert (s["total"], s["online"], s["gpus_free"], s["hourly_burn"]) == (3, 2, 2, 1.2)
 
 
+def test_a_rental_that_refuses_us_is_still_costing_money():
+    """Up but refusing is not off: the burn rate read $0/hr for a rental whose key had
+    gone, and it did not count as running."""
+    refused = {"status": "auth_failed", "last_probe_at": 1, "error_class": "",
+               "error_detail": ""}
+    rows = [device_view(make("a100", Kind.RENTAL, cost={"usd_per_hour": 1.89}), refused,
+                        None, Detail.COMPACT),
+            device_view(make("gone", Kind.RENTAL, cost={"usd_per_hour": 5}),
+                        {**refused, "status": "refused"}, None, Detail.COMPACT)]
+    s = fleet_view(rows)["summary"]
+    assert (s["online"], s["rentals_running"], s["hourly_burn"]) == (0, 1, 1.89)
+
+
 # ------------------------------------------------------------------ disk
 def test_compact_view_keeps_its_headline_number_and_lists_the_mounts_behind_it():
     """`fleet ls` still gets one number per device -- but not *only* that number.
