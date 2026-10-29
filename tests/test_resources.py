@@ -757,6 +757,7 @@ def _windows_probe(tmp_path, prelude: str):
                        capture_output=True, timeout=120, stdin=subprocess.DEVNULL,
                        env={**os.environ, "TERM": "dumb", "LOCALAPPDATA": str(tmp_path),
                             "ProgramData": str(tmp_path / "none")})
+    assert "#END" in p.stdout, p.stderr[-2000:]
     return parse_payload(p.stdout)
 
 
@@ -778,7 +779,8 @@ def test_a_broken_nvidia_driver_on_windows_is_said_not_hidden(tmp_path):
     # Taken for a driver version, the machine read as having no GPU, with no alert.
     said = ("NVIDIA-SMI has failed because it couldn't communicate with the NVIDIA "
             "driver. Make sure that the latest NVIDIA driver is installed and running.")
-    snap = _windows_probe(tmp_path, f"function nvidia-smi {{ '{said}' }}\n" + _CIM)
+    quoted = said.replace("'", "''")     # PowerShell's own way to put ' in '...'
+    snap = _windows_probe(tmp_path, f"function nvidia-smi {{ '{quoted}' }}\n" + _CIM)
     assert snap.gpu_present == "err" and snap.gpu_error == said
     assert snap.gpu_driver == "" and snap.gpus == []
 
