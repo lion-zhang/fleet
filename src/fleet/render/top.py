@@ -576,9 +576,13 @@ def render_models(view: dict[str, Any]) -> list:
                                   if sv.get("tunnel") else "[dim]local only[/dim]")
             if sv["url"]:
                 reach = escape(reach)
+            if sv.get("reach") == "down":
+                reach = f"[dim]nothing answers on :{sv['port']}[/dim]"
             label = escape(f":{sv['port']} {sv['framework'] or sv.get('name') or ''}".strip())
             if not sv["models"]:
                 t.add_row("[yellow]wants an API key[/yellow]" if sv["status"] == "auth"
+                          else "[yellow]not running[/yellow]" if sv.get("reach") == "down"
+                          else "[yellow]no model list there[/yellow]" if sv["status"] == "none"
                           else "[dim]none listed[/dim]", escape(sv["machine"]), label, reach)
             for m in sv["models"]:
                 t.add_row(escape(m), escape(sv["machine"]), label, reach)
@@ -591,4 +595,7 @@ def render_models(view: dict[str, Any]) -> list:
             shown = (size(st["size_gb"]) if st.get("size_gb") is not None else "size pending"
                      ) if st["exists"] else "[yellow]missing[/yellow]"
             out.append(f"  {escape(st['machine']):<16} {escape(st['path'])}  [dim]{shown}[/dim]")
+    if view.get("not_read"):
+        out.append(f"[yellow]![/yellow] [dim]not read just now: "
+                   f"{escape(', '.join(view['not_read']))}[/dim]")
     return out

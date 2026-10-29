@@ -533,3 +533,26 @@ def test_a_cost_under_a_cent_is_not_shown_as_free():
     from fleet.render.view import usd
 
     assert [usd(x) for x in (0.004, 0.0125, 1.75)] == ["$0.004", "$0.01", "$1.75"]
+
+
+def test_removing_a_server_that_was_never_declared_says_so(tmp_path, monkeypatch):
+    """`--endpoint mylm=` misspelt said "machine.yaml already says that",
+    or beside another change "server mylm: removed", and the server stayed declared."""
+    import json
+
+    from fleet.ops import machinefile
+
+    runner = _cli(tmp_path, monkeypatch, [
+        Device(id="id:box", name="box", kind=Kind.PERMANENT,
+               endpoints=[{"target": "10.0.0.5", "user": "root", "port": 22}])])
+    had = "endpoints:\n  myllm: 9000\n"
+    monkeypatch.setattr(machinefile, "change", lambda *a, **k: (had, had))
+    r = runner.invoke(cli.app, ["edit", "box", "--endpoint", "mylm="])
+    assert r.exit_code == 0 and "box declares no server mylm" in r.output, r.output
+    r = runner.invoke(cli.app, ["edit", "box", "--endpoint", "mylm=", "--json"])
+    assert json.loads(r.stdout)["not_declared"] == ["mylm"]
+    monkeypatch.setattr(machinefile, "change",
+                        lambda *a, **k: (had, had + "  other: 9001\n"))
+    r = runner.invoke(cli.app, ["edit", "box", "--endpoint", "other=9001",
+                                "--endpoint", "mylm="])
+    assert "mylm: removed" not in r.output and "declares no server mylm" in r.output

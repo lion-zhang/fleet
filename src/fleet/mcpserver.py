@@ -291,9 +291,12 @@ def build_server():
 
     @server.tool(description="Every model being served across the fleet: machine, server, "
                              "url, and for a server that only listens on its own machine "
-                             "a `tunnel` command to reach it; plus the folders each "
-                             "machine keeps models in. Check this before downloading a "
-                             "model: one already served or on disk need not be fetched. "
+                             "a `tunnel` command to reach it (`reach: down`: declared "
+                             "but not running); plus the folders each "
+                             "machine keeps models in, and `not_read`: machines that did "
+                             "not answer, so their servers are not known. Check this "
+                             "before downloading a model: one already served or on disk "
+                             "need not be fetched. "
                              "`models` names a server's first 20; `models_total` says how "
                              "many it serves, and the rest are at its own /v1/models.")
     def list_models(names: list[str] | None = None, refresh: bool = False,
@@ -317,7 +320,8 @@ def build_server():
     @server.tool(description="Declare a model server the probe would not find by itself "
                              "(an unusual port, a program it does not recognise), in the "
                              "machine's own machine.yaml: port, and a base path if it is not "
-                             "/v1. port=None removes it. Never pass an API key; a server that "
+                             "/v1. port=None removes it (a name not declared comes back in "
+                             "`not_declared`). Never pass an API key; a server that "
                              "wants one is shown as wanting one.")
     def set_machine_endpoint(machine: str, name: str, port: int | None = None,
                              path: str = "") -> Any:
