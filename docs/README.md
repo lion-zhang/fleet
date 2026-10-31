@@ -4,8 +4,10 @@ fleet lets your coding agent use every machine you have. You install it once, on
 machine you work from, and then talk to your agent; these pages are for when you want to
 know more.
 
-<video src="https://github.com/user-attachments/assets/d35e0200-c2a2-44aa-8f60-a3b6e4addfb7" poster="assets/launch-video-poster.jpg" controls preload="none" width="100%"
-  aria-label="fleet in 80 seconds: an agent sees every machine, picks the free GPU, runs a sweep on three, flags idle rentals and tests on every OS"></video>
+<a href="https://github.com/sinolion/fleet#readme" title="Watch the 80-second video on GitHub"><img src="assets/launch-video-poster.jpg" width="100%"
+  alt="fleet in 80 seconds: an agent sees every machine, picks the free GPU, runs a sweep on three, flags idle rentals and tests on every OS. Watch it on GitHub."></a>
+
+▶ [Watch fleet in 80 seconds](https://github.com/sinolion/fleet#readme) (the video plays on GitHub).
 
 **New here?** Start with [Getting started](getting-started.md): one machine added, and a
 first job on it, in about ten minutes.
