@@ -17,7 +17,7 @@ out: fleet logs in exactly as you do, with the SSH you already use.
 ![Linux | macOS | Windows](https://img.shields.io/badge/platform-linux%20%7C%20macos%20%7C%20windows-lightgrey.svg)
 ![MCP server](https://img.shields.io/badge/MCP-server-8A2BE2.svg)
 
-<img src="docs/assets/fleet-demo.svg" alt="A 40-second demo. Asked to train on whatever has a free 24 GB card, the agent runs fleet ls --tag cuda --tag vram-24g, picks the idle RTX 4090 over two paid rentals and a busy box, starts train.py there detached, and confirms the card is now in use. Asked what is costing money, it flags an idle H100 rental at $2.49 an hour and leaves stopping it to you." width="100%">
+https://github.com/user-attachments/assets/d35e0200-c2a2-44aa-8f60-a3b6e4addfb7
 
 </div>
 
@@ -31,6 +31,8 @@ across the room and a rented A100 bills you by the hour. It cannot use what it c
 - **It cannot see what is running, or what is already there** — whose job is on that card,
   which box already serves Llama 3, where the datasets live — so it downloads and
   installs things twice.
+
+<p align="center"><img src="docs/assets/fleet-demo.svg" alt="A 40-second demo. Asked to train on whatever has a free 24 GB card, the agent runs fleet ls --tag cuda --tag vram-24g, picks the idle RTX 4090 over two paid rentals and a busy box, starts train.py there detached, and confirms the card is now in use. Asked what is costing money, it flags an idle H100 rental at $2.49 an hour and leaves stopping it to you." width="100%"></p>
 
 ## Get started: ask your agent
 
