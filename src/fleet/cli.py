@@ -215,6 +215,10 @@ def cmd_ls(names: list[str] = typer.Argument(None, help="only these devices"),
 
     t = render_ls(rows, width=console.width)
     console.print(t)
+    if asleep := [r["name"] for r in rows if r.get("wakeable")]:
+        console.print(f"[dim]· asleep? {escape(', '.join(asleep[:3]))}"
+                      f"{f' and {len(asleep) - 3} more' if len(asleep) > 3 else ''} can be "
+                      f"woken: fleet wake {escape(asleep[0])}[/dim]")
     if note := _skills_note():
         console.print(f"[yellow]![/yellow] [dim]{note}[/dim]")
     s = view["summary"]
@@ -2120,6 +2124,171 @@ def cmd_ssh(ctx: typer.Context,
             signal.signal(signal.SIGINT, before)
         raise typer.Exit(code)
     os.execvp("ssh", argv)      # replace this process; ssh owns the tty from here
+
+
+# A machine that answers one of these is awake, whatever else it says: a refused key is
+# for `fleet doctor`, not a reason to keep waiting. `refused` is not one -- the port is
+# closed while it boots.
+_AWAKE = (Status.OK.value, Status.AUTH_FAILED.value, Status.HOST_KEY_MISMATCH.value,
+          Status.PROBE_ERROR.value)
+
+
+@app.command("wake")
+def cmd_wake(name: str = typer.Argument(..., help="a machine's name or alias"),
+             via: str = typer.Option(None, "--via", metavar="NAME",
+                                     help="send the packet from this machine, which must "
+                                          "be on the same network"),
+             no_wait: bool = typer.Option(False, "--no-wait",
+                                          help="send the packet and return, without "
+                                               "waiting for it to answer"),
+             timeout: int = typer.Option(180, "--timeout", metavar="SECONDS",
+                                         help="how long to wait for it to answer"),
+             json_out: bool = typer.Option(False, "--json", help="print JSON instead of a table, for scripts and agents")):
+    """Wake a sleeping or switched-off machine with a Wake-on-LAN packet, and wait for it.
+
+    The packet is a broadcast on the machine's own network. It is sent from here when
+    this machine is on that network, and otherwise by a fleet machine that is, over ssh
+    -- so from anywhere, while one machine there is up. What the machine's cards are,
+    and whether each is armed to wake, its last probe read; its machine.yaml can name
+    the card instead (`wake: {mac: ...}`).
+
+    [dim]Example:[/dim]  fleet wake gpu-tower
+    """
+    from .ops import wake
+
+    devices = inv.live(inv.load())
+    dev = inv.find(devices, name)
+    if dev is None:
+        _no_such(devices, name)
+    me = identity.local_device_id()
+
+    def fail(message: str, fix: list[str] = (), *, code: int = 2, **extra):
+        if not _emit({"ok": False, "name": dev.name, "error": message, "fix": list(fix),
+                      **extra}, json_out):
+            err.print(f"[red]{escape(message)}[/red]")
+            for line in fix:
+                err.print(f"  [dim]{escape(line)}[/dim]", soft_wrap=True)
+        raise typer.Exit(code)
+
+    if me and dev.id == me:
+        fail(f"{dev.name} is this machine, and it is awake")
+    if dev.kind in wake.NEVER:
+        fail(f"{dev.name} is a {dev.kind.value} machine: Wake-on-LAN wakes your own "
+             "hardware, on your own network",
+             ["start it from the provider's console or command line"])
+    via_dev = None
+    if via is not None:
+        via_dev = inv.find(devices, via)
+        if via_dev is None:
+            _no_such(devices, via)
+        if via_dev.id == dev.id:
+            fail(f"{dev.name} cannot wake itself: --via names a machine that is up")
+    conn = store.connect()
+    try:
+        state, snap = store.latest(conn, dev.id)
+        others = [(d, *store.latest(conn, d.id)) for d in devices if d.id not in (dev.id, me)]
+    finally:
+        conn.close()
+    status = (state or {}).get("status") or ""
+    if status == Status.OK.value and store.is_fresh(state, int(load_config().telemetry_ttl_s)):
+        if not _emit({"ok": True, "name": dev.name, "sent": False, "woke": False,
+                      "status": status, "already_up": True}, json_out):
+            console.print(f"[green]✓[/green] {dev.name} is up [dim]-- it answered "
+                          f"{_ago(int(time.time()) - int(state.get('last_probe_at') or 0))} ago"
+                          "; nothing sent[/dim]")
+        return
+
+    age = int(time.time() - snap["ts"]) if snap and snap.get("ts") else None
+    seen = f" (what fleet knows of its network is {_ago(age)} old)" if age and age > 86400 else ""
+    macs = wake.target_macs(snap)
+    if not macs:
+        if (snap or {}).get("nics"):
+            fail(f"every network card of {dev.name} said Wake-on-LAN is off when it was "
+                 "last probed",
+                 ["turn it on in its BIOS/UEFI (\"Wake on LAN\", \"Power on by PCI-E\"), then:",
+                  "Linux:   sudo ethtool -s IFACE wol g   (and keep it, e.g. NetworkManager's "
+                  "802-3-ethernet.wake-on-lan magic)",
+                  "macOS:   System Settings → Battery/Energy → Wake for network access",
+                  "Windows: Device Manager → the adapter → Power Management → "
+                  "Only allow a magic packet to wake the computer",
+                  "or name the card in its machine.yaml: wake: {mac: aa:bb:cc:dd:ee:ff}"],
+                 facts_age_s=age)
+        fail(f"fleet does not know {dev.name}'s network card",
+             [f"once it is awake, `fleet ls -r {dev.name}` reads it",
+              "or name the card in its machine.yaml: wake: {mac: aa:bb:cc:dd:ee:ff}"],
+             facts_age_s=age)
+
+    here = next((d for d in devices if me and d.id == me), None)
+    here_name = here.name if here else "this machine"
+    if via_dev is not None and me and via_dev.id == me:
+        senders = [wake.Sender(here_name, None, "via")]
+    else:
+        here_snap = None
+        if via_dev is None:
+            res = run_probe_local(light=True)
+            here_snap = res.snapshot.to_dict() if res.ok and res.snapshot else None
+        senders = wake.choose_senders(dev, snap, here_snap, others, here_name=here_name,
+                                      via=via_dev)
+    if not senders:
+        fail(f"no machine on {dev.name}'s network is up to send the packet{seen}",
+             ["wake one there by hand, or name one that is up:  "
+              f"fleet wake {dev.name} --via NAME"], facts_age_s=age)
+
+    ip, prefix = wake.subnet_of(snap)
+    broadcast = wake.broadcast_for(ip, prefix)
+    tried, used = [], None
+    for s in senders:
+        if s.device is None:
+            ok, why = wake.send(s, macs, broadcast)
+        else:
+            routes = _routes(s.device)
+            ok, why = wake.send(s, macs, broadcast, endpoint=routes[0] if routes else None,
+                                platform=_remote_platform_of(s.device))
+        tried.append({"name": s.name, "how": s.how, "ok": ok, **({"error": why} if why else {})})
+        if ok:
+            used = s
+            break
+    result = {"name": dev.name, "macs": macs, "broadcast": broadcast,
+              "via": used.name if used else None, "how": used.how if used else None,
+              "tried": tried, "facts_age_s": age}
+    if used is None:
+        fail("the packet could not be sent", [f"{t['name']}: {t.get('error', '')}" for t in tried],
+             code=1, **{k: v for k, v in result.items() if k != "name"}, sent=False)
+    if not json_out:
+        console.print(f"[green]→[/green] magic packet for {dev.name} "
+                      f"[dim]({', '.join(macs)})[/dim] sent "
+                      + ("from here" if used.device is None else f"via {used.name}"))
+    if no_wait:
+        _emit({"ok": True, **result, "sent": True, "woke": False, "waited_s": 0,
+               "status": status}, json_out)
+        return
+
+    started = time.monotonic()
+    deadline = started + max(timeout, 0)
+    waiting = (err.status(f"waiting for {dev.name} to answer…")
+               if not json_out and err.is_terminal else contextlib.nullcontext())
+    with waiting:
+        while True:
+            rows = _rows([dev.name], refresh=True)
+            status = rows[0]["status"] if rows else ""
+            if status in _AWAKE or time.monotonic() >= deadline:
+                break
+            time.sleep(min(5.0, max(0.0, deadline - time.monotonic())))
+    waited = int(time.monotonic() - started)
+    woke = status in _AWAKE
+    out = {"ok": woke, **result, "sent": True, "woke": woke, "waited_s": waited,
+           "status": status}
+    if _emit(out, json_out):
+        raise typer.Exit(0 if woke else 1)
+    if woke:
+        console.print(f"[green]✓[/green] {dev.name} is up [dim]after {waited}s[/dim]"
+                      + ("" if status == Status.OK.value
+                         else f"  [yellow]{status}[/yellow]: fleet doctor {dev.name} says why"))
+        return
+    err.print(f"[yellow]{dev.name} did not answer within {waited}s[/yellow] [dim]-- the "
+              "packet went out; a machine switched off at the wall, or with Wake-on-LAN "
+              f"off in its BIOS, does not wake. fleet doctor {dev.name}[/dim]")
+    raise typer.Exit(1)
 
 
 def _skills_note() -> str:

@@ -182,6 +182,11 @@ def main() -> int:
     expect("ls -r", ["ls", "-r"], r".")
     expect("doctor NAME (it lets us in)", ["doctor", name, "--json"], r'"status": "ok"')
     expect("doctor (nothing failing)", ["doctor"], r".")
+    # A runner cannot be put to sleep: only that wake refuses, or sends nothing, for one
+    # that is up -- and reads this OS's cards on the way.
+    expect("wake of a machine that is up sends nothing", ["wake", name, "--json"],
+           r'"already_up": true|"woke": true|is this machine|network card', rc=None)
+    expect("wake of an unknown machine", ["wake", "no-such-machine"], r"No device", rc=1)
 
     # edit, each flag
     expect("edit --cost", ["edit", name, "--cost", "1.5"], r".")

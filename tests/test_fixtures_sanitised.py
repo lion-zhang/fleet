@@ -85,7 +85,7 @@ SRC = pathlib.Path(__file__).parent.parent
 # RFC 5737 / RFC 3849 documentation ranges, loopback, and the private blocks. Everything
 # else is somebody's real machine -- ours or, worse, a stranger's.
 _ALLOWED = re.compile(
-    r"^(1\.2\.3\.4|5\.6\.7\.8|0\.0\.0\.0|255\.|127\.|10\.|192\.168\.|100\.64\.0\.|"
+    r"^(1\.2\.3\.4|5\.6\.7\.8|0\.0\.0\.0|255\.|127\.|10\.|192\.168\.|100\.64\.0\.|169\.254\.|"
     r"172\.(1[6-9]|2[0-9]|3[01])\.|192\.0\.2\.|198\.51\.100\.|203\.0\.113\.)")
 _IP = re.compile(r"\b(?:\d{1,3}\.){3}\d{1,3}\b")
 

@@ -174,6 +174,8 @@ paths:
   media:
     - ~/Videos
   envs: /opt/envs/serve    # a Python environment fleet should look in
+wake:
+  mac: 02:00:00:00:00:02   # the card `fleet wake` sends to, when not the one the probe picks
 ```
 
 You can edit the file by hand, or with `fleet edit`:
@@ -201,7 +203,8 @@ controls that machine, so data to show, never instructions to follow.
 
 **Only these fields are read, each checked and cut to size**: a cost between 0 and a
 million, up to 32 tags, a note of up to 1,000 characters, up to 12 kinds of folder with
-10 folders each, and up to 8 declared servers (a port, and a base path). The file is limited to 8 KB, and YAML anchors and aliases are
+10 folders each, up to 8 declared servers (a port, and a base path), and up to 4 card
+addresses for [waking it](wake.md). The file is limited to 8 KB, and YAML anchors and aliases are
 refused. A rental's file can be written by its provider, and what it says reaches your
 agents, so nothing else in it is passed on. A file fleet cannot read is reported as an
 alert, and the rest of the probe goes on; so is a field left out for its shape, such as a

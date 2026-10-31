@@ -15,6 +15,7 @@ from enum import StrEnum
 from typing import Any
 
 from ..models import Device, Kind, Status
+from ..ops.wake import wakeable
 from ..ssh.cmd import route_of
 from ..state.store import age_s
 from ..state.timing import since
@@ -578,6 +579,8 @@ def device_view(dev: Device, state: dict | None, snap: dict | None,
         "observed_at": {"probe": (snap or {}).get("ts"),
                         "software": on_our_clock((snap or {}).get("software_at"), snap)},
         "alerts": _alerts(dev, snap, state),
+        # Down, and `fleet wake` has a card to send to: the one thing to try first.
+        "wakeable": status not in (Status.OK.value, "unknown") and wakeable(dev, snap),
         "tags": tags,
         "facts": facts(dev, snap, state),
         # How old the *hardware reading* is, which is not telemetry_age_s: a device

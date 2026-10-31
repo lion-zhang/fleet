@@ -20,6 +20,7 @@ nav:
       - Finding the right machine: guides/find-machines.md
       - What is on each machine: guides/resources.md
       - Running work: guides/run-work.md
+      - Waking machines: guides/wake.md
       - Agents: guides/agents.md
       - What fleet changes: guides/what-fleet-changes.md
       - Installing and upgrading: guides/install.md

@@ -20,6 +20,7 @@ command accepts `--help`. For what to use when, start with the
 | [`fleet top`](#fleet-top) | Live view of the fleet, or of one device. Like htop, for your machines. |
 | [`fleet rm`](#fleet-rm) | Stop watching a machine: take it out of this machine's list. |
 | [`fleet ssh`](#fleet-ssh) | Open a shell on a device, or run a command: `fleet ssh machine_A -- nvidia-smi`. |
+| [`fleet wake`](#fleet-wake) | Wake a sleeping or switched-off machine with a Wake-on-LAN packet, and wait for it. |
 | [`fleet setup`](#fleet-setup) | Teach your coding agents to use fleet. |
 | [`fleet uninstall`](#fleet-uninstall) | Take fleet off this machine: out of your agents, and with --purge its files. |
 | [`fleet paths`](#fleet-paths) | Show where fleet keeps its state. |
@@ -317,6 +318,33 @@ fleet ssh machine_A -- nvidia-smi
 | Argument | |
 |---|---|
 | `NAME` (required) | a machine's name or alias |
+
+## fleet wake
+
+Wake a sleeping or switched-off machine with a Wake-on-LAN packet, and wait for it.
+
+The packet is a broadcast on the machine's own network. It is sent from here when this machine is on that network, and otherwise by a fleet machine that is, over ssh -- so from anywhere, while one machine there is up. What the machine's cards are, and whether each is armed to wake, its last probe read; its machine.yaml can name the card instead (`wake: {mac: ...}`).
+
+```
+fleet wake [OPTIONS] NAME
+```
+
+Example:
+
+```bash
+fleet wake gpu-tower
+```
+
+| Argument | |
+|---|---|
+| `NAME` (required) | a machine's name or alias |
+
+| Option | |
+|---|---|
+| `--via` `NAME` | send the packet from this machine, which must be on the same network |
+| `--no-wait` | send the packet and return, without waiting for it to answer |
+| `--timeout` `SECONDS` | how long to wait for it to answer (default: `180`) |
+| `--json` | print JSON instead of a table, for scripts and agents |
 
 ## fleet setup
 

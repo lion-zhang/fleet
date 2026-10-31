@@ -62,6 +62,13 @@ A name may be omitted where the obvious subject is the machine you are on.
   `$HOME` would arrive as *this* machine's home -- PowerShell does it even inside double
   quotes. Quoted, the machine that runs the command expands them
 - `{cmd} ssh NAME` -- an interactive shell, exactly as plain ssh
+- `{cmd} wake NAME --json` -- wake a machine that is asleep or switched off, with a
+  Wake-on-LAN packet, and wait for it to answer (`--timeout SECONDS`, 180 by default;
+  `--no-wait` returns once it is sent). `ls` marks an offline machine it can wake
+  `wakeable`. The packet is sent from here when this machine is on that network, and
+  otherwise by a fleet machine that is (`--via NAME` names one). It switches on the
+  user's hardware: **ask first**. Its `fix` says what to do when it cannot: Wake-on-LAN
+  off in the BIOS, no card known yet, no machine up on that network
 - `{cmd} add "ssh user@host"` -- watch a machine, from the ssh command the user already
   uses (a rental's is the one its provider shows). It must let us in, or it is not
   recorded: the reply then has `why` and `fix`. `--name` and `--kind` override what is
@@ -173,7 +180,8 @@ A name may be omitted where the obvious subject is the machine you are on.
 - A machine with no telemetry has no facts and matches no `--tag`. `{cmd} ls --tag`
   says on stderr how many it could not judge; report that rather than concluding the
   fleet has nothing suitable.
-- `{cmd} update --all` touches every machine. Ask first.
+- `{cmd} update --all` touches every machine. Ask first. So does `{cmd} wake`, for the
+  one it wakes: never wake a machine the user did not ask for.
 """
 
 

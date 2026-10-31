@@ -254,6 +254,7 @@ gets the same answers as an agent with one.
 | `add_machine` | `fleet add "ssh …" --json` |
 | `discover_machines` | `fleet ls --discover --json` |
 | `doctor_machine` | `fleet doctor [NAME] --json` |
+| `wake_machine` | `fleet wake NAME --json`, waiting up to two minutes unless `wait` is false; `via` names the machine that sends the packet |
 | `edit_machine` | `fleet edit NAME`: tags, cost, note (on the machine; `local` keeps tags and cost here), address, disks, name, alias |
 | `set_machine_paths` | `fleet edit NAME --path KIND=PATH` |
 | `set_machine_endpoint` | `fleet edit NAME --endpoint NAME=PORT[/PATH]`: a model server the probe would not find |
