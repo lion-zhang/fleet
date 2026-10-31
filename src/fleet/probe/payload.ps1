@@ -120,6 +120,25 @@ for ($i = 0; $i -lt 2; $i++) {
 $userKinds = @($storePaths | Where-Object { $_[2] -eq 1 } | ForEach-Object { $_[0] })
 $storePaths = @($storePaths | Where-Object { $_[2] -eq 1 -or $userKinds -notcontains $_[0] })
 
+# What `fleet wake` needs once this machine is asleep (see payload.sh): each physical
+# card's hardware address, IPv4 subnet and whether it wakes on a magic packet, and the
+# router's hardware address.
+Write-Output "#NIC name|mac|ipv4|prefix|wol"
+try {
+    foreach ($a in @(Get-NetAdapter -Physical -ErrorAction Stop)) {
+        $ip = Get-NetIPAddress -InterfaceIndex $a.ifIndex -AddressFamily IPv4 -ErrorAction SilentlyContinue | Select-Object -First 1
+        $pm = Get-NetAdapterPowerManagement -Name $a.Name -ErrorAction SilentlyContinue
+        $wol = if (-not $pm) { '' } elseif ("$($pm.WakeOnMagicPacket)" -eq 'Enabled') { 1 } else { 0 }
+        Write-Output ("{0}|{1}|{2}|{3}|{4}" -f ($a.Name -replace '[\r\n|]', ''), $a.MacAddress, $ip.IPAddress, $ip.PrefixLength, $wol)
+    }
+} catch {}
+Write-Output "#GATEWAY ip|mac"
+try {
+    $gw = Get-NetRoute -DestinationPrefix '0.0.0.0/0' -ErrorAction Stop | Sort-Object RouteMetric | Select-Object -First 1
+    $nb = Get-NetNeighbor -IPAddress $gw.NextHop -ErrorAction SilentlyContinue | Select-Object -First 1
+    if ($gw.NextHop) { Write-Output ("{0}|{1}" -f $gw.NextHop, $nb.LinkLayerAddress) }
+} catch {}
+
 Write-Output "#DISK mount|total_kb|used_kb|avail_kb|rw"
 if ($env:FLEET_DISK_PATHS) {
     # Configured paths win outright, as they do on POSIX: the row is labelled with the

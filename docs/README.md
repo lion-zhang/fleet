@@ -18,6 +18,7 @@ Task by task: what to say to your agent, and the command it runs.
 | [Finding the right machine](guides/find-machines.md) | let the agent pick by GPU, memory or OS; tag machines; track costs and idle rentals |
 | [What is on each machine](guides/resources.md) | see GPU jobs, served models, installed software, and where models and data live |
 | [Running work](guides/run-work.md) | run commands and long jobs on another machine |
+| [Waking machines](guides/wake.md) | wake a sleeping or switched-off machine, from home or away |
 | [Agents](guides/agents.md) | add fleet to a specific agent or app — 35+ of them |
 | [What fleet changes](guides/what-fleet-changes.md) | see exactly what fleet writes on each machine, and take it back |
 | [Installing and upgrading](guides/install.md) | install by hand, upgrade, put fleet on more machines, remove it |

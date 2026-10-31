@@ -14,7 +14,7 @@ import math
 import re
 
 from .. import notes as machine_notes
-from ..models import (Container, Disk, Gpu, ProcClass, Process, PyPackage, Service,
+from ..models import (Container, Disk, Gpu, Nic, ProcClass, Process, PyPackage, Service,
                       Snapshot, StorePath)
 
 # Processes that hold VRAM because a desktop session exists, not because work is running.
@@ -156,6 +156,9 @@ def _classify_service(comm: str, port: int) -> tuple[str, str]:
     if port in LLM_HINT_PORTS:
         return "llm?", ""      # unconfirmed; the HTTP probe decides
     return "unknown", ""
+
+
+_IPV4 = re.compile(r"^\d{1,3}(\.\d{1,3}){3}$")
 
 
 # What other users run on a shared host -- a process's args, a container's name, a model
@@ -300,6 +303,19 @@ def parse_payload(stdout: str) -> Snapshot:
     for ln in rows.get("SLURM", []):
         k, _, v = ln.partition("|")
         snap.slurm_info.setdefault(k.strip(), []).append(v.strip())
+
+    for ln in rows.get("NIC", []):
+        f = [x.strip() for x in ln.split("|")] + ["", "", ""]
+        if not (mac := machine_notes.normalise_mac(f[1])):
+            continue
+        # 169.254 is a card that found no network, not a subnet to broadcast on.
+        ipv4 = f[2] if _IPV4.match(f[2]) and not f[2].startswith("169.254.") else ""
+        snap.nics.append(Nic(name=f[0], mac=mac, ipv4=ipv4,
+                             prefix=_int(f[3]) if ipv4 else None,
+                             wol=True if f[4] == "1" else False if f[4] == "0" else None))
+    for ln in rows.get("GATEWAY", [])[:1]:
+        f = ln.split("|")
+        snap.gateway_mac = (machine_notes.normalise_mac(f[1]) if len(f) > 1 else None) or ""
 
     _parse_resources(snap, kv, rows)
     # Its clock, read as the probe started: a rental or a VM whose clock is hours out

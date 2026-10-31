@@ -23,7 +23,7 @@ import yaml
 from .state import untrusted
 
 MAX_BYTES = 8192
-FIELDS = ("cost", "tags", "notes", "paths", "endpoints")
+FIELDS = ("cost", "tags", "notes", "paths", "endpoints", "wake")
 MAX_TAGS, MAX_TAG = 32, 40
 MAX_NOTE = 1000
 MAX_KINDS, MAX_PATHS, MAX_PATH = 12, 10, 300
@@ -36,6 +36,28 @@ _KIND = re.compile(r"^[a-z][a-z0-9_-]{0,31}$")
 # wants one is shown as wanting one.
 MAX_ENDPOINTS = 8
 _ENDPOINT = re.compile(r"^(\d{1,5})(/[A-Za-z0-9._~/-]{0,100})?$")
+
+# The network card `fleet wake` sends the magic packet to, when the probe's choice is not
+# the one armed for it: `wake: {mac: aa:bb:cc:dd:ee:ff}`, or a list of them.
+MAX_MACS = 4
+
+
+def normalise_mac(text) -> str | None:
+    """`AA-BB-CC-DD-EE-FF`, `aabb.ccdd.eeff`, `aabbccddeeff`, and macOS's `0:11:2:...`
+    -> `aa:bb:cc:dd:ee:ff`; None for anything else, and for the all-zero and broadcast
+    addresses, which no card has."""
+    t = str(text or "").strip().lower()
+    parts = re.split(r"[:-]", t)
+    if len(parts) == 6 and all(re.fullmatch(r"[0-9a-f]{1,2}", p) for p in parts):
+        hexed = "".join(p.zfill(2) for p in parts)
+    elif re.fullmatch(r"[0-9a-f]{4}\.[0-9a-f]{4}\.[0-9a-f]{4}|[0-9a-f]{12}", t):
+        hexed = t.replace(".", "")
+    else:
+        return None
+    if hexed in ("0" * 12, "f" * 12):
+        return None
+    return ":".join(hexed[i:i + 2] for i in range(0, 12, 2))
+
 
 TEMPLATE = """\
 # What this machine says about itself. Read by every fleet that probes it.
@@ -177,6 +199,21 @@ def check(data, skipped: list[str] | None = None) -> dict:
     elif endpoints is not None:
         skipped.append("endpoints left out: endpoints are names and ports, like "
                        "endpoints: {mine: 9000/v1}")
+    wake = data.get("wake")
+    if isinstance(wake, dict):
+        given = wake.get("mac")
+        given = given if isinstance(given, list) else [] if given is None else [given]
+        macs = []
+        for value in given[:MAX_MACS * 2]:
+            if (mac := normalise_mac(value)) is None:
+                skipped.append(f"wake mac {_str(value, 40)!r} left out: a MAC address is "
+                               "six pairs of hex digits, like aa:bb:cc:dd:ee:ff")
+            elif mac not in macs:
+                macs.append(mac)
+        if macs := macs[:MAX_MACS]:
+            out["wake"] = {"macs": macs}
+    elif wake is not None:
+        skipped.append("wake left out: wake is a mapping, like wake: {mac: aa:bb:cc:dd:ee:ff}")
     return out
 
 

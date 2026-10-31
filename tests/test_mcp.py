@@ -367,6 +367,7 @@ def test_a_message_is_not_broken_across_lines_when_columns_is_set(monkeypatch):
     ("list_gpu_jobs", {"names": ["--refresh"]}, "--refresh"),
     ("list_models", {"names": ["--rescan"]}, "--rescan"),
     ("doctor_machine", {"name": "--help"}, "--help"),
+    ("wake_machine", {"name": "--help"}, "--help"),
     ("add_machine", {"ssh_command": "--help"}, "--help"),
     ("edit_machine", {"name": "--untag", "add_tags": ["x"]}, "--untag"),
     ("set_machine_paths", {"machine": "--help", "kind": "models", "paths": ["/m"]}, "--help"),
@@ -519,3 +520,19 @@ def test_an_empty_or_malformed_argument_is_not_taken_as_none(monkeypatch):
     assert "is not a kind" in out and not ran
     assert "no command to run" in str(call("run_on_machine", {"machine": "gpu",
                                                               "command": "  "}))
+
+
+def test_wake_machine_runs_fleet_wake(monkeypatch):
+    import asyncio
+
+    from fleet import mcpserver
+
+    ran = []
+    monkeypatch.setattr(mcpserver, "_run", lambda a, *t: ran.append((a, t)) or {"ok": True})
+    server = mcpserver.build_server()
+    asyncio.run(server.call_tool("wake_machine", {"name": "gpu-tower"}))
+    asyncio.run(server.call_tool("wake_machine", {"name": "gpu-tower", "via": "ws",
+                                                  "wait": False}))
+    assert ran[0] == (["wake", "--json", "--timeout", "120", "--", "gpu-tower"],
+                      (mcpserver.WAKE_TIMEOUT_S,))
+    assert ran[1][0] == ["wake", "--json", "--via", "ws", "--no-wait", "--", "gpu-tower"]

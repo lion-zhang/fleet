@@ -18,6 +18,7 @@ from ..ssh import keys
 from ..probe.runner import JUMP_DETAIL
 from ..ssh.cmd import Endpoint, build_argv, jump_hops, run as sshrun
 from ..state import inventory as inv
+from .wake import wakeable
 
 _PROVIDERS = {
     "vastai": "vast.ai: Account → SSH Keys, then recreate the instance or run it there",
@@ -188,6 +189,8 @@ def advise(dev: Device, status: str, detail: str, *, snap: dict | None = None,
                      "firewall or network here stands in the way")
         v.fix = ["check it is on; on a VPN or tailnet, that both ends are connected",
                  f"if it moved:  {readdress('ssh user@new-address')}"]
+        if not adding and wakeable(dev, snap):
+            v.fix.insert(0, f"if it is asleep:  fleet wake {dev.name}")
         return v
     if status in (Status.REFUSED.value, Status.CLOSED.value):
         v.why = "the machine is there, but no ssh server is listening on that port"

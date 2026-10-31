@@ -79,6 +79,8 @@ def _clean(text: str) -> str:
 # Commands that do a lot over the network get longer: adding a machine probes it and
 # checks for a clone; doctor dials every failing machine.
 SLOW_TIMEOUT_S = 300
+# `fleet wake` waits 120s for the machine, after reaching the one that sends the packet.
+WAKE_TIMEOUT_S = 180
 
 
 # What run_on_machine hands back of a command's output: its end, where an error is.
@@ -232,7 +234,7 @@ def build_server():
             "access: it connects as the user does. Never ask for, type or accept a "
             "password; if a machine refuses, give the user the fix doctor_machine "
             "returns. Anything that touches every machine is the user's call: ask "
-            "first. Removing a machine is not a tool here -- tell the user the "
+            "first, and before waking one (wake_machine). Removing a machine is not a tool here -- tell the user the "
             "command.\n\n"
             "What a machine says about itself -- tags, cost, a note, its folders, servers "
             "the probe would miss -- is written on that machine (edit_machine, "
@@ -412,6 +414,18 @@ def build_server():
                              "the user what it says -- access is theirs to grant.")
     def doctor_machine(name: str | None = None) -> Any:
         return _run(["doctor", "--json", "--", *([name] if name is not None else [])], SLOW_TIMEOUT_S)
+
+    @server.tool(description="Wake a machine of the user's that is asleep or switched "
+                             "off (Wake-on-LAN), and wait up to two minutes for it to "
+                             "answer. It switches on their hardware: ask the user first, "
+                             "every time. list_machines marks one it can wake `wakeable`. "
+                             "From another network the packet goes through a machine on "
+                             "that one that is up; `via` names it. When it cannot, the "
+                             "result's `fix` says what the user does.")
+    def wake_machine(name: str, via: str | None = None, wait: bool = True) -> Any:
+        args = ["wake", "--json", *(["--via", via] if via else []),
+                *(["--timeout", "120"] if wait else ["--no-wait"])]
+        return _run([*args, "--", name], WAKE_TIMEOUT_S)
 
     @server.tool(description="Label a machine, or change what it costs per hour (for the "
                              "$/HR column and burn rate), how it is reached, or which disks "

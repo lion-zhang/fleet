@@ -148,6 +148,19 @@ class Container:
 
 
 @dataclass(slots=True)
+class Nic:
+    """One network card, for `fleet wake`: read while the machine is up, used once it
+    is asleep."""
+
+    name: str
+    mac: str
+    ipv4: str = ""
+    prefix: int | None = None
+    # Armed to wake on a magic packet: None when the machine would not say (no root).
+    wol: bool | None = None
+
+
+@dataclass(slots=True)
 class Snapshot:
     """One successful probe of one device."""
 
@@ -205,6 +218,11 @@ class Snapshot:
     # A quick re-read for `fleet top`: whatever the light probe skips is carried over
     # from the reading before it (store.record).
     light: bool = False
+    # Its network cards, and the hardware address of its router: two homes both on
+    # 192.168.1.0/24 have different routers, so this is what says two machines share a
+    # LAN -- and so which one can wake the other.
+    nics: list[Nic] = field(default_factory=list)
+    gateway_mac: str = ""
 
     def to_dict(self) -> dict:
         return asdict(self)

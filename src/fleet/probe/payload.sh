@@ -485,6 +485,61 @@ writable() {
   esac
 }
 
+# ---------------------------------------------------------------- network
+# What `fleet wake` needs once this machine is asleep: each card's hardware address and
+# IPv4 subnet, whether it is armed to wake on a magic packet, and the router's hardware
+# address -- which tells one LAN from another on the same subnet. All read without root;
+# a card or a command that is not there is left out.
+echo "#NIC name|mac|ipv4|prefix|wol"
+gw_ip=""; gw_mac=""
+if [ "$OS" = "Linux" ] && [ -d /sys/class/net ]; then
+  for d in /sys/class/net/*; do
+    [ -e "$d/device" ] || continue       # docker, veth, bridges, tailscale: no hardware
+    nic=${d##*/}
+    mac=$(clean < "$d/address" 2>/dev/null)
+    # The kernel's own switch for the card waking the machine, which the driver sets from
+    # its Wake-on-LAN setting; ethtool says it too, but only to root.
+    case $(cat "$d/device/power/wakeup" 2>/dev/null) in
+      enabled) wol=1 ;; disabled) wol=0 ;; *) wol= ;;
+    esac
+    # A cloud VM's card is software: nothing listens for a packet while it is stopped.
+    case $(basename "$(readlink "$d/device/driver" 2>/dev/null)" 2>/dev/null) in
+      virtio_net|virtio-pci|vmxnet3|hv_netvsc|vif|xen-netfront|ena|gve) wol=0 ;;
+    esac
+    if [ -z "$wol" ] && have ethtool; then
+      case $(ethtool "$nic" 2>/dev/null | awk '$1 == "Wake-on:" { print $2; exit }') in
+        *g*) wol=1 ;; d) wol=0 ;;
+      esac
+    fi
+    ip4=""; have ip && ip4=$(ip -4 -o addr show dev "$nic" 2>/dev/null | awk '{ print $4; exit }')
+    pfx=""; [ -n "$ip4" ] && pfx=${ip4#*/}
+    printf '%s|%s|%s|%s|%s\n' "$nic" "$mac" "${ip4%/*}" "$pfx" "$wol"
+  done
+  if have ip; then
+    gw_ip=$(ip -4 route show default 2>/dev/null | awk '{ for (i = 1; i < NF; i++) if ($i == "via") { print $(i + 1); exit } }')
+    [ -n "$gw_ip" ] && gw_mac=$(ip neigh show "$gw_ip" 2>/dev/null | awk '{ for (i = 1; i < NF; i++) if ($i == "lladdr") { print $(i + 1); exit } }')
+  fi
+elif [ "$OS" = "Darwin" ]; then
+  # "Wake for network access" is one setting for the whole Mac.
+  womp=$(pmset -g 2>/dev/null | awk '$1 == "womp" { print $2; exit }')
+  ifconfig 2>/dev/null | awk -v womp="$womp" '
+    function bits(mask,   i, n) { n = 0; mask = tolower(substr(mask, 3))
+      for (i = 1; i <= length(mask); i++) n += index("08cef", substr(mask, i, 1)) - 1
+      return n }
+    function flush() { if (n ~ /^en[0-9]+$/ && m != "") printf "%s|%s|%s|%s|%s\n", n, m, a, p, w
+      n = ""; m = ""; a = ""; p = "" }
+    BEGIN { w = (womp == "1") ? 1 : (womp == "0") ? 0 : "" }
+    /^[^ \t]/ { flush(); n = $1; sub(/:$/, "", n); next }
+    $1 == "ether" { m = $2 }
+    $1 == "inet" && a == "" { a = $2; for (i = 3; i < NF; i++) if ($i == "netmask") p = bits($(i + 1)) }
+    END { flush() }'
+  gw_ip=$(route -n get default 2>/dev/null | awk '$1 == "gateway:" { print $2; exit }')
+  # "? (192.168.0.1) at 0:11:22:33:44:55 on en0 ifscope [ethernet]"
+  [ -n "$gw_ip" ] && gw_mac=$(arp -n "$gw_ip" 2>/dev/null | awk '{ for (i = 1; i < NF; i++) if ($i == "at") { print $(i + 1); exit } }')
+fi
+echo "#GATEWAY ip|mac"
+[ -n "$gw_ip" ] && printf '%s|%s\n' "$gw_ip" "$(printf '%s' "$gw_mac" | clean)"
+
 # ---------------------------------------------------------------- disk
 # On a Mac every APFS volume of a disk reports the whole disk's size and free space, and
 # only its own use: "/" said 11G used and 30G free on a 1T disk that its data volume had
